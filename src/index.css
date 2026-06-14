@@ -1,0 +1,303 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, sans-serif;
+  --font-display: "Space Grotesk", sans-serif;
+}
+
+/* Custom animation for macro buttons */
+@keyframes glow {
+  0%, 100% {
+    box-shadow: 0 0 4px rgba(34, 197, 94, 0.2), 0 0 12px rgba(34, 197, 94, 0.1);
+  }
+  50% {
+    box-shadow: 0 0 10px rgba(34, 197, 94, 0.4), 0 0 20px rgba(34, 197, 94, 0.2);
+  }
+}
+
+.macro-glow {
+  animation: glow 3s infinite ease-in-out;
+}
+
+/* Style for scrollbars (Excel style) */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-left: 1px solid #e2e8f0;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Print specific styles to output exactly as the provided references */
+@page {
+  size: A4 portrait;
+  margin: 0 !important;
+}
+
+/* Print/PDF layout available globally for both Screen (html2pdf) and Print Media */
+.print-page {
+  width: 210mm !important; /* A4 width */
+  height: 297mm !important; /* A4 height */
+  max-height: 297mm !important;
+  overflow: hidden !important; /* Prevent any minor overflow spilling into extra pages */
+  padding: 12mm 15mm !important;
+  margin: 0 auto !important;
+  box-sizing: border-box !important;
+  background: white !important;
+  box-shadow: none !important;
+  border: none !important;
+  position: relative !important;
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: space-between !important;
+  align-items: stretch !important;
+  page-break-after: always !important;
+  break-after: page !important;
+}
+
+/* Ensure proper page breaking between students and pages without trailing blank pages */
+.student-pdf-group:last-child .print-page:last-child {
+  page-break-after: avoid !important;
+  break-after: avoid !important;
+}
+
+/* Removed legacy rapor-pdf-content offscreen hack */
+
+/* Ensure solid text weight and high-contrast color for official documents */
+.print-page,
+.print-page * {
+  color: #000000 !important;
+  font-family: "Inter", ui-sans-serif, system-ui, sans-serif !important;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Prevent split of sections across pages */
+.avoid-break {
+  page-break-inside: avoid !important;
+  break-inside: avoid !important;
+  display: block !important;
+}
+
+/* Crisp and sharp table design for official institutional reports */
+.print-page table {
+  width: 100% !important;
+  border-collapse: collapse !important;
+  border-spacing: 0 !important;
+  margin: 0 0 1.5mm 0 !important;
+  page-break-inside: avoid !important;
+  break-inside: avoid !important;
+}
+
+.print-page th,
+.print-page td {
+  border: 1.5px solid #000000 !important; /* Authentic crisp black cell lines */
+  page-break-inside: avoid !important;
+  break-inside: avoid !important;
+}
+
+/* Guarantee side-by-side layouts for student details and parent-teacher signature blocks under print/PDF generation */
+.print-page .grid {
+  display: grid !important;
+}
+
+.print-page .grid-cols-2 {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 2rem !important;
+}
+
+/* Enforce strict page break rules for components inside print pages globally */
+.print-page thead,
+.print-page tbody,
+.print-page tr,
+.print-page h1,
+.print-page h2,
+.print-page h3,
+.print-page hr {
+  page-break-inside: avoid !important;
+  break-inside: avoid !important;
+}
+
+.print-only {
+  display: none !important;
+}
+
+#rapor-print-section {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 0 !important;
+  height: 0 !important;
+  overflow: hidden !important;
+  z-index: -99999 !important;
+  pointer-events: none !important;
+  opacity: 0 !important;
+}
+
+@media print {
+  body > *:not(#rapor-print-section) {
+    display: none !important;
+  }
+
+  #root, .no-print {
+    display: none !important;
+  }
+
+  .print-page {
+    width: 210mm !important;
+    height: 297mm !important;
+    max-height: 297mm !important;
+    margin: 0 !important;
+    padding: 12mm 15mm !important;
+    border: none !important;
+    box-shadow: none !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    page-break-after: always !important;
+    break-after: page !important;
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: space-between !important;
+    align-items: stretch !important;
+    box-sizing: border-box !important;
+    overflow: hidden !important;
+  }
+
+  html, body {
+    display: block !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+    background: white !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    color: black;
+    font-size: 11pt;
+  }
+
+  body {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .print-only {
+    display: block !important;
+    position: static !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+  }
+
+  /* Make sure background colors don't disappear */
+  * {
+    box-sizing: border-box !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  thead {
+    display: table-header-group !important;
+  }
+
+  th, td {
+    border: 1.5px solid black !important;
+  }
+
+  #rapor-print-section {
+    position: static !important;
+    left: auto !important;
+    top: auto !important;
+    width: 210mm !important;
+    height: auto !important;
+    z-index: auto !important;
+    pointer-events: auto !important;
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    overflow: visible !important;
+  }
+}
+
+/* Mode Diagnostik - Simulated Print Layout on Screen */
+.simulate-print {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2rem !important;
+  align-items: center !important;
+  width: 100% !important;
+}
+
+.simulate-print .print-page {
+  width: 210mm !important;
+  height: 297mm !important;
+  max-height: 297mm !important;
+  padding: 12mm 15mm !important;
+  box-sizing: border-box !important;
+  background: white !important;
+  color: black !important;
+  font-size: 11pt !important;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1) !important;
+  border: 1.5px solid #94a3b8 !important;
+  border-radius: 4px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: space-between !important;
+  align-items: stretch !important;
+  overflow: hidden !important;
+  position: relative !important;
+  transition: all 0.2s ease-in-out;
+}
+
+/* Margins guide outline helper */
+.simulate-print.show-margins-guide .print-page::before {
+  content: "" !important;
+  position: absolute !important;
+  top: 12mm !important;
+  left: 15mm !important;
+  right: 15mm !important;
+  bottom: 12mm !important;
+  border: 1px dashed rgba(239, 68, 68, 0.45) !important;
+  pointer-events: none !important;
+  z-index: 9999 !important;
+}
+
+/* Diagnostic Label inside Margins Guide */
+.simulate-print.show-margins-guide .print-page::after {
+  content: "Batas Cetak (Margin 12mm x 15mm)" !important;
+  position: absolute !important;
+  top: 13mm !important;
+  right: 17mm !important;
+  font-size: 7.5pt !important;
+  font-family: monospace !important;
+  color: rgba(239, 68, 68, 0.7) !important;
+  pointer-events: none !important;
+  z-index: 9999 !important;
+}
+
+/* Grid Ruler background overlay */
+.simulate-print.show-grid-ruler .print-page {
+  background-image: 
+    linear-gradient(rgba(99, 102, 241, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(99, 102, 241, 0.05) 1px, transparent 1px) !important;
+  background-size: 5mm 5mm !important;
+}
+

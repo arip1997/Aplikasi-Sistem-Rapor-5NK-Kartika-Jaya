@@ -1,0 +1,2308 @@
+1:import { useState, useEffect } from 'react';
+2:import { flushSync, createPortal } from 'react-dom';
+3:import JSZip from 'jszip';
+4:import { Student, Category, KopSekolah, scoreOptions } from '../types';
+5:import { Printer, Download, Eye, FileSpreadsheet, ArrowLeft, Heart, Award, Sparkles, FileText, Loader2, Archive, Search, Wrench, Sliders, Check, Layers, Cloud } from 'lucide-react';
+6:import html2pdf from 'html2pdf.js';
+7:import { uploadFileToDrive } from '../lib/drive.ts';
+8:import { googleSignIn, getAccessToken, initAuth } from '../firebase.ts';
+9:
+10:interface RaporCetakProps {
+11:  student: Student;
+12:  allClassStudents?: Student[];
+13:  categories: Category[];
+14:  kopSekolah: KopSekolah;
+15:  waliKelasName: string;
+16:  waliKelasNip?: string;
+17:  onBack: () => void;
+18:  onDownloadExcel: () => void;
+19:}
+20:
+21:export default function RaporCetak({
+22:  student,
+23:  allClassStudents = [],
+24:  categories,
+25:  kopSekolah,
+26:  waliKelasName,
+27:  waliKelasNip,
+28:  onBack,
+29:  onDownloadExcel,
+30:}: RaporCetakProps) {
+31:  
+32:  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+33:  const [isGeneratingAll, setIsGeneratingAll] = useState(false);
+34:  const [isUploadingToDrive, setIsUploadingToDrive] = useState(false);
+35:  const [batchStudent, setBatchStudent] = useState<Student | null>(null);
+36:  const [showSandboxNotice, setShowSandboxNotice] = useState(false);
+37:  const [searchTerm, setSearchTerm] = useState('');
+38:  const [renderTrigger, setRenderTrigger] = useState(0);
+39:
+40:  useEffect(() => {
+41:    const unsub = initAuth();
+42:    return () => unsub();
+43:  }, []);
+44:  
+45:  // States for diagnostic layout inspection
+46:  const [isDiagnosticMode, setIsDiagnosticMode] = useState(false);
+47:  const [showMarginsGuide, setShowMarginsGuide] = useState(true);
+48:  const [showGridRuler, setShowGridRuler] = useState(false);
+49:
+50:  // All class students from props or default to current student
+51:  const classStudents = allClassStudents && allClassStudents.length > 0 ? allClassStudents : [student];
+52:  const selectedClass = student.kelas;
+53:
+54:  // Selected students representation inside the sidebar checkbox list
+55:  const [selectedNisList, setSelectedNisList] = useState<string[]>([student.nis]);
+56:  // Currently displayed student in on-screen Mock Preview
+57:  const [previewNis, setPreviewNis] = useState<string>(student.nis);
+58:
+59:  // Computed state
+60:  const activeStudent = classStudents.find(s => s.nis === previewNis) || student;
+61:  const selectedStudents = classStudents.filter(s => selectedNisList.includes(s.nis));
+62:
+63:  // If a ZIP download is in progress, we render just the 1 active batchStudent under loop.
+64:  // Otherwise, we render all of the checked/selected students so they compile/print as a combined set.
+65:  const pdfRenderStudents = isGeneratingAll
+66:    ? (batchStudent ? [batchStudent] : [])
+67:    : selectedStudents;
+68:
+69:  const filteredClassStudents = classStudents.filter(s =>
+70:    s.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+71:    s.nis.includes(searchTerm)
+72:  );
+73:
+74:  const handleToggleStudent = (nis: string) => {
+75:    setSelectedNisList(prev => {
+76:      if (prev.includes(nis)) {
+77:        if (prev.length === 1) return prev; // Keep at least one student checked
+78:        return prev.filter(n => n !== nis);
+79:      } else {
+80:        return [...prev, nis];
+81:      }
+82:    });
+83:  };
+84:
+85:  const handleSelectAll = (checked: boolean) => {
+86:    if (checked) {
+87:      setSelectedNisList(filteredClassStudents.map(s => s.nis));
+88:    } else {
+89:      // Uncheck all except the currently active previewed student
+90:      setSelectedNisList([activeStudent.nis]);
+91:    }
+92:  };
+93:  
+94:  const handlePrint = async () => {
+95:    // Force a complete clean re-render of student data and flush updates synchronously
+96:    flushSync(() => {
+97:      setRenderTrigger(prev => prev + 1);
+98:    });
+99:
+100:    // Briefly halt execution to ensure browser layout styles parse cleanly
+101:    await new Promise(resolve => setTimeout(resolve, 150));
+102:
+103:    const originalTitle = document.title;
+104:    try {
+105:      if (selectedStudents.length === 1) {
+106:        document.title = `Rapor_5NK_${selectedStudents[0].name.replace(/\s+/g, '_')}_${selectedStudents[0].nis}`;
+107:      } else {
+108:        document.title = `Rapor_5NK_Batch_${selectedClass}`;
+109:      }
+110:      
+111:      const isIframe = window.self !== window.top;
+112:      window.focus();
+113:      window.print();
+114:      
+115:      if (isIframe) {
+116:        setShowSandboxNotice(true);
+117:      }
+118:    } catch (err) {
+119:      console.warn("Direct Print blocked by sandbox/browser security:", err);
+120:      setShowSandboxNotice(true);
+121:    } finally {
+122:      setTimeout(() => {
+123:        document.title = originalTitle;
+124:      }, 500);
+125:    }
+126:  };
+127:
+128:  const getHtml2PdfOpt = (targetStudent: Student, originalElement: HTMLElement) => {
+129:    return {
+130:      margin:       0,
+131:      filename:     `Rapor_5NK_${targetStudent.name.replace(/\s+/g, '_')}_${targetStudent.nis}.pdf`,
+132:      image:        { type: 'jpeg', quality: 1.0 },
+133:      html2canvas:  { 
+134:        scale: 2, 
+135:        useCORS: true, 
+136:        letterRendering: true, 
+137:        logging: false,
+138:        scrollX: 0,
+139:        scrollY: 0,
+140:        backgroundColor: '#ffffff',
+141:        onclone: (clonedDoc: Document) => {
+142:          const clonedPrintSection = clonedDoc.getElementById('rapor-print-section');
+143:          if (clonedPrintSection) {
+144:            clonedPrintSection.style.setProperty('position', 'static', 'important');
+145:            clonedPrintSection.style.setProperty('left', '0', 'important');
+146:            clonedPrintSection.style.setProperty('top', '0', 'important');
+147:            clonedPrintSection.style.setProperty('width', '210mm', 'important');
+148:            clonedPrintSection.style.setProperty('height', 'auto', 'important');
+149:            clonedPrintSection.style.setProperty('overflow', 'visible', 'important');
+150:            clonedPrintSection.style.setProperty('z-index', 'auto', 'important');
+151:            clonedPrintSection.style.setProperty('opacity', '1', 'important');
+152:            clonedPrintSection.style.setProperty('display', 'block', 'important');
+153:            clonedPrintSection.style.setProperty('visibility', 'visible', 'important');
+154:          }
+155:          const clonedTarget = clonedDoc.getElementById('rapor-pdf-content');
+156:          if (clonedTarget) {
+157:            clonedTarget.classList.remove('print-only', 'hidden');
+158:            clonedTarget.style.display = 'block';
+159:            clonedTarget.style.position = 'static';
+160:            clonedTarget.style.visibility = 'visible';
+161:            clonedTarget.style.opacity = '1';
+162:            
+163:            const colorCache = new Map<string, string>();
+164:            let ctx: CanvasRenderingContext2D | null = null;
+165:            
+166:            const toSafeRgb = (val: string, fallback: string = 'transparent') => {
+167:              if (!val || typeof val !== 'string') return val;
+168:              if (colorCache.has(val)) return colorCache.get(val)!;
+169:              
+170:              if (val.includes('oklch')) {
+171:                const parsed = parseOklchColor(val);
+172:                if (parsed) {
+173:                  colorCache.set(val, parsed);
+174:                  return parsed;
+175:                }
+176:              }
+177:              if (val.includes('oklab')) {
+178:                const parsed = parseOklabColor(val);
+179:                if (parsed) {
+180:                  colorCache.set(val, parsed);
+181:                  return parsed;
+182:                }
+183:              }
+184:              if (val.includes('color-mix')) {
+185:                const nestedOklch = val.match(/oklch\(([^)]+)\)/i);
+186:                if (nestedOklch) {
+187:                  const parsed = parseOklchColor(nestedOklch[0]);
+188:                  if (parsed) {
+189:                    if (val.includes('transparent') || val.includes('rgba(0,0,0,0)')) {
+190:                      // fallback clean replacement
+191:                      const matchRgb = parsed.match(/\d+,\s*\d+,\s*\d+/);
+192:                      if (matchRgb) {
+193:                        const alphaVal = val.includes('0.') ? val.match(/0\.\d+/)?.[0] || '0.15' : '0.15';
+194:                        const adjusted = `rgba(${matchRgb[0]}, ${alphaVal})`;
+195:                        colorCache.set(val, adjusted);
+196:                        return adjusted;
+197:                      }
+198:                    }
+199:                    colorCache.set(val, parsed);
+200:                    return parsed;
+201:                  }
+202:                }
+203:                const nestedOklab = val.match(/oklab\(([^)]+)\)/i);
+204:                if (nestedOklab) {
+205:                  const parsed = parseOklabColor(nestedOklab[0]);
+206:                  if (parsed) {
+207:                    colorCache.set(val, parsed);
+208:                    return parsed;
+209:                  }
+210:                }
+211:              }
+212:              
+213:              // Only run canvas parsing of colors if they are not already parsed and contain oklch/oklab
+214:              if (!val.includes('oklch') && !val.includes('oklab') && !val.includes('color-mix')) {
+215:                return val;
+216:              }
+217:              
+218:              try {
+219:                if (!ctx) {
+220:                  const canvas = document.createElement('canvas');
+221:                  canvas.width = 1;
+222:                  canvas.height = 1;
+223:                  ctx = canvas.getContext('2d', { willReadFrequently: true });
+224:                }
+225:                
+226:                if (ctx) {
+227:                  ctx.clearRect(0, 0, 1, 1);
+228:                  ctx.fillStyle = val;
+229:                  ctx.fillRect(0, 0, 1, 1);
+230:                  const data = ctx.getImageData(0, 0, 1, 1).data;
+231:                  if (data[3] === 0) {
+232:                    colorCache.set(val, 'transparent');
+233:                    return 'transparent';
+234:                  }
+235:                  
+236:                  const rgbStr = `rgba(${data[0]}, ${data[1]}, ${data[2]}, ${data[3] / 255})`;
+237:                  colorCache.set(val, rgbStr);
+238:                  return rgbStr;
+239:                }
+240:              } catch (e) {}
+241:              
+242:              if (val.includes('0.4') || val.includes('0.96')) return 'rgb(241, 245, 249)';
+243:              if (val.includes('0.5') || val.includes('0.98')) return 'rgb(248, 250, 252)';
+244:              return fallback;
+245:            };
+246:
+247:            const origNodes = Array.from(originalElement.querySelectorAll('*')) as HTMLElement[];
+248:            const cloneNodes = Array.from(clonedTarget.querySelectorAll('*')) as HTMLElement[];
+249:            
+250:            origNodes.forEach((orig, idx) => {
+251:              try {
+252:                const cloneEl = cloneNodes[idx];
+253:                if (!cloneEl) return;
+254:                const computed = window.getComputedStyle(orig);
+255:                
+256:                // Copy ONLY color properties to keep html2canvas oklch-safe,
+257:                // while leaving layout parameters (width, height, flex, margins, padding, line heights)
+258:                // to be governed perfectly by our template CSS rules!
+259:                cloneEl.style.color = toSafeRgb(computed.color, 'rgb(0, 0, 0)');
+260:                cloneEl.style.backgroundColor = toSafeRgb(computed.backgroundColor, 'transparent');
+261:                
+262:                ['top', 'right', 'bottom', 'left'].forEach(pos => {
+263:                  try {
+264:                    const bc = computed.getPropertyValue(`border-${pos}-color`);
+265:                    if (bc) {
+266:                      cloneEl.style.setProperty(`border-${pos}-color`, toSafeRgb(bc, 'rgb(0, 0, 0)'));
+267:                    }
+268:                  } catch (e) {}
+269:                });
+270:              } catch (err) {}
+271:            });
+272:
+273:            try {
+274:              const rootComputed = window.getComputedStyle(originalElement);
+275:              clonedTarget.style.color = toSafeRgb(rootComputed.color, 'rgb(0,0,0)');
+276:              clonedTarget.style.backgroundColor = toSafeRgb(rootComputed.backgroundColor, 'rgb(255,255,255)');
+277:            } catch (err) {}
+278:          }
+279:
+280:          // Clean & sanitize style tags and elements inside the cloned content without deleting CSS files which ruins tailwind
+281:          try {
+282:            const styleElements = Array.from(clonedDoc.querySelectorAll('style'));
+283:            styleElements.forEach(styleTag => {
+284:              try {
+285:                styleTag.innerHTML = convertOklchCss(styleTag.innerHTML)
+286:                  .replace(/oklab\([^)]+\)/gi, 'rgba(0,0,0,0.1)')
+287:                  .replace(/color-mix\([^)]+\)/gi, 'rgba(0,0,0,0.1)');
+288:              } catch (e) {}
+289:            });
+290:
+291:            // Strip script tags to avoid background evaluation in cloned iframe
+292:            const scriptElements = Array.from(clonedDoc.querySelectorAll('script'));
+293:            scriptElements.forEach(el => el.remove());
+294:          } catch (err) {
+295:            console.error("Failed to sanitize cloned layout stylesheets:", err);
+296:          }
+297:        }
+298:      },
+299:      jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' },
+300:      pagebreak:    { mode: ['avoid-all', 'css', 'legacy'] }
+301:    };
+302:  };
+303:
+304:  const runDryRunAuditAndVerifyDom = (expectedStudentCount: number): boolean => {
+305:    console.group("🔍 [PDF DRY-RUN AUDIT] Verifikasi DOM & CSS Nodes");
+306:    const container = document.getElementById('rapor-pdf-content');
+307:    if (!container) {
+308:      console.error("❌ ERROR: Elemen penampung '#rapor-pdf-content' tidak ditemukan di DOM!");
+309:      console.groupEnd();
+310:      return false;
+311:    }
+312:
+313:    const studentGroups = container.querySelectorAll('.student-pdf-group');
+314:    console.log(`[AUDIT] Jumlah group siswa ditemukan: ${studentGroups.length} (Ekspektasi: ${expectedStudentCount})`);
+315:
+316:    if (studentGroups.length === 0) {
+317:      console.error("❌ ERROR: Tidak ada '.student-pdf-group' yang ter-render!");
+318:      console.groupEnd();
+319:      return false;
+320:    }
+321:
+322:    if (studentGroups.length !== expectedStudentCount) {
+323:      console.warn(`⚠️ WARNING: Jumlah kelompok siswa (${studentGroups.length}) tidak cocok dengan ekspektasi (${expectedStudentCount}). Mungkin render belum tuntas.`);
+324:    }
+325:
+326:    // Inspect each group for key layout requirements matching the official PDF target
+327:    let passedAll = true;
+328:    studentGroups.forEach((group, groupIdx) => {
+329:      console.log(`--- Memeriksa Data Siswa #${groupIdx + 1} ---`);
+330:      
+331:      const printPages = group.querySelectorAll('.print-page');
+332:      console.log(`[PAGE AUDIT] Halaman cetak ditemukan: ${printPages.length} (Target: 2 halaman per siswa)`);
+333:      if (printPages.length !== 2) {
+334:        console.error(`❌ ERROR: Siswa #${groupIdx + 1} harus memiliki tepat 2 '.print-page' halaman A4.`);
+335:        passedAll = false;
+336:      }
+337:
+338:      printPages.forEach((page, pageIdx) => {
+339:        const computed = window.getComputedStyle(page);
+340:        const wVal = page.classList.contains('w-[210mm]') || computed.width.includes('210mm') || computed.width.includes('px');
+341:        const hVal = page.classList.contains('h-[297mm]') || computed.height.includes('297mm') || computed.height.includes('px');
+342:        console.log(`[PAGE #${pageIdx + 1} DIMENSIONS] CSS Classes: "${page.className}"`);
+343:        console.log(`[PAGE #${pageIdx + 1} DIMENSIONS] Width Validated: ${wVal}, Height Validated: ${hVal}`);
+344:
+345:        const tables = page.querySelectorAll('table');
+346:        console.log(`[TABLE AUDIT] Tabel ditemukan pada Halaman #${pageIdx + 1}: ${tables.length}`);
+347:        if (tables.length === 0) {
+348:          console.error(`❌ ERROR: Halaman #${pageIdx + 1} tidak memiliki tabel penampung nilai!`);
+349:          passedAll = false;
+350:        }
+351:
+352:        tables.forEach((table, tableIdx) => {
+353:          const cells = table.querySelectorAll('th, td');
+354:          console.log(` - Tabel #${tableIdx + 1} memiliki ${cells.length} sel header dan sel data.`);
+355:          
+356:          const firstCell = cells[0];
+357:          if (firstCell) {
+358:            const firstCellComputed = window.getComputedStyle(firstCell);
+359:            const borderW = firstCellComputed.borderWidth || firstCellComputed.borderTopWidth || '0px';
+360:            console.log(` - Ketebalan garis sel tabel: ${borderW}`);
+361:          }
+362:        });
+363:        
+364:        if (pageIdx === 0) {
+365:          const headers = page.querySelectorAll('h1, h2');
+366:          console.log(` - Jumlah Judul/Kop Sekolah ditemukan (h1/h2): ${headers.length}`);
+367:          if (headers.length === 0) {
+368:            console.error(`❌ ERROR: Judul Laporan atau Kop Sekolah tidak ditemukan di halaman pertama!`);
+369:            passedAll = false;
+370:          }
+371:        }
+372:
+373:        if (pageIdx === 1) {
+374:          const notesAndSignatures = page.querySelectorAll('.grid');
+375:          console.log(` - Kotak tanda tangan / catatan pendukung ditemukan: ${notesAndSignatures.length}`);
+376:          const kesimpulanDiv = page.textContent?.includes('Kesimpulan Pencapaian 5NK');
+377:          console.log(` - Teks kesimpulan hasil penilaian divalidasi: ${kesimpulanDiv ? 'TERSEDIA' : 'TIDAK TERDETEKSI'}`);
+378:        }
+379:      });
+380:    });
+381:
+382:    console.log(`[AUDIT HASIL] Status Uji Coba (Dry-Run Preview): ${passedAll ? '✅ MELEWATI VERIFIKASI (PASSED)' : '❌ GAGAL VERIFIKASI STATUS'}`);
+383:    console.groupEnd();
+384:    return passedAll;
+385:  };
+386:
+387:  const handleDownloadPDF = async () => {
+388:    const html2pdfFn = typeof html2pdf === 'function' ? html2pdf : (html2pdf as any).default;
+389:    if (!html2pdfFn) {
+390:      console.error("[Cetak PDF Error] html2pdf library function is not loaded in window scope.");
+391:      return;
+392:    }
+393:
+394:    setIsGeneratingPdf(true);
+395:
+396:    try {
+397:      // Force a complete clean re-render of student data and flush updates synchronously
+398:      flushSync(() => {
+399:        setRenderTrigger(prev => prev + 1);
+400:      });
+401:
+402:      const originalElement = document.getElementById('rapor-pdf-content');
+403:      if (!originalElement) {
+404:        console.error("[Cetak PDF Error] #rapor-pdf-content target selector element is missing from document DOM.");
+405:        return;
+406:      }
+407:
+408:      // Force immediate layout reflow
+409:      void originalElement.offsetHeight;
+410:      
+411:      // Let the browser paint
+412:      await new Promise(resolve => setTimeout(resolve, 150));
+413:
+414:      // Run live dry-run DOM verification check with deep audits
+415:      const dryRunPassed = runDryRunAuditAndVerifyDom(selectedStudents.length);
+416:      if (!dryRunPassed) {
+417:        console.warn("[Dry-Run Warning] Detasemen validasi DOM menemukan ketidakcocokan visual; melanjutkan regenerasi paksa.");
+418:      }
+419:
+420:      let filename = `Rapor_5NK_Batch_${selectedClass}.pdf`;
+421:      if (selectedStudents.length === 1) {
+422:        const s = selectedStudents[0];
+423:        filename = `Rapor_5NK_${s.name.replace(/\s+/g, '_')}_${s.nis}.pdf`;
+424:      }
+425:
+426:      const baseOpt = getHtml2PdfOpt(selectedStudents[0] || student, originalElement);
+427:      const opt = {
+428:        ...baseOpt,
+429:        filename: filename
+430:      };
+431:
+432:      console.log(`[PDF Generator] Starting html2pdf with filename: "${filename}"`);
+433:      await html2pdfFn().set(opt).from(originalElement).save();
+434:      console.log("[PDF Generator] File generated and download triggered successfully.");
+435:    } catch (err) {
+436:      console.error("Kesalahan Unduh PDF:", err);
+437:    } finally {
+438:      setIsGeneratingPdf(false);
+439:    }
+440:  };
+441:
+442:  const handleSaveToDrive = async () => {
+443:    if (selectedStudents.length === 0) return;
+444:
+445:    let token = await getAccessToken();
+446:    if (!token) {
+447:      try {
+448:        const result = await googleSignIn();
+449:        if (result) {
+450:          token = result.accessToken;
+451:        } else {
+452:          return;
+453:        }
+454:      } catch (err) {
+455:        console.error("Sign in for Drive failed:", err);
+456:        alert("Gagal masuk ke Google. Tidak dapat menyimpan ke Drive.");
+457:        return;
+458:      }
+459:    }
+460:
+461:    if (!window.confirm(`Simpan dokumen Rapor untuk ${selectedStudents.length} siswa ke Google Drive Anda? Tindakan ini akan mengunggah file. Ini mungkin membutuhkan beberapa menit.`)) {
+462:        return;
+463:    }
+464:
+465:    const html2pdfFn = typeof html2pdf === 'function' ? html2pdf : (html2pdf as any).default;
+466:    if (!html2pdfFn) {
+467:      console.error("[Cetak PDF Error] html2pdf library function is not loaded in window scope.");
+468:      return;
+469:    }
+470:
+471:    setIsUploadingToDrive(true);
+472:
+473:    try {
+474:      let uploadedCount = 0;
+475:      console.log(`[Drive Engine] Starting generation of ${selectedStudents.length} student documents.`);
+476:
+477:      for (const curStudent of selectedStudents) {
+478:        flushSync(() => {
+479:          setBatchStudent(curStudent);
+480:          setRenderTrigger(prev => prev + 1);
+481:        });
+482:
+483:        await new Promise(resolve => setTimeout(resolve, 150));
+484:
+485:        const originalElement = document.getElementById('rapor-pdf-content');
+486:        if (!originalElement) {
+487:          continue;
+488:        }
+489:
+490:        void originalElement.offsetHeight;
+491:        await new Promise(resolve => setTimeout(resolve, 100));
+492:
+493:        runDryRunAuditAndVerifyDom(1);
+494:
+495:        const baseOpt = getHtml2PdfOpt(curStudent, originalElement);
+496:        let filename = `Rapor_5NK_${curStudent.name.replace(/\s+/g, '_')}_${curStudent.nis}.pdf`;
+497:        
+498:        const opt = {
+499:          ...baseOpt,
+500:          filename
+501:        };
+502:
+503:        const pdfBlob = await html2pdfFn().set(opt).from(originalElement).output('blob');
+504:        
+505:        if (pdfBlob && pdfBlob.size > 0) {
+506:          await uploadFileToDrive(token, pdfBlob, filename);
+507:          uploadedCount++;
+508:        }
+509:      }
+510:
+511:      flushSync(() => {
+512:        setBatchStudent(null);
+513:      });
+514:
+515:      alert(`Berhasil menyimpan ${uploadedCount} dokumen ke Google Drive Anda.`);
+516:    } catch (err) {
+517:      console.error("Kesalahan Simpan ke Drive:", err);
+518:      alert("Gagal menyimpan dokumen ke Google Drive. Mohon periksa kembali koneksi internet dan perizinan akun Anda.");
+519:    } finally {
+520:      setBatchStudent(null);
+521:      setIsUploadingToDrive(false);
+522:    }
+523:  };
+524:
+525:  const handleDownloadAllPDFs = async () => {
+526:    if (selectedStudents.length === 0) return;
+527:    
+528:    const html2pdfFn = typeof html2pdf === 'function' ? html2pdf : (html2pdf as any).default;
+529:    if (!html2pdfFn) {
+530:      console.error("[Cetak Semua Error] html2pdf library function is not loaded in window scope.");
+531:      return;
+532:    }
+533:
+534:    setIsGeneratingAll(true);
+535:
+536:    try {
+537:      const zip = new JSZip();
+538:      const folderName = `Rapor_5NK_${selectedClass}`;
+539:      const folder = zip.folder(folderName);
+540:      if (!folder) throw new Error("Failed to create ZIP folder");
+541:
+542:      console.log(`[Batch PDF Engine] Starting generation of ${selectedStudents.length} student documents.`);
+543:
+544:      for (const curStudent of selectedStudents) {
+545:        console.log(`[Batch PDF Engine] Processing student: "${curStudent.name}" (${curStudent.nis})`);
+546:        
+547:        flushSync(() => {
+548:          setBatchStudent(curStudent);
+549:          setRenderTrigger(prev => prev + 1);
+550:        });
+551:
+552:        // Ensure React finishes rendering and DOM hydrates
+553:        await new Promise(resolve => setTimeout(resolve, 150));
+554:
+555:        const originalElement = document.getElementById('rapor-pdf-content');
+556:        if (!originalElement) {
+557:          console.error("[Cetak Semua Error] #rapor-pdf-content element is missing.");
+558:          continue;
+559:        }
+560:
+561:        // Force synchronous layout reflow
+562:        void originalElement.offsetHeight;
+563:        
+564:        // Allow the browser to calculate complete styles
+565:        await new Promise(resolve => setTimeout(resolve, 100));
+566:
+567:        // Run live dry-run DOM verification check for 1 expected student group in batch focus mode
+568:        const dryRunPassed = runDryRunAuditAndVerifyDom(1);
+569:        if (!dryRunPassed) {
+570:          console.warn(`[Batch Dry-Run Warning] Student "${curStudent.name}" failed complete pristine DOM audit verification.`);
+571:        }
+572:
+573:        const opt = getHtml2PdfOpt(curStudent, originalElement);
+574:        
+575:        // Generate Blob directly from the fully stable element
+576:        console.log(` - Generating html2pdf blob for ${curStudent.name}...`);
+577:        const pdfBlob = await html2pdfFn().set(opt).from(originalElement).output('blob');
+578:        
+579:        if (pdfBlob && pdfBlob.size > 0) {
+580:          console.log(` ✅ Blob generated successfully: ${pdfBlob.size} bytes. MIME: ${pdfBlob.type}`);
+581:          folder.file(opt.filename, pdfBlob);
+582:        } else {
+583:          console.error(` ❌ ERROR: Generated blob for "${curStudent.name}" is empty or failed!`);
+584:          throw new Error(`Empty blob generated for student: ${curStudent.name}`);
+585:        }
+586:      }
+587:
+588:      // Restore UI back to normal Selected Student
+589:      flushSync(() => {
+590:        setBatchStudent(null);
+591:      });
+592:
+593:      console.log("[Batch PDF Engine] Compiling ZIP archive...");
+594:      const zipBlob = await zip.generateAsync({ type: 'blob' });
+595:      const url = URL.createObjectURL(zipBlob);
+596:      const a = document.createElement('a');
+597:      a.href = url;
+598:      a.download = `${folderName}.zip`;
+599:      document.body.appendChild(a);
+600:      a.click();
+601:      document.body.removeChild(a);
+602:      URL.revokeObjectURL(url);
+603:      console.log("[Batch PDF Engine] Batch processing completed successfully and ZIP downloaded.");
+604:
+605:    } catch (err) {
+606:      console.error("Kesalahan Unduh Semua PDF:", err);
+607:    } finally {
+608:      setBatchStudent(null);
+609:      setIsGeneratingAll(false);
+610:    }
+611:  };
+612:
+613:  // Kartika Jaya School Seal SVG Representation
+614:  const KartikaLogo = () => (
+615:    <svg width="80" height="80" viewBox="0 0 100 100" className="h-20 w-20 flex-none text-emerald-700 mx-auto" aria-hidden="true">
+616:      {/* Outer shield/crest */}
+617:      <polygon points="50,5 90,25 90,75 50,95 10,75 10,25" fill="#15803d" stroke="#facc15" strokeWidth="2.5" />
+618:      {/* Inner crest */}
+619:      <polygon points="50,12 82,28 82,72 50,88 18,72 18,28" fill="#16a34a" />
+620:      {/* Star */}
+621:      <polygon points="50,15 58,35 78,35 62,48 68,68 50,55 32,68 38,48 22,35 42,35" fill="#facc15" stroke="#ca8a04" strokeWidth="1" />
+622:      {/* Shield circle */}
+623:      <circle cx="50" cy="50" r="14" fill="#ffffff" stroke="#1e3a8a" strokeWidth="1.5" />
+624:      {/* Book symbol lines */}
+625:      <path d="M42,48 C46,51 50,47 50,47 C50,47 54,51 58,48 M42,52 C46,55 50,51 50,51 C50,51 54,55 58,52" stroke="#ea580c" strokeWidth="1.5" fill="none" />
+626:      {/* Laurel leaves branches at bottom */}
+627:      <path d="M22,60 Q30,85 50,82 Q70,85 78,60" stroke="#facc15" strokeWidth="2.5" fill="none" />
+628:      {/* Banner */}
+629:      <path d="M12,70 L30,75 L50,72 L70,75 L88,70 L84,78 L50,78 L16,78 Z" fill="#b91c1c" stroke="#facc15" strokeWidth="1" />
+630:      <text x="50" y="76" fill="#ffffff" fontSize="5" fontWeight="bold" textAnchor="middle" letterSpacing="0.5">KARTIKA JAYA</text>
+631:    </svg>
+632:  );
+633:
+634:  return (
+635:    <div id="rapor-cetak-wrapper" className="flex flex-col gap-6">
+636:      {/* Action panel & toolbar */}
+637:      <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex flex-wrap gap-3 items-center justify-between no-print">
+638:        <button
+639:          onClick={onBack}
+640:          className="px-4 py-2 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 flex items-center gap-2 cursor-pointer transition-colors shadow-xs"
+641:        >
+642:          <ArrowLeft className="h-4 w-4" /> Kembali ke Grid Excel
+643:        </button>
+644:
+645:        <div className="flex gap-2">
+646:          <button
+647:            onClick={() => setIsDiagnosticMode(prev => !prev)}
+648:            className={`px-4 py-2 text-xs font-bold rounded-lg flex items-center gap-2 cursor-pointer transition-all border transform hover:-translate-y-0.5 active:translate-y-0 ${
+649:              isDiagnosticMode
+650:                ? 'bg-amber-600 border-amber-700 text-white shadow-md hover:bg-amber-700 shadow-amber-100/50'
+651:                : 'bg-white border-slate-200 text-amber-700 hover:text-amber-800 hover:bg-amber-50 shadow-xs'
+652:            }`}
+653:            title="Aktifkan Mode Diagnostik untuk meninjau tata letak PDF secara presisi 1:1"
+654:          >
+655:            <Wrench className="h-4 w-4" />
+656:            <span>{isDiagnosticMode ? 'Tutup Diagnostik' : 'Mode Diagnostik'}</span>
+657:          </button>
+658:
+659:          <button
+660:            onClick={onDownloadExcel}
+661:            className="px-4 py-2 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg flex items-center gap-2 cursor-pointer transition-colors shadow-xs"
+662:          >
+663:            <FileSpreadsheet className="h-4 w-4" /> Excel (.xlsx)
+664:          </button>
+665:          
+666:          <button
+667:            onClick={handleDownloadAllPDFs}
+668:            disabled={isGeneratingPdf || isGeneratingAll || isUploadingToDrive || selectedStudents.length === 0}
+669:            className={`px-4 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-lg flex items-center gap-2 cursor-pointer transition-all shadow-md hover:shadow-amber-100 transform hover:-translate-y-0.5 active:translate-y-0 min-w-36 justify-center ${isGeneratingAll ? 'opacity-75 cursor-not-allowed' : ''}`}
+670:          >
+671:            {isGeneratingAll ? (
+672:              <>
+673:                <Loader2 className="h-4 w-4 animate-spin" />
+674:                <span>Memproses...</span>
+675:              </>
+676:            ) : (
+677:              <>
+678:                <Archive className="h-4 w-4" />
+679:                <span>Unduh ZIP ({selectedStudents.length})</span>
+680:              </>
+681:            )}
+682:          </button>
+683:
+684:          <button
+685:            onClick={handleDownloadPDF}
+686:            disabled={isGeneratingPdf || isGeneratingAll || isUploadingToDrive || selectedStudents.length === 0}
+687:            className={`px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-lg flex items-center gap-2 cursor-pointer transition-all shadow-md hover:shadow-rose-100 transform hover:-translate-y-0.5 active:translate-y-0 ${isGeneratingPdf ? 'opacity-75 cursor-not-allowed' : ''}`}
+688:          >
+689:            {isGeneratingPdf ? (
+690:              <>
+691:                <Loader2 className="h-4 w-4 animate-spin" />
+692:                <span>Mengekspor...</span>
+693:              </>
+694:            ) : (
+695:              <>
+696:                <FileText className="h-4 w-4" />
+697:                <span>{selectedStudents.length > 1 ? `Unduh Gabungan PDF (${selectedStudents.length})` : 'Unduh PDF'}</span>
+698:              </>
+699:            )}
+700:          </button>
+701:
+702:          <button
+703:            onClick={handleSaveToDrive}
+704:            disabled={isUploadingToDrive || isGeneratingPdf || isGeneratingAll || selectedStudents.length === 0}
+705:            className={`px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg flex items-center gap-2 cursor-pointer transition-all shadow-md hover:shadow-blue-100 transform hover:-translate-y-0.5 active:translate-y-0 ${isUploadingToDrive ? 'opacity-75 cursor-not-allowed' : ''}`}
+706:          >
+707:            {isUploadingToDrive ? (
+708:              <>
+709:                <Loader2 className="h-4 w-4 animate-spin" />
+710:                <span>Menyimpan ke Drive...</span>
+711:              </>
+712:            ) : (
+713:              <>
+714:                <Cloud className="h-4 w-4" />
+715:                <span>Simpan ke Drive</span>
+716:              </>
+717:            )}
+718:          </button>
+719:
+720:          <button
+721:            onClick={handlePrint}
+722:            disabled={isGeneratingPdf || isGeneratingAll || isUploadingToDrive || selectedStudents.length === 0}
+723:            className={`px-5 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg flex items-center gap-2 cursor-pointer transition-all shadow-md hover:shadow-indigo-100 transform hover:-translate-y-0.5 active:translate-y-0 ${isGeneratingPdf || isGeneratingAll || isUploadingToDrive ? 'opacity-50 cursor-not-allowed' : ''}`}
+724:          >
+725:            <Printer className="h-4 w-4" /> {selectedStudents.length > 1 ? `Cetak Massal (${selectedStudents.length})` : 'Cetak Langsung'}
+726:          </button>
+727:        </div>
+728:      </div>
+729:
+730:      {/* Visual notice */}
+731:      <div className="p-4 bg-amber-50/80 border border-amber-200 text-amber-800 text-xs rounded-xl flex flex-col gap-2 no-print leading-relaxed">
+732:        <div className="flex items-start gap-2.5">
+733:          <Sparkles className="h-4.5 w-4.5 text-amber-600 flex-none mt-0.5" />
+734:          <div>
+735:            <p className="font-bold">Informasi Pratinjau & Cetak:</p>
+736:            <p className="mt-0.5 text-slate-700">Tampilan di bawah ini adalah <b>Print Preview (Pratinjau Cetak)</b> siswa aktif yang dirancang presisi 1:1 sesuai standar form Yayasan Kartika Jaya. Anda dapat memilih beberapa siswa dari panel list di sebelah kiri untuk unduh PDF gabungan atau cetak massal.</p>
+737:          </div>
+738:        </div>
+739:        <div className="pl-7 pr-4 py-1.5 border-t border-amber-200/50 flex flex-col gap-1 text-[10.5px] text-amber-900 bg-amber-50/30 rounded-lg">
+740:          <p className="font-semibold text-amber-850">💡 Tips Penting Cetak Langsung:</p>
+741:          <p className="text-slate-650">Apabila tombol <strong className="text-indigo-800">Cetak</strong> menampilkan halaman kosong atau tidak merespon di dalam editor, klik tombol <strong className="text-teal-800">"Buka di Tab Baru"</strong> di sudut kanan atas untuk membuka aplikasi secara mandiri lalu cetak dengan lancar.</p>
+742:        </div>
+743:      </div>
+744:
+745:      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start no-print">
+746:        {/* STUDENT SELECTION SIDEBAR */}
+747:        <div className="lg:col-span-1 bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-col gap-4 h-fit lg:sticky lg:top-6 selection:bg-transparent">
+748:          <div className="flex flex-col gap-1 pb-3 border-b border-slate-100">
+749:            <h3 className="font-bold text-slate-800 text-xs tracking-tight flex items-center gap-2">
+750:              <Award className="h-4 w-4 text-indigo-600 flex-none" />
+751:              Daftar Siswa Kelas {selectedClass}
+752:            </h3>
+753:            <p className="text-[10px] text-slate-500 leading-normal">
+754:              Pilih satu atau beberapa siswa untuk pratinjau, cetak massal, atau ekspor gabungan.
+755:            </p>
+756:          </div>
+757:
+758:          {/* Search bar */}
+759:          <div className="relative">
+760:            <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-400" />
+761:            <input
+762:              type="text"
+763:              placeholder="Cari nama / NIS..."
+764:              value={searchTerm}
+765:              onChange={(e) => setSearchTerm(e.target.value)}
+766:              className="w-full pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-indigo-500 focus:bg-white text-slate-700 transition-all placeholder:text-slate-400"
+767:            />
+768:          </div>
+769:
+770:          {/* Selection stats & Select All */}
+771:          <div className="flex items-center justify-between py-1 bg-slate-50 px-2 rounded-lg border border-slate-100">
+772:            <label className="flex items-center gap-2 cursor-pointer select-none py-1 flex-1">
+773:              <input
+774:                type="checkbox"
+775:                checked={filteredClassStudents.length > 0 && filteredClassStudents.every(s => selectedNisList.includes(s.nis))}
+776:                ref={(el) => {
+777:                  if (el) {
+778:                    const someSelected = filteredClassStudents.some(s => selectedNisList.includes(s.nis));
+779:                    const allSelected = filteredClassStudents.every(s => selectedNisList.includes(s.nis));
+780:                    el.indeterminate = someSelected && !allSelected;
+781:                  }
+782:                }}
+783:                onChange={(e) => handleSelectAll(e.target.checked)}
+784:                className="rounded border border-slate-300 text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5 cursor-pointer accent-indigo-600"
+785:              />
+786:              <span className="text-[11px] font-bold text-slate-700">Pilih Semua</span>
+787:            </label>
+788:            <span className="text-[9px] font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded-md flex-none">
+789:              {selectedNisList.length} / {classStudents.length}
+790:            </span>
+791:          </div>
+792:
+793:          {/* Students Scroll List */}
+794:          <div className="flex flex-col gap-1 max-h-[500px] overflow-y-auto pr-1">
+795:            {filteredClassStudents.length === 0 ? (
+796:              <div className="text-center py-6 text-slate-400 text-xs font-medium">
+797:                Siswa tidak ditemukan
+798:              </div>
+799:            ) : (
+800:              filteredClassStudents.map((s) => {
+801:                const isChecked = selectedNisList.includes(s.nis);
+802:                const isActivePreview = s.nis === previewNis;
+803:                return (
+804:                  <div
+805:                    key={s.nis}
+806:                    onClick={() => setPreviewNis(s.nis)}
+807:                    className={`group w-full flex items-center justify-between p-2 rounded-xl border transition-all text-left cursor-pointer ${
+808:                      isActivePreview
+809:                        ? 'bg-indigo-50 border-indigo-200'
+810:                        : 'bg-white border-slate-100 hover:bg-slate-50 hover:border-slate-200'
+811:                    }`}
+812:                  >
+813:                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
+814:                      <div 
+815:                        onClick={(e) => {
+816:                          e.stopPropagation(); // Avoid changing preview when clicking checkbox
+817:                          handleToggleStudent(s.nis);
+818:                        }}
+819:                        className="flex items-center justify-center p-0.5"
+820:                      >
+821:                        <input
+822:                          type="checkbox"
+823:                          checked={isChecked}
+824:                          readOnly
+825:                          className="rounded border border-slate-300 text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5 cursor-pointer accent-indigo-600"
+826:                        />
+827:                      </div>
+828:                      <div className="min-w-0 pr-1 flex-1">
+829:                        <p className={`text-[11px] font-bold uppercase truncate ${
+830:                          isActivePreview ? 'text-indigo-900' : 'text-slate-800'
+831:                        }`}>
+832:                          {s.name}
+833:                        </p>
+834:                        <p className="text-[9px] text-slate-400 font-mono mt-0.5">
+835:                          NIS. {s.nis}
+836:                        </p>
+837:                      </div>
+838:                    </div>
+839:                    
+840:                    {isActivePreview && (
+841:                      <span className="text-[8px] font-bold text-indigo-600 bg-indigo-100/50 px-1 py-0.5 rounded flex-none uppercase tracking-wider scale-90">
+842:                        Aktif
+843:                      </span>
+844:                    )}
+845:                  </div>
+846:                );
+847:              })
+848:            )}
+849:          </div>
+850:        </div>
+851:
+852:        {/* PREVIEW CONTAINER */}
+853:        <div className="lg:col-span-3 flex flex-col gap-6 w-full">
+854:          {isDiagnosticMode ? (
+855:            <div className="flex flex-col gap-6 w-full">
+856:              {/* DIAGNOSTIC PANEL HEADER */}
+857:              <div className="p-4 bg-amber-50/90 border border-amber-200 rounded-2xl flex flex-col gap-3 shadow-sm text-slate-800 no-print">
+858:                <div className="flex items-center justify-between">
+859:                  <div className="flex items-center gap-2">
+860:                    <span className="flex h-2 w-2 rounded-full bg-amber-600 animate-pulse" />
+861:                    <h4 className="font-bold text-amber-900 text-[10px] tracking-wider uppercase font-sans">
+862:                      Panel Kontrol Diagnostik & Auditing Tata Letak (A4 Standard)
+863:                    </h4>
+864:                  </div>
+865:                  <button 
+866:                    onClick={() => setIsDiagnosticMode(false)}
+867:                    className="text-[10px] font-bold text-amber-800 hover:text-amber-950 underline px-2 py-0.5 rounded transition-colors"
+868:                  >
+869:                    Kembali ke Tampilan Normal
+870:                  </button>
+871:                </div>
+872:                
+873:                <p className="text-[10.5px] text-amber-800 leading-relaxed font-sans mt-0.5 font-medium">
+874:                  Tampilan di bawah ini memicu <strong>Layout Rendering 1:1</strong> yang tepat dikonsumsi oleh penyaji PDF (<code>html2pdf.js</code>). Di sini, Anda dapat meninjau pemisahan halaman (<em>page-break</em>), batas pemisah tabel, ukuran margin fisik, dan letak tanda tangan guru/orang tua secara presisi.
+875:                </p>
+876:
+877:                <div className="flex flex-wrap gap-4 pt-2 border-t border-amber-200/60 flex-row text-[10.5px] text-amber-900">
+878:                  <label className="flex items-center gap-2 cursor-pointer select-none">
+879:                    <input
+880:                      type="checkbox"
+881:                      checked={showMarginsGuide}
+882:                      onChange={(e) => setShowMarginsGuide(e.target.checked)}
+883:                      className="rounded border-amber-400 text-amber-700 focus:ring-amber-500 h-4 w-4 cursor-pointer accent-amber-700"
+884:                    />
+885:                    <span className="font-bold flex items-center gap-1">
+886:                      <Sliders className="h-3.5 w-3.5 text-amber-700" /> Garis Panduan Batas Margin (12mm x 15mm)
+887:                    </span>
+888:                  </label>
+889:
+890:                  <label className="flex items-center gap-2 cursor-pointer select-none">
+891:                    <input
+892:                      type="checkbox"
+893:                      checked={showGridRuler}
+894:                      onChange={(e) => setShowGridRuler(e.target.checked)}
+895:                      className="rounded border-amber-400 text-amber-700 focus:ring-amber-500 h-4 w-4 cursor-pointer accent-amber-700"
+896:                    />
+897:                    <span className="font-bold flex items-center gap-1">
+898:                      <Layers className="h-3.5 w-3.5 text-amber-700" /> Tampilkan Kisi Grid Ruler (Milimeter)
+899:                    </span>
+900:                  </label>
+901:                </div>
+902:              </div>
+903:
+904:              {/* SIMULATED WORKBENCH CANVAS */}
+905:              <div className="bg-slate-700/90 p-8 rounded-2xl border border-slate-600 shadow-inner flex flex-col items-center gap-8 overflow-x-auto select-none no-print">
+906:                <div className={`simulate-print w-fit ${showMarginsGuide ? 'show-margins-guide' : ''} ${showGridRuler ? 'show-grid-ruler' : ''}`}>
+907:                  
+908:                  {/* PRINT PAGE 1 SIMULATION */}
+909:                  <div className="print-page relative">
+910:                    <div>
+911:                      {/* Header, title & info */}
+912:                      <div className="avoid-break select-none">
+913:                        <div className="flex items-start gap-4 mb-0.5">
+914:                          <div className="h-20 w-20 flex flex-col justify-center items-center flex-none">
+915:                            {kopSekolah.logoUrl ? (
+916:                              <img src={kopSekolah.logoUrl} alt="Logo Sekolah" className="max-h-20 max-w-20 object-contain" referrerPolicy="no-referrer" />
+917:                            ) : (
+918:                              <div className="h-20 w-20 bg-neutral-100 flex items-center justify-center font-sans font-bold text-xs">LOGO</div>
+919:                            )}
+920:                          </div>
+921:                          <div className="flex-1 flex flex-col justify-start">
+922:                            <h1 className="font-bold text-[14pt] leading-tight font-sans text-black uppercase text-left">
+923:                              {kopSekolah.yayasan}
+924:                            </h1>
+925:                            <p className="font-bold text-black mt-0.5 leading-tight uppercase text-[11pt] text-left">
+926:                              KOORDINATOR <span className="underline mr-1">{kopSekolah.koordinator}</span> CABANG <span className="underline">{kopSekolah.cabang}</span>
+927:                            </p>
+928:                            <h2 className="font-bold text-[15pt] text-black mt-0.5 leading-tight uppercase text-left">
+929:                              {kopSekolah.namaSekolah}
+930:                            </h2>
+931:                            <p className="text-[10pt] font-medium text-black mt-0.5 leading-tight text-left">
+932:                              <span className="font-bold">Alamat:</span> {kopSekolah.alamat}
+933:                            </p>
+934:                          </div>
+935:                        </div>
+936:
+937:                        <hr className="border-t-[1.5px] border-black my-2" />
+938:
+939:                        <div className="text-center mt-1.5 mb-2.5">
+940:                          <h2 className="text-[12.5pt] font-bold tracking-wide uppercase text-black">
+941:                            LAPORAN PERKEMBANGAN NILAI KARTIKA (5NK)
+942:                          </h2>
+943:                          <p className="text-[11pt] font-bold text-black mt-0.5 tracking-wide">
+944:                            Tahun Ajaran {kopSekolah.tahunAjaran}
+945:                          </p>
+946:                        </div>
+947:                      </div>
+948:
+949:                      {/* Student metadata */}
+950:                      <div className="grid grid-cols-2 gap-x-11 gap-y-0.5 text-[9pt] mb-2.5 font-medium avoid-break">
+951:                        <div className="flex items-center">
+952:                          <span className="w-24 font-bold flex-none text-left">NAMA</span>
+953:                          <span className="mr-2 font-bold">:</span>
+954:                          <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5 uppercase text-left">{activeStudent.name}</span>
+955:                        </div>
+956:                        <div className="flex items-center text-[9pt]">
+957:                          <span className="w-28 font-bold flex-none text-left">NOMOR INDUK</span>
+958:                          <span className="mr-2 font-bold">:</span>
+959:                          <span className="border-b border-black flex-1 font-mono font-bold text-slate-800 pb-0.5 text-left">{activeStudent.nis}</span>
+960:                        </div>
+961:                        <div className="flex items-center">
+962:                          <span className="w-24 font-bold flex-none text-left">KELAS</span>
+963:                          <span className="mr-2 font-bold">:</span>
+964:                          <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5 text-left">{activeStudent.kelas}</span>
+965:                        </div>
+966:                        <div className="flex items-center">
+967:                          <span className="w-28 font-bold flex-none text-left">SEMESTER</span>
+968:                          <span className="mr-2 font-bold">:</span>
+969:                          <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5 text-left">{activeStudent.semester}</span>
+970:                        </div>
+971:                      </div>
+972:
+973:                      {/* Table */}
+974:                      <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
+975:                        <colgroup>
+976:                          <col style={{ width: '15%' }} />
+977:                          <col style={{ width: '41%' }} />
+978:                          <col style={{ width: '11%' }} />
+979:                          <col style={{ width: '11%' }} />
+980:                          <col style={{ width: '11%' }} />
+981:                          <col style={{ width: '11%' }} />
+982:                        </colgroup>
+983:                        <thead>
+984:                          <tr className="bg-slate-100">
+985:                            <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center w-16 text-[9.5pt]">
+986:                              5 Nilai Kartika
+987:                            </th>
+988:                            <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center text-[9.5pt]">
+989:                              Indikator
+990:                            </th>
+991:                            <th colSpan={4} className="border border-black p-1 text-center font-bold text-[9.5pt]">
+992:                              Hasil Penilaian
+993:                            </th>
+994:                          </tr>
+995:                          <tr className="bg-slate-50 text-[8px] font-medium leading-tight text-slate-600">
+996:                            <th className="border border-black p-1 text-center font-bold text-black w-24">
+997:                              Berkembang Sangat Baik
+998:                              <span className="block font-normal text-[7px] mt-0.5 leading-tight">Konsisten menunjukkan perilaku sesuai indikator tanpa perlu diingatkan.</span>
+999:                            </th>
+1000:                            <th className="border border-black p-1 text-center font-bold text-black w-24">
+1001:                              Berkembang
+1002:                              <span className="block font-normal text-[7px] mt-0.5 leading-tight">Menunjukkan perilaku sesuai indikator dengan sedikit arahan.</span>
+1003:                            </th>
+1004:                            <th className="border border-black p-1 text-center font-bold text-black w-24">
+1005:                              Mulai Berkembang
+1006:                              <span className="block font-normal text-[7px] mt-0.5 leading-tight">Perlu sering diingatkan untuk menunjukkan perilaku sesuai indikator.</span>
+1007:                            </th>
+1008:                            <th className="border border-black p-1 text-center font-bold text-black w-24">
+1009:                              Belum Berkembang
+1010:                              <span className="block font-normal text-[7px] mt-0.5 leading-tight">Memerlukan bimbingan intensif untuk menunjukkan perilaku sesuai indikator.</span>
+1011:                            </th>
+1012:                          </tr>
+1013:                        </thead>
+1014:                        <tbody>
+1015:                          {/* Cinta Tanah Air */}
+1016:                          {categories.find(c => c.id === 'CTA')?.indicators.map((ind, i) => {
+1017:                            const activeScore = activeStudent.grades[ind.id] || 'B';
+1018:                            return (
+1019:                              <tr key={ind.id}>
+1020:                                {i === 0 && (
+1021:                                  <td 
+1022:                                    rowSpan={3} 
+1023:                                    className="border border-black py-0.5 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[9.5px] leading-tight font-sans text-black"
+1024:                                  >
+1025:                                    Cinta Tanah Air
+1026:                                  </td>
+1027:                                )}
+1028:                                <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px] text-left">
+1029:                                  {ind.text}
+1030:                                </td>
+1031:                                <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-emerald-700">
+1032:                                  {activeScore === 'BSB' ? '✔' : ''}
+1033:                                </td>
+1034:                                <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-blue-700">
+1035:                                  {activeScore === 'B' ? '✔' : ''}
+1036:                                </td>
+1037:                                <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-amber-700">
+1038:                                  {activeScore === 'MB' ? '✔' : ''}
+1039:                                </td>
+1040:                                <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-rose-700">
+1041:                                  {activeScore === 'BB' ? '✔' : ''}
+1042:                                </td>
+1043:                              </tr>
+1044:                            );
+1045:                          })}
+1046:
+1047:                          {/* Disiplin */}
+1048:                          {categories.find(c => c.id === 'DSP')?.indicators.map((ind, i) => {
+1049:                            const activeScore = activeStudent.grades[ind.id] || 'B';
+1050:                            return (
+1051:                              <tr key={ind.id}>
+1052:                                {i === 0 && (
+1053:                                  <td 
+1054:                                    rowSpan={3} 
+1055:                                    className="border border-black py-0.5 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[9.5px] leading-tight font-sans text-black"
+1056:                                  >
+1057:                                    Disiplin
+1058:                                  </td>
+1059:                                )}
+1060:                                <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px] text-left">
+1061:                                  {ind.text}
+1062:                                </td>
+1063:                                <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-emerald-700">
+1064:                                  {activeScore === 'BSB' ? '✔' : ''}
+1065:                                </td>
+1066:                                <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-blue-700">
+1067:                                  {activeScore === 'B' ? '✔' : ''}
+1068:                                </td>
+1069:                                <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-amber-700">
+1070:                                  {activeScore === 'MB' ? '✔' : ''}
+1071:                                </td>
+1072:                                <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-rose-700">
+1073:                                  {activeScore === 'BB' ? '✔' : ''}
+1074:                                </td>
+1075:                              </tr>
+1076:                            );
+1077:                          })}
+1078:
+1079:                          {/* Berbudi Luhur (3 indicators) */}
+1080:                          {categories.find(c => c.id === 'BBL')?.indicators.map((ind, i) => {
+1081:                            const activeScore = activeStudent.grades[ind.id] || 'B';
+1082:                            return (
+1083:                              <tr key={ind.id}>
+1084:                                {i === 0 && (
+1085:                                  <td 
+1086:                                    rowSpan={3} 
+1087:                                    className="border border-black py-0.5 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[9.5px] leading-tight font-sans text-black"
+1088:                                  >
+1089:                                    Berbudi Luhur
+1090:                                  </td>
+1091:                                )}
+1092:                                <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px] text-left">
+1093:                                  {ind.text}
+1094:                                </td>
+1095:                                <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-emerald-700">
+1096:                                  {activeScore === 'BSB' ? '✔' : ''}
+1097:                                </td>
+1098:                                <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-blue-700">
+1099:                                  {activeScore === 'B' ? '✔' : ''}
+1100:                                </td>
+1101:                                <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-amber-700">
+1102:                                  {activeScore === 'MB' ? '✔' : ''}
+1103:                                </td>
+1104:                                <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-rose-700">
+1105:                                  {activeScore === 'BB' ? '✔' : ''}
+1106:                                </td>
+1107:                              </tr>
+1108:                            );
+1109:                          })}
+1110:
+1111:                          {/* Cerdas (1st indicator only) */}
+1112:                          {(() => {
+1113:                            const certCat = categories.find(c => c.id === 'CRD');
+1114:                            if (!certCat || certCat.indicators.length === 0) return null;
+1115:                            const ind = certCat.indicators[0];
+1116:                            const activeScore = activeStudent.grades[ind.id] || 'B';
+1117:                            return (
+1118:                              <tr key={ind.id}>
+1119:                                <td 
+1120:                                  className="border border-black py-0.5 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[9.5px] leading-tight font-sans text-black"
+1121:                                >
+1122:                                  Cerdas
+1123:                                </td>
+1124:                                <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px] text-left">
+1125:                                  {ind.text}
+1126:                                </td>
+1127:                                <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-emerald-700">
+1128:                                  {activeScore === 'BSB' ? '✔' : ''}
+1129:                                </td>
+1130:                                <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-blue-700">
+1131:                                  {activeScore === 'B' ? '✔' : ''}
+1132:                                </td>
+1133:                                <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-amber-700">
+1134:                                  {activeScore === 'MB' ? '✔' : ''}
+1135:                                </td>
+1136:                                <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-rose-700">
+1137:                                  {activeScore === 'BB' ? '✔' : ''}
+1138:                                </td>
+1139:                              </tr>
+1140:                            );
+1141:                          })()}
+1142:                        </tbody>
+1143:                      </table>
+1144:                    </div>
+1145:                  </div>
+1146:
+1147:                  {/* PRINT PAGE 2 SIMULATION */}
+1148:                  <div className="print-page relative">
+1149:                    <div className="flex flex-col gap-4">
+1150:                      {/* Table continuation on Page 2 */}
+1151:                      <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
+1152:                        <colgroup>
+1153:                          <col style={{ width: '15%' }} />
+1154:                          <col style={{ width: '41%' }} />
+1155:                          <col style={{ width: '11%' }} />
+1156:                          <col style={{ width: '11%' }} />
+1157:                          <col style={{ width: '11%' }} />
+1158:                          <col style={{ width: '11%' }} />
+1159:                        </colgroup>
+1160:                        <tbody>
+1161:                          {/* Cerdas (2nd and 3rd indicators) */}
+1162:                          {(() => {
+1163:                            const certCat = categories.find(c => c.id === 'CRD');
+1164:                            if (!certCat || certCat.indicators.length < 2) return null;
+1165:                            const remaining = certCat.indicators.slice(1);
+1166:                            return remaining.map((ind, idx) => {
+1167:                              const activeScore = activeStudent.grades[ind.id] || 'B';
+1168:                              return (
+1169:                                <tr key={ind.id}>
+1170:                                  {idx === 0 && (
+1171:                                    <td 
+1172:                                      rowSpan={2} 
+1173:                                      className="border border-black py-0.5 px-1.5 bg-neutral-50/50 align-middle"
+1174:                                    ></td>
+1175:                                  )}
+1176:                                  <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px] text-left">
+1177:                                    {ind.text}
+1178:                                  </td>
+1179:                                  <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-emerald-700">
+1180:                                    {activeScore === 'BSB' ? '✔' : ''}
+1181:                                  </td>
+1182:                                  <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-blue-700">
+1183:                                    {activeScore === 'B' ? '✔' : ''}
+1184:                                  </td>
+1185:                                  <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-amber-700">
+1186:                                    {activeScore === 'MB' ? '✔' : ''}
+1187:                                  </td>
+1188:                                  <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-rose-700">
+1189:                                    {activeScore === 'BB' ? '✔' : ''}
+1190:                                  </td>
+1191:                                </tr>
+1192:                              );
+1193:                            });
+1194:                          })()}
+1195:
+1196:                          {/* Terampil (3 indicators) */}
+1197:                          {categories.find(c => c.id === 'TRM')?.indicators.map((ind, i) => {
+1198:                            const activeScore = activeStudent.grades[ind.id] || 'B';
+1199:                            return (
+1200:                              <tr key={ind.id}>
+1201:                                {i === 0 && (
+1202:                                  <td 
+1203:                                    rowSpan={3} 
+1204:                                    className="border border-black py-0.5 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[9.5px] leading-tight font-sans text-black"
+1205:                                  >
+1206:                                    Terampil
+1207:                                  </td>
+1208:                                )}
+1209:                                <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px] text-left">
+1210:                                  {ind.text}
+1211:                                </td>
+1212:                                <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-emerald-700">
+1213:                                  {activeScore === 'BSB' ? '✔' : ''}
+1214:                                </td>
+1215:                                <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-blue-700">
+1216:                                  {activeScore === 'B' ? '✔' : ''}
+1217:                                </td>
+1218:                                <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-amber-700">
+1219:                                  {activeScore === 'MB' ? '✔' : ''}
+1220:                                </td>
+1221:                                <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-rose-700">
+1222:                                  {activeScore === 'BB' ? '✔' : ''}
+1223:                                </td>
+1224:                              </tr>
+1225:                            );
+1226:                          })}
+1227:                        </tbody>
+1228:                      </table>
+1229:
+1230:                      {/* Uraian Kesimpulan Pencapaian 5NK */}
+1231:                      <div className="border border-black avoid-break font-sans">
+1232:                        <div className="bg-neutral-100 border-b border-black p-1.5">
+1233:                          <p className="font-bold text-[9pt] text-black text-left">Uraian Kesimpulan Pencapaian 5NK :</p>
+1234:                        </div>
+1235:                        <div className="p-2.5 min-h-[85px] text-justify text-[9.5pt] text-slate-900 leading-relaxed font-sans font-medium">
+1236:                          {activeStudent.kesimpulan || 'Siswa menunjukkan antusiasme yang luar biasa dan tekad kuat untuk terus berprestasi. Perkembangan moral dan akademik berjalan seimbang serta berkembang ideal.'}
+1237:                        </div>
+1238:                      </div>
+1239:
+1240:                      {/* Catatan Pendukung (Wali Kelas & Orang Tua) */}
+1241:                      <div className="grid grid-cols-2 border border-black divide-x divide-black border-collapse avoid-break">
+1242:                        {/* Wali Kelas Side */}
+1243:                        <div className="flex flex-col font-sans">
+1244:                          <div className="bg-neutral-100 border-b border-black p-1.5">
+1245:                            <p className="font-bold text-[9pt] text-black text-left">Catatan Wali Kelas:</p>
+1246:                          </div>
+1247:                          <div className="p-2.5 min-h-[85px] text-justify text-[9pt] text-slate-800 leading-relaxed font-sans">
+1248:                            {activeStudent.catatanWali || 'Teruskan perilaku budi luhur ini dan tingkatkan konsistensi waktu belajarnya.'}
+1249:                          </div>
+1250:                        </div>
+1251:
+1252:                        {/* Orang Tua Side */}
+1253:                        <div className="flex flex-col font-sans">
+1254:                          <div className="bg-neutral-100 border-b border-black p-1.5">
+1255:                            <p className="font-bold text-[9pt] text-black text-left">Catatan Orang Tua/Wali:</p>
+1256:                          </div>
+1257:                          <div className="p-2.5 min-h-[85px] text-justify text-[9pt] text-slate-500 italic leading-relaxed font-sans">
+1258:                            {activeStudent.catatanOrangTua || 'Kami berkomitmen untuk terus membimbing anak di rumah sesuai arahan sekolah.'}
+1259:                          </div>
+1260:                        </div>
+1261:                      </div>
+1262:
+1263:                      {/* Signatures block */}
+1264:                      <div className="mt-4 avoid-break font-sans">
+1265:                        <p className="text-[10.5pt] font-semibold text-black text-center mb-6 select-none">
+1266:                          Mengetahui,
+1267:                        </p>
+1268:                        <div className="grid grid-cols-2 gap-12 text-center text-sans">
+1269:                          {/* Orang Tua */}
+1270:                          <div className="flex flex-col items-center justify-between h-32">
+1271:                            <p className="text-[10.5pt] text-black font-bold select-none">Orang Tua / Wali</p>
+1272:                            <div className="flex flex-col items-center w-full">
+1273:                              <div className="w-48 border-b-[1.5px] border-black pb-0.5"></div>
+1274:                              <p className="text-[8pt] text-slate-500 font-sans mt-1.5 italic select-none">Tanda Tangan & Nama Terang</p>
+1275:                            </div>
+1276:                          </div>
+1277:
+1278:                          {/* Guru Kelas */}
+1279:                          <div className="flex flex-col items-center justify-between h-32">
+1280:                            <p className="text-[10.5pt] text-black font-bold">Guru Kelas / Wali Kelas</p>
+1281:                            <div className="flex flex-col items-center w-full font-sans">
+1282:                              <p className="font-bold text-black text-[10.5pt] text-center uppercase leading-tight select-all underline underline-offset-4 decoration-[1.5px]">
+1283:                                {waliKelasName || '____________________'}
+1284:                              </p>
+1285:                              {waliKelasNip ? (
+1286:                                <p className="text-[8.5pt] text-slate-700 font-mono mt-1.5 select-all">
+1287:                                  NIP. {waliKelasNip}
+1288:                                </p>
+1289:                              ) : (
+1290:                                <p className="text-[8pt] text-slate-500 font-sans mt-1.5 italic select-none">Tanda Tangan & Nama Terang</p>
+1291:                              )}
+1292:                            </div>
+1293:                          </div>
+1294:                        </div>
+1295:                      </div>
+1296:                    </div>
+1297:                  </div>
+1298:
+1299:                </div>
+1300:              </div>
+1301:            </div>
+1302:          ) : (
+1303:            <>
+1304:              <div className="bg-neutral-100/50 p-6 xl:p-12 rounded-2xl border border-slate-200/80 shadow-inner flex justify-center no-print selection:bg-transparent">
+1305:        <div className="bg-white border border-slate-300 shadow-2xl p-[12mm_15mm] w-[210mm] min-h-[297mm] h-[297mm] max-h-[297mm] overflow-hidden box-border text-[11pt] text-black font-sans leading-relaxed flex flex-col justify-between">
+1306:          <div>
+1307:            {/* Header block with organization logo & info */}
+1308:            <div className="flex items-start gap-4 mb-1">
+1309:              <div className="h-24 w-24 flex flex-col justify-center items-center flex-none">
+1310:                {kopSekolah.logoUrl ? (
+1311:                  <img src={kopSekolah.logoUrl} alt="Logo Sekolah" className="max-h-24 max-w-24 object-contain" referrerPolicy="no-referrer" />
+1312:                ) : (
+1313:                  <KartikaLogo />
+1314:                )}
+1315:              </div>
+1316:              <div className="flex-1 flex flex-col justify-start">
+1317:                <h1 className="font-bold text-[14pt] leading-tight font-sans text-black uppercase">
+1318:                  {kopSekolah.yayasan}
+1319:                </h1>
+1320:                <p className="font-bold text-black mt-0.5 leading-tight uppercase text-[11pt]">
+1321:                  KOORDINATOR <span className="underline mr-1">{kopSekolah.koordinator}</span> CABANG <span className="underline">{kopSekolah.cabang}</span>
+1322:                </p>
+1323:                <h2 className="font-bold text-[15pt] text-black mt-0.5 leading-tight uppercase">
+1324:                  {kopSekolah.namaSekolah}
+1325:                </h2>
+1326:                <p className="text-[10pt] font-medium text-black mt-0.5 leading-tight">
+1327:                  <span className="font-bold">Alamat:</span> {kopSekolah.alamat}
+1328:                </p>
+1329:              </div>
+1330:            </div>
+1331:
+1332:            <hr className="border-t-[1.5px] border-black my-2.5" />
+1333:
+1334:            {/* Document Title */}
+1335:            <div className="text-center mt-3 mb-4">
+1336:              <h2 className="text-[13pt] font-bold tracking-wide uppercase text-black">
+1337:                LAPORAN PERKEMBANGAN NILAI KARTIKA (5NK)
+1338:              </h2>
+1339:              <p className="text-[11.5pt] font-bold text-black mt-0.5 tracking-wide">
+1340:                Tahun Ajaran {kopSekolah.tahunAjaran}
+1341:              </p>
+1342:            </div>
+1343:
+1344:            {/* Student metadata tables */}
+1345:            <div className="grid grid-cols-2 gap-x-12 gap-y-1.5 text-[9.5pt] mb-5 font-medium">
+1346:              <div className="flex items-center">
+1347:                <span className="w-[70px] font-bold flex-none">NAMA</span>
+1348:                <span className="mr-2 font-bold">:</span>
+1349:                <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5 uppercase">{activeStudent.name}</span>
+1350:              </div>
+1351:              <div className="flex items-center">
+1352:                <span className="w-[110px] font-bold flex-none">NOMOR INDUK</span>
+1353:                <span className="mr-2 font-bold">:</span>
+1354:                <span className="border-b border-black flex-1 font-mono font-bold text-slate-800 pb-0.5">{activeStudent.nis}</span>
+1355:              </div>
+1356:              <div className="flex items-center">
+1357:                <span className="w-[70px] font-bold flex-none">KELAS</span>
+1358:                <span className="mr-2 font-bold">:</span>
+1359:                <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5">{activeStudent.kelas}</span>
+1360:              </div>
+1361:              <div className="flex items-center">
+1362:                <span className="w-[110px] font-bold flex-none">SEMESTER</span>
+1363:                <span className="mr-2 font-bold">:</span>
+1364:                <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5">{activeStudent.semester}</span>
+1365:              </div>
+1366:            </div>
+1367:
+1368:            {/* The core 5NK indicators evaluation table */}
+1369:            <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug">
+1370:              <colgroup>
+1371:                <col style={{ width: '15%' }} />
+1372:                <col style={{ width: '41%' }} />
+1373:                <col style={{ width: '11%' }} />
+1374:                <col style={{ width: '11%' }} />
+1375:                <col style={{ width: '11%' }} />
+1376:                <col style={{ width: '11%' }} />
+1377:              </colgroup>
+1378:              <thead>
+1379:                <tr className="bg-slate-100">
+1380:                  <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center w-16 text-[9.5pt]">
+1381:                    5 Nilai Kartika
+1382:                  </th>
+1383:                  <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center text-[9.5pt]">
+1384:                    Indikator
+1385:                  </th>
+1386:                  <th colSpan={4} className="border border-black p-1 text-center font-bold text-[9.5pt]">
+1387:                    Hasil Penilaian
+1388:                  </th>
+1389:                </tr>
+1390:                <tr className="bg-slate-50 text-[8px] font-medium leading-tight text-slate-600">
+1391:                  <th className="border border-black p-1 text-center font-bold text-black w-24">
+1392:                    Berkembang Sangat Baik
+1393:                    <span className="block font-normal text-[7px] mt-0.5 leading-tight">Konsisten menunjukkan perilaku sesuai indikator tanpa perlu diingatkan.</span>
+1394:                  </th>
+1395:                  <th className="border border-black p-1 text-center font-bold text-black w-24">
+1396:                    Berkembang
+1397:                    <span className="block font-normal text-[7px] mt-0.5 leading-tight">Menunjukkan perilaku sesuai indikator dengan sedikit arahan.</span>
+1398:                  </th>
+1399:                  <th className="border border-black p-1 text-center font-bold text-black w-24">
+1400:                    Mulai Berkembang
+1401:                    <span className="block font-normal text-[7px] mt-0.5 leading-tight">Perlu sering diingatkan untuk menunjukkan perilaku sesuai indikator.</span>
+1402:                  </th>
+1403:                  <th className="border border-black p-1 text-center font-bold text-black w-24">
+1404:                    Belum Berkembang
+1405:                    <span className="block font-normal text-[7px] mt-0.5 leading-tight">Memerlukan bimbingan intensif untuk menunjukkan perilaku sesuai indikator.</span>
+1406:                  </th>
+1407:                </tr>
+1408:              </thead>
+1409:              <tbody>
+1410:                {/* Cinta Tanah Air (3 indicators) */}
+1411:                {categories.find(c => c.id === 'CTA')?.indicators.map((ind, i) => {
+1412:                  const activeScore = activeStudent.grades[ind.id] || 'B';
+1413:                  return (
+1414:                    <tr key={ind.id} className="hover:bg-slate-50/40">
+1415:                      {i === 0 && (
+1416:                        <td 
+1417:                          rowSpan={3} 
+1418:                          className="border border-black py-1 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[10.5px] leading-tight font-sans text-black"
+1419:                        >
+1420:                          Cinta Tanah Air
+1421:                        </td>
+1422:                      )}
+1423:                      <td className="border border-black py-1 px-2 text-black leading-tight font-sans font-medium text-[10.5px]">
+1424:                        {ind.text}
+1425:                      </td>
+1426:                      <td className="border border-black text-center align-middle font-bold text-base p-0.5 text-emerald-700">
+1427:                        {activeScore === 'BSB' ? '✔' : ''}
+1428:                      </td>
+1429:                      <td className="border border-black text-center align-middle font-bold text-base p-0.5 text-blue-700">
+1430:                        {activeScore === 'B' ? '✔' : ''}
+1431:                      </td>
+1432:                      <td className="border border-black text-center align-middle font-bold text-base p-0.5 text-amber-700">
+1433:                        {activeScore === 'MB' ? '✔' : ''}
+1434:                      </td>
+1435:                      <td className="border border-black text-center align-middle font-bold text-base p-0.5 text-rose-700">
+1436:                        {activeScore === 'BB' ? '✔' : ''}
+1437:                      </td>
+1438:                    </tr>
+1439:                  );
+1440:                })}
+1441:
+1442:                {/* Disiplin (3 indicators) */}
+1443:                {categories.find(c => c.id === 'DSP')?.indicators.map((ind, i) => {
+1444:                  const activeScore = activeStudent.grades[ind.id] || 'B';
+1445:                  return (
+1446:                    <tr key={ind.id} className="hover:bg-slate-50/40">
+1447:                      {i === 0 && (
+1448:                        <td 
+1449:                          rowSpan={3} 
+1450:                          className="border border-black py-1 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[10.5px] leading-tight font-sans text-black"
+1451:                        >
+1452:                          Disiplin
+1453:                        </td>
+1454:                      )}
+1455:                      <td className="border border-black py-1 px-2 text-black leading-tight font-sans font-medium text-[10.5px]">
+1456:                        {ind.text}
+1457:                      </td>
+1458:                      <td className="border border-black text-center align-middle font-bold text-base p-0.5 text-emerald-700">
+1459:                        {activeScore === 'BSB' ? '✔' : ''}
+1460:                      </td>
+1461:                      <td className="border border-black text-center align-middle font-bold text-base p-0.5 text-blue-700">
+1462:                        {activeScore === 'B' ? '✔' : ''}
+1463:                      </td>
+1464:                      <td className="border border-black text-center align-middle font-bold text-base p-0.5 text-amber-700">
+1465:                        {activeScore === 'MB' ? '✔' : ''}
+1466:                      </td>
+1467:                      <td className="border border-black text-center align-middle font-bold text-base p-0.5 text-rose-700">
+1468:                        {activeScore === 'BB' ? '✔' : ''}
+1469:                      </td>
+1470:                    </tr>
+1471:                  );
+1472:                })}
+1473:
+1474:                {/* Berbudi Luhur (3 indicators) */}
+1475:                {categories.find(c => c.id === 'BBL')?.indicators.map((ind, i) => {
+1476:                  const activeScore = activeStudent.grades[ind.id] || 'B';
+1477:                  return (
+1478:                    <tr key={ind.id} className="hover:bg-slate-50/40">
+1479:                      {i === 0 && (
+1480:                        <td 
+1481:                          rowSpan={3} 
+1482:                          className="border border-black py-1 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[10.5px] leading-tight font-sans text-black"
+1483:                        >
+1484:                          Berbudi Luhur
+1485:                        </td>
+1486:                      )}
+1487:                      <td className="border border-black py-1 px-2 text-black leading-tight font-sans font-medium text-[10.5px]">
+1488:                        {ind.text}
+1489:                      </td>
+1490:                      <td className="border border-black text-center align-middle font-bold text-base p-0.5 text-emerald-700">
+1491:                        {activeScore === 'BSB' ? '✔' : ''}
+1492:                      </td>
+1493:                      <td className="border border-black text-center align-middle font-bold text-base p-0.5 text-blue-700">
+1494:                        {activeScore === 'B' ? '✔' : ''}
+1495:                      </td>
+1496:                      <td className="border border-black text-center align-middle font-bold text-base p-0.5 text-amber-700">
+1497:                        {activeScore === 'MB' ? '✔' : ''}
+1498:                      </td>
+1499:                      <td className="border border-black text-center align-middle font-bold text-base p-0.5 text-rose-700">
+1500:                        {activeScore === 'BB' ? '✔' : ''}
+1501:                      </td>
+1502:                    </tr>
+1503:                  );
+1504:                })}
+1505:
+1506:                {/* Cerdas (1st indicator only) */}
+1507:                {(() => {
+1508:                  const certCat = categories.find(c => c.id === 'CRD');
+1509:                  if (!certCat || certCat.indicators.length === 0) return null;
+1510:                  const ind = certCat.indicators[0];
+1511:                  const activeScore = activeStudent.grades[ind.id] || 'B';
+1512:                  return (
+1513:                    <tr key={ind.id} className="hover:bg-slate-50/40">
+1514:                      <td 
+1515:                        className="border border-black py-1 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[10.5px] leading-tight font-sans text-black"
+1516:                      >
+1517:                        Cerdas
+1518:                      </td>
+1519:                      <td className="border border-black py-1 px-2 text-black leading-tight font-sans font-medium text-[10.5px]">
+1520:                        {ind.text}
+1521:                      </td>
+1522:                      <td className="border border-black text-center align-middle font-bold text-base p-0.5 text-emerald-700">
+1523:                        {activeScore === 'BSB' ? '✔' : ''}
+1524:                      </td>
+1525:                      <td className="border border-black text-center align-middle font-bold text-base p-0.5 text-blue-700">
+1526:                        {activeScore === 'B' ? '✔' : ''}
+1527:                      </td>
+1528:                      <td className="border border-black text-center align-middle font-bold text-base p-0.5 text-amber-700">
+1529:                        {activeScore === 'MB' ? '✔' : ''}
+1530:                      </td>
+1531:                      <td className="border border-black text-center align-middle font-bold text-base p-0.5 text-rose-700">
+1532:                        {activeScore === 'BB' ? '✔' : ''}
+1533:                      </td>
+1534:                    </tr>
+1535:                  );
+1536:                })()}
+1537:              </tbody>
+1538:            </table>
+1539:          </div>
+1540:        </div>
+1541:      </div>
+1542:
+1543:      {/* --- PAGE 2 MOCK PREVIEW --- */}
+1544:      <div className="bg-neutral-100/50 p-6 xl:p-12 rounded-2xl border border-slate-200/80 shadow-inner flex justify-center no-print">
+1545:        <div className="bg-white border border-slate-300 shadow-2xl p-[12mm_15mm] w-[210mm] min-h-[297mm] h-[297mm] max-h-[297mm] overflow-hidden box-border text-[11pt] text-black font-sans leading-relaxed flex flex-col justify-between">
+1546:          <div className="flex flex-col gap-4">
+1547:            {/* Table continuation on screen Page 2 */}
+1548:            <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug">
+1549:              <colgroup>
+1550:                <col style={{ width: '15%' }} />
+1551:                <col style={{ width: '41%' }} />
+1552:                <col style={{ width: '11%' }} />
+1553:                <col style={{ width: '11%' }} />
+1554:                <col style={{ width: '11%' }} />
+1555:                <col style={{ width: '11%' }} />
+1556:              </colgroup>
+1557:              <tbody>
+1558:                {/* Cerdas (2nd and 3rd indicators) */}
+1559:                {(() => {
+1560:                  const certCat = categories.find(c => c.id === 'CRD');
+1561:                  if (!certCat || certCat.indicators.length < 2) return null;
+1562:                  const remaining = certCat.indicators.slice(1);
+1563:                  return remaining.map((ind, idx) => {
+1564:                    const activeScore = activeStudent.grades[ind.id] || 'B';
+1565:                    return (
+1566:                      <tr key={ind.id} className="hover:bg-slate-50/40">
+1567:                        {idx === 0 && (
+1568:                          <td 
+1569:                            rowSpan={2} 
+1570:                            className="border border-black py-1 px-1.5 bg-neutral-50/50 align-middle"
+1571:                          ></td>
+1572:                        )}
+1573:                        <td className="border border-black py-1 px-2 text-black leading-tight font-sans font-medium text-[10.5px]">
+1574:                          {ind.text}
+1575:                        </td>
+1576:                        <td className="border border-black text-center align-middle font-bold text-base p-0.5 text-emerald-700">
+1577:                          {activeScore === 'BSB' ? '✔' : ''}
+1578:                        </td>
+1579:                        <td className="border border-black text-center align-middle font-bold text-base p-0.5 text-blue-700">
+1580:                          {activeScore === 'B' ? '✔' : ''}
+1581:                        </td>
+1582:                        <td className="border border-black text-center align-middle font-bold text-base p-0.5 text-amber-700">
+1583:                          {activeScore === 'MB' ? '✔' : ''}
+1584:                        </td>
+1585:                        <td className="border border-black text-center align-middle font-bold text-base p-0.5 text-rose-700">
+1586:                          {activeScore === 'BB' ? '✔' : ''}
+1587:                        </td>
+1588:                      </tr>
+1589:                    );
+1590:                  });
+1591:                })()}
+1592:
+1593:                {/* Terampil (3 indicators) */}
+1594:                {categories.find(c => c.id === 'TRM')?.indicators.map((ind, i) => {
+1595:                  const activeScore = activeStudent.grades[ind.id] || 'B';
+1596:                  return (
+1597:                    <tr key={ind.id} className="hover:bg-slate-50/40">
+1598:                      {i === 0 && (
+1599:                        <td 
+1600:                          rowSpan={3} 
+1601:                          className="border border-black py-1 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[10.5px] leading-tight font-sans text-black"
+1602:                        >
+1603:                          Terampil
+1604:                        </td>
+1605:                      )}
+1606:                      <td className="border border-black py-1 px-2 text-black leading-tight font-sans font-medium text-[10.5px]">
+1607:                        {ind.text}
+1608:                      </td>
+1609:                      <td className="border border-black text-center align-middle font-bold text-base p-0.5 text-emerald-700">
+1610:                        {activeScore === 'BSB' ? '✔' : ''}
+1611:                      </td>
+1612:                      <td className="border border-black text-center align-middle font-bold text-base p-0.5 text-blue-700">
+1613:                        {activeScore === 'B' ? '✔' : ''}
+1614:                      </td>
+1615:                      <td className="border border-black text-center align-middle font-bold text-base p-0.5 text-amber-700">
+1616:                        {activeScore === 'MB' ? '✔' : ''}
+1617:                      </td>
+1618:                      <td className="border border-black text-center align-middle font-bold text-base p-0.5 text-rose-700">
+1619:                        {activeScore === 'BB' ? '✔' : ''}
+1620:                      </td>
+1621:                    </tr>
+1622:                  );
+1623:                })}
+1624:
+1625:                {/* Uraian Kesimpulan Row (Collapsed under Terampil) */}
+1626:                <tr>
+1627:                  <td 
+1628:                    className="border border-black p-2 font-bold bg-white text-left font-sans text-[8.5pt] align-top"
+1629:                    colSpan={1}
+1630:                  >
+1631:                    Uraian Kesimpulan Pencapaian 5NK :
+1632:                  </td>
+1633:                  <td 
+1634:                    className="border border-black p-2.5 min-h-[85px] text-justify text-[9pt] text-slate-900 leading-normal font-sans"
+1635:                    colSpan={5}
+1636:                  >
+1637:                    {activeStudent.kesimpulan || 'Siswa menunjukkan antusiasme yang luar biasa dan tekad kuat untuk terus berprestasi. Perkembangan moral dan akademik berjalan seimbang serta berkembang ideal.'}
+1638:                  </td>
+1639:                </tr>
+1640:              </tbody>
+1641:            </table>
+1642:
+1643:            {/* Catatan Pendukung (Wali Kelas & Orang Tua) - Collapsed border-t-0 immediately below the table */}
+1644:            <div className="grid grid-cols-2 border border-black border-t-0 divide-x divide-black border-collapse -mt-4">
+1645:              {/* Wali Kelas Side */}
+1646:              <div className="flex flex-col">
+1647:                <div className="bg-white border-b border-black p-1.5">
+1648:                  <p className="font-bold text-[9pt] text-black text-left">Catatan Wali Kelas:</p>
+1649:                </div>
+1650:                <div className="p-2.5 min-h-[85px] text-justify text-[9pt] text-slate-800 leading-relaxed font-sans">
+1651:                  {activeStudent.catatanWali || 'Teruskan perilaku budi luhur ini dan tingkatkan konsistensi waktu belajarnya.'}
+1652:                </div>
+1653:              </div>
+1654:
+1655:              {/* Orang Tua Side */}
+1656:              <div className="flex flex-col">
+1657:                <div className="bg-white border-b border-black p-1.5">
+1658:                  <p className="font-bold text-[9pt] text-black text-left">Catatan Orang Tua/Wali:</p>
+1659:                </div>
+1660:                <div className="p-2.5 min-h-[85px] text-justify text-[9pt] text-slate-500 italic leading-relaxed font-sans">
+1661:                  {activeStudent.catatanOrangTua || 'Kami berkomitmen untuk terus membimbing anak di rumah sesuai arahan sekolah.'}
+1662:                </div>
+1663:              </div>
+1664:            </div>
+1665:
+1666:            {/* Signatures block */}
+1667:            <div className="mt-4">
+1668:              <p className="text-[10.5pt] font-semibold text-black text-center mb-6 select-none">
+1669:                Mengetahui,
+1670:              </p>
+1671:              <div className="grid grid-cols-2 gap-12 text-center">
+1672:                {/* Orang Tua */}
+1673:                <div className="flex flex-col items-center justify-between h-32">
+1674:                  <p className="text-[10.5pt] text-black font-bold select-none">Orang Tua / Wali</p>
+1675:                  <div className="flex flex-col items-center w-full">
+1676:                    <div className="w-48 border-b-[1.5px] border-black pb-0.5"></div>
+1677:                    <p className="text-[8pt] text-slate-500 font-sans mt-1.5 italic select-none">Tanda Tangan & Nama Terang</p>
+1678:                  </div>
+1679:                </div>
+1680:
+1681:                {/* Guru Kelas */}
+1682:                <div className="flex flex-col items-center justify-between h-32">
+1683:                  <p className="text-[10.5pt] text-black font-bold">Guru Kelas / Wali Kelas</p>
+1684:                  <div className="flex flex-col items-center w-full">
+1685:                    <p className="font-bold text-black text-[10.5pt] text-center uppercase leading-tight select-all underline underline-offset-4 decoration-[1.5px]">
+1686:                      {waliKelasName || '____________________'}
+1687:                    </p>
+1688:                    {waliKelasNip ? (
+1689:                      <p className="text-[8.5pt] text-slate-700 font-mono mt-1.5 select-all">
+1690:                        NIP. {waliKelasNip}
+1691:                      </p>
+1692:                    ) : (
+1693:                      <p className="text-[8pt] text-slate-500 font-sans mt-1.5 italic select-none">Tanda Tangan & Nama Terang</p>
+1694:                    )}
+1695:                  </div>
+1696:                </div>
+1697:              </div>
+1698:            </div>
+1699:          </div>
+1700:        </div>
+1701:      </div>
+1702:            </>
+1703:          )}
+1704:
+1705:    </div> {/* closing lg:col-span-3 */}
+1706:  </div> {/* closing grid */}
+1707:
+1708:  {/* ========================================= PRINT-ONLY SECTION ========================================= */}
+1709:      {/* This renders inside an offscreen absolute container with true layout size (height and width not collapsed to 0) on screen.
+1710:          This guarantees that getComputedStyle and html2canvas can capture the complete, pristine layout with no clipping or blank pages.
+1711:          During native printing, the container acts as standard static document flow to render the A4 pages perfectly. */}
+1712:      {createPortal(
+1713:        <div id="rapor-print-section">
+1714:          <div id="rapor-pdf-content" key={renderTrigger} className="bg-white text-black">
+1715:            {pdfRenderStudents.map((selSt) => (
+1716:              <div key={selSt.nis} className="student-pdf-group">
+1717:                {/* PRINT PAGE 1 */}
+1718:                <div className="print-page w-[210mm] h-[297mm] max-h-[297mm] overflow-visible p-[12mm_15mm] box-border text-[11pt] leading-relaxed flex flex-col justify-between">
+1719:                  <div>
+1720:                    {/* Header, title & info wrapped with avoid-break */}
+1721:                    <div className="avoid-break select-none">
+1722:                      {/* Header block with organization logo & info */}
+1723:                      <div className="flex items-start gap-4 mb-0.5">
+1724:                        <div className="h-20 w-20 flex flex-col justify-center items-center flex-none">
+1725:                          {kopSekolah.logoUrl ? (
+1726:                            <img src={kopSekolah.logoUrl} alt="Logo Sekolah" className="max-h-20 max-w-20 object-contain" referrerPolicy="no-referrer" />
+1727:                          ) : (
+1728:                            <KartikaLogo />
+1729:                          )}
+1730:                        </div>
+1731:                        <div className="flex-1 flex flex-col justify-start">
+1732:                          <h1 className="font-bold text-[14pt] leading-tight font-sans text-black uppercase">
+1733:                            {kopSekolah.yayasan}
+1734:                          </h1>
+1735:                          <p className="font-bold text-black mt-0.5 leading-tight uppercase text-[11pt]">
+1736:                            KOORDINATOR <span className="underline mr-1">{kopSekolah.koordinator}</span> CABANG <span className="underline">{kopSekolah.cabang}</span>
+1737:                          </p>
+1738:                          <h2 className="font-bold text-[15pt] text-black mt-0.5 leading-tight uppercase">
+1739:                            {kopSekolah.namaSekolah}
+1740:                          </h2>
+1741:                          <p className="text-[10pt] font-medium text-black mt-0.5 leading-tight">
+1742:                            <span className="font-bold">Alamat:</span> {kopSekolah.alamat}
+1743:                          </p>
+1744:                        </div>
+1745:                      </div>
+1746:
+1747:                      <hr className="border-t-[1.5px] border-black my-2" />
+1748:
+1749:                      {/* Document Title */}
+1750:                      <div className="text-center mt-1.5 mb-2.5">
+1751:                        <h2 className="text-[12.5pt] font-bold tracking-wide uppercase text-black">
+1752:                          LAPORAN PERKEMBANGAN NILAI KARTIKA (5NK)
+1753:                        </h2>
+1754:                        <p className="text-[11pt] font-bold text-black mt-0.5 tracking-wide">
+1755:                          Tahun Ajaran {kopSekolah.tahunAjaran}
+1756:                        </p>
+1757:                      </div>
+1758:                    </div>
+1759:
+1760:                    {/* Student metadata tables */}
+1761:                    <div className="grid grid-cols-2 gap-x-11 gap-y-0.5 text-[9pt] mb-2.5 font-medium avoid-break">
+1762:                      <div className="flex items-center">
+1763:                        <span className="w-[70px] font-bold flex-none">NAMA</span>
+1764:                        <span className="mr-2 font-bold">:</span>
+1765:                        <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5 uppercase">{selSt.name}</span>
+1766:                      </div>
+1767:                      <div className="flex items-center text-[9pt]">
+1768:                        <span className="w-[110px] font-bold flex-none">NOMOR INDUK</span>
+1769:                        <span className="mr-2 font-bold">:</span>
+1770:                        <span className="border-b border-black flex-1 font-mono font-bold text-slate-800 pb-0.5">{selSt.nis}</span>
+1771:                      </div>
+1772:                      <div className="flex items-center">
+1773:                        <span className="w-[70px] font-bold flex-none">KELAS</span>
+1774:                        <span className="mr-2 font-bold">:</span>
+1775:                        <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5">{selSt.kelas}</span>
+1776:                      </div>
+1777:                      <div className="flex items-center">
+1778:                        <span className="w-[110px] font-bold flex-none">SEMESTER</span>
+1779:                        <span className="mr-2 font-bold">:</span>
+1780:                        <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5">{selSt.semester}</span>
+1781:                      </div>
+1782:                    </div>
+1783:
+1784:                    {/* Table */}
+1785:                    <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
+1786:                      <colgroup>
+1787:                        <col style={{ width: '15%' }} />
+1788:                        <col style={{ width: '41%' }} />
+1789:                        <col style={{ width: '11%' }} />
+1790:                        <col style={{ width: '11%' }} />
+1791:                        <col style={{ width: '11%' }} />
+1792:                        <col style={{ width: '11%' }} />
+1793:                      </colgroup>
+1794:                      <thead>
+1795:                        <tr className="bg-slate-100">
+1796:                          <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center w-16 text-[9.5pt]">
+1797:                            5 Nilai Kartika
+1798:                          </th>
+1799:                          <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center text-[9.5pt]">
+1800:                            Indikator
+1801:                          </th>
+1802:                          <th colSpan={4} className="border border-black p-1 text-center font-bold text-[9.5pt]">
+1803:                            Hasil Penilaian
+1804:                          </th>
+1805:                        </tr>
+1806:                        <tr className="bg-slate-50 text-[8px] font-medium leading-tight text-slate-600">
+1807:                          <th className="border border-black p-1 text-center font-bold text-black w-24">
+1808:                            Berkembang Sangat Baik
+1809:                            <span className="block font-normal text-[7px] mt-0.5 leading-tight">Konsisten menunjukkan perilaku sesuai indikator tanpa perlu diingatkan.</span>
+1810:                          </th>
+1811:                          <th className="border border-black p-1 text-center font-bold text-black w-24">
+1812:                            Berkembang
+1813:                            <span className="block font-normal text-[7px] mt-0.5 leading-tight">Menunjukkan perilaku sesuai indikator dengan sedikit arahan.</span>
+1814:                          </th>
+1815:                          <th className="border border-black p-1 text-center font-bold text-black w-24">
+1816:                            Mulai Berkembang
+1817:                            <span className="block font-normal text-[7px] mt-0.5 leading-tight">Perlu sering diingatkan untuk menunjukkan perilaku sesuai indikator.</span>
+1818:                          </th>
+1819:                          <th className="border border-black p-1 text-center font-bold text-black w-24">
+1820:                            Belum Berkembang
+1821:                            <span className="block font-normal text-[7px] mt-0.5 leading-tight">Memerlukan bimbingan intensif untuk menunjukkan perilaku sesuai indikator.</span>
+1822:                          </th>
+1823:                        </tr>
+1824:                      </thead>
+1825:                      <tbody>
+1826:                        {/* Cinta Tanah Air (3 indicators) */}
+1827:                        {categories.find(c => c.id === 'CTA')?.indicators.map((ind, i) => {
+1828:                          const activeScore = selSt.grades[ind.id] || 'B';
+1829:                          return (
+1830:                            <tr key={ind.id}>
+1831:                              {i === 0 && (
+1832:                                <td 
+1833:                                  rowSpan={3} 
+1834:                                  className="border border-black py-0.5 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[9.5px] leading-tight font-sans text-black"
+1835:                                >
+1836:                                  Cinta Tanah Air
+1837:                                </td>
+1838:                              )}
+1839:                              <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px]">
+1840:                                {ind.text}
+1841:                              </td>
+1842:                              <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-emerald-700">
+1843:                                {activeScore === 'BSB' ? '✔' : ''}
+1844:                              </td>
+1845:                              <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-blue-700">
+1846:                                {activeScore === 'B' ? '✔' : ''}
+1847:                              </td>
+1848:                              <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-amber-700">
+1849:                                {activeScore === 'MB' ? '✔' : ''}
+1850:                              </td>
+1851:                              <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-rose-700">
+1852:                                {activeScore === 'BB' ? '✔' : ''}
+1853:                              </td>
+1854:                            </tr>
+1855:                          );
+1856:                        })}
+1857:
+1858:                        {/* Disiplin (3 indicators) */}
+1859:                        {categories.find(c => c.id === 'DSP')?.indicators.map((ind, i) => {
+1860:                          const activeScore = selSt.grades[ind.id] || 'B';
+1861:                          return (
+1862:                            <tr key={ind.id}>
+1863:                              {i === 0 && (
+1864:                                <td 
+1865:                                  rowSpan={3} 
+1866:                                  className="border border-black py-0.5 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[9.5px] leading-tight font-sans text-black"
+1867:                                >
+1868:                                  Disiplin
+1869:                                </td>
+1870:                              )}
+1871:                              <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px]">
+1872:                                {ind.text}
+1873:                              </td>
+1874:                              <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-emerald-700">
+1875:                                {activeScore === 'BSB' ? '✔' : ''}
+1876:                              </td>
+1877:                              <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-blue-700">
+1878:                                {activeScore === 'B' ? '✔' : ''}
+1879:                              </td>
+1880:                              <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-amber-700">
+1881:                                {activeScore === 'MB' ? '✔' : ''}
+1882:                              </td>
+1883:                              <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-rose-700">
+1884:                                {activeScore === 'BB' ? '✔' : ''}
+1885:                              </td>
+1886:                            </tr>
+1887:                          );
+1888:                        })}
+1889:
+1890:                        {/* Berbudi Luhur (3 indicators) */}
+1891:                        {categories.find(c => c.id === 'BBL')?.indicators.map((ind, i) => {
+1892:                          const activeScore = selSt.grades[ind.id] || 'B';
+1893:                          return (
+1894:                            <tr key={ind.id}>
+1895:                              {i === 0 && (
+1896:                                <td 
+1897:                                  rowSpan={3} 
+1898:                                  className="border border-black py-0.5 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[9.5px] leading-tight font-sans text-black"
+1899:                                >
+1900:                                  Berbudi Luhur
+1901:                                </td>
+1902:                              )}
+1903:                              <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px]">
+1904:                                {ind.text}
+1905:                              </td>
+1906:                              <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-emerald-700">
+1907:                                {activeScore === 'BSB' ? '✔' : ''}
+1908:                              </td>
+1909:                              <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-blue-700">
+1910:                                {activeScore === 'B' ? '✔' : ''}
+1911:                              </td>
+1912:                              <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-amber-700">
+1913:                                {activeScore === 'MB' ? '✔' : ''}
+1914:                              </td>
+1915:                              <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-rose-700">
+1916:                                {activeScore === 'BB' ? '✔' : ''}
+1917:                              </td>
+1918:                            </tr>
+1919:                          );
+1920:                        })}
+1921:
+1922:                        {/* Cerdas (1st indicator only) */}
+1923:                        {(() => {
+1924:                          const certCat = categories.find(c => c.id === 'CRD');
+1925:                          if (!certCat || certCat.indicators.length === 0) return null;
+1926:                          const ind = certCat.indicators[0];
+1927:                          const activeScore = selSt.grades[ind.id] || 'B';
+1928:                          return (
+1929:                            <tr key={ind.id}>
+1930:                              <td 
+1931:                                className="border border-black py-0.5 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[9.5px] leading-tight font-sans text-black"
+1932:                              >
+1933:                                Cerdas
+1934:                              </td>
+1935:                              <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px]">
+1936:                                {ind.text}
+1937:                              </td>
+1938:                              <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-emerald-700">
+1939:                                {activeScore === 'BSB' ? '✔' : ''}
+1940:                              </td>
+1941:                              <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-blue-700">
+1942:                                {activeScore === 'B' ? '✔' : ''}
+1943:                              </td>
+1944:                              <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-amber-700">
+1945:                                {activeScore === 'MB' ? '✔' : ''}
+1946:                              </td>
+1947:                              <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-rose-700">
+1948:                                {activeScore === 'BB' ? '✔' : ''}
+1949:                              </td>
+1950:                            </tr>
+1951:                          );
+1952:                        })()}
+1953:                      </tbody>
+1954:                    </table>
+1955:                  </div>
+1956:                </div>
+1957:
+1958:                {/* PRINT PAGE 2 */}
+1959:                <div className="print-page w-[210mm] h-[297mm] max-h-[297mm] overflow-visible p-[12mm_15mm] box-border text-[11pt] leading-relaxed flex flex-col justify-between">
+1960:                  <div className="flex flex-col gap-4">
+1961:                    {/* Table continuation on Page 2 */}
+1962:                    <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
+1963:                      <colgroup>
+1964:                        <col style={{ width: '15%' }} />
+1965:                        <col style={{ width: '41%' }} />
+1966:                        <col style={{ width: '11%' }} />
+1967:                        <col style={{ width: '11%' }} />
+1968:                        <col style={{ width: '11%' }} />
+1969:                        <col style={{ width: '11%' }} />
+1970:                      </colgroup>
+1971:                      <tbody>
+1972:                        {/* Cerdas (2nd and 3rd indicators) */}
+1973:                        {(() => {
+1974:                          const certCat = categories.find(c => c.id === 'CRD');
+1975:                          if (!certCat || certCat.indicators.length < 2) return null;
+1976:                          const remaining = certCat.indicators.slice(1);
+1977:                          return remaining.map((ind, idx) => {
+1978:                            const activeScore = selSt.grades[ind.id] || 'B';
+1979:                            return (
+1980:                              <tr key={ind.id}>
+1981:                                {idx === 0 && (
+1982:                                  <td 
+1983:                                    rowSpan={2} 
+1984:                                    className="border border-black py-0.5 px-1.5 bg-neutral-50/50 align-middle"
+1985:                                  ></td>
+1986:                                )}
+1987:                                <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px]">
+1988:                                  {ind.text}
+1989:                                </td>
+1990:                                <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-emerald-700">
+1991:                                  {activeScore === 'BSB' ? '✔' : ''}
+1992:                                </td>
+1993:                                <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-blue-700">
+1994:                                  {activeScore === 'B' ? '✔' : ''}
+1995:                                </td>
+1996:                                <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-amber-700">
+1997:                                  {activeScore === 'MB' ? '✔' : ''}
+1998:                                </td>
+1999:                                <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-rose-700">
+2000:                                  {activeScore === 'BB' ? '✔' : ''}
+2001:                                </td>
+2002:                              </tr>
+2003:                            );
+2004:                          });
+2005:                        })()}
+2006:
+2007:                        {/* Terampil (3 indicators) */}
+2008:                        {categories.find(c => c.id === 'TRM')?.indicators.map((ind, i) => {
+2009:                          const activeScore = selSt.grades[ind.id] || 'B';
+2010:                          return (
+2011:                            <tr key={ind.id}>
+2012:                              {i === 0 && (
+2013:                                <td 
+2014:                                  rowSpan={3} 
+2015:                                  className="border border-black py-0.5 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[9.5px] leading-tight font-sans text-black"
+2016:                                >
+2017:                                  Terampil
+2018:                                </td>
+2019:                              )}
+2020:                              <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px]">
+2021:                                {ind.text}
+2022:                              </td>
+2023:                              <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-emerald-700">
+2024:                                {activeScore === 'BSB' ? '✔' : ''}
+2025:                              </td>
+2026:                              <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-blue-700">
+2027:                                {activeScore === 'B' ? '✔' : ''}
+2028:                              </td>
+2029:                              <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-amber-700">
+2030:                                {activeScore === 'MB' ? '✔' : ''}
+2031:                              </td>
+2032:                              <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-rose-700">
+2033:                                {activeScore === 'BB' ? '✔' : ''}
+2034:                              </td>
+2035:                            </tr>
+2036:                          );
+2037:                        })}
+2038:
+2039:                        {/* Uraian Kesimpulan Row (Collapsed under Terampil) */}
+2040:                        <tr>
+2041:                          <td 
+2042:                            className="border border-black p-1.5 font-bold bg-white text-left font-sans text-[8.5pt] align-top"
+2043:                            colSpan={1}
+2044:                          >
+2045:                            Uraian Kesimpulan Pencapaian 5NK :
+2046:                          </td>
+2047:                          <td 
+2048:                            className="border border-black p-2 min-h-[85px] text-justify text-[9pt] text-slate-900 leading-relaxed font-sans font-medium"
+2049:                            colSpan={5}
+2050:                          >
+2051:                            {selSt.kesimpulan || 'Siswa menunjukkan antusiasme yang luar biasa dan tekad kuat untuk terus berprestasi. Perkembangan moral dan akademik berjalan seimbang serta berkembang ideal.'}
+2052:                          </td>
+2053:                        </tr>
+2054:                      </tbody>
+2055:                    </table>
+2056:
+2057:                    {/* Catatan Pendukung (Wali Kelas & Orang Tua) - Collapsed border-t-0 immediately below the table */}
+2058:                    <div className="grid grid-cols-2 border border-black border-t-0 divide-x divide-black border-collapse avoid-break -mt-4">
+2059:                      {/* Wali Kelas Side */}
+2060:                      <div className="flex flex-col">
+2061:                        <div className="bg-white border-b border-black p-1.5">
+2062:                          <p className="font-bold text-[9pt] text-black text-left">Catatan Wali Kelas:</p>
+2063:                        </div>
+2064:                        <div className="p-2.5 min-h-[85px] text-justify text-[9pt] text-slate-800 leading-relaxed font-sans">
+2065:                          {selSt.catatanWali || 'Teruskan perilaku budi luhur ini dan tingkatkan konsistensi waktu belajarnya.'}
+2066:                        </div>
+2067:                      </div>
+2068:
+2069:                      {/* Orang Tua Side */}
+2070:                      <div className="flex flex-col">
+2071:                        <div className="bg-white border-b border-black p-1.5">
+2072:                          <p className="font-bold text-[9pt] text-black text-left">Catatan Orang Tua/Wali:</p>
+2073:                        </div>
+2074:                        <div className="p-2.5 min-h-[85px] text-justify text-[9pt] text-slate-500 italic leading-relaxed font-sans">
+2075:                          {selSt.catatanOrangTua || 'Kami berkomitmen untuk terus membimbing anak di rumah sesuai arahan sekolah.'}
+2076:                        </div>
+2077:                      </div>
+2078:                    </div>
+2079:
+2080:                    {/* Signatures block */}
+2081:                    <div className="mt-4 avoid-break">
+2082:                      <p className="text-[10.5pt] font-semibold text-black text-center mb-6 select-none">
+2083:                        Mengetahui,
+2084:                      </p>
+2085:                      <div className="grid grid-cols-2 gap-12 text-center">
+2086:                        {/* Orang Tua */}
+2087:                        <div className="flex flex-col items-center justify-between h-32">
+2088:                          <p className="text-[10.5pt] text-black font-bold select-none">Orang Tua / Wali</p>
+2089:                          <div className="flex flex-col items-center w-full">
+2090:                            <div className="w-48 border-b-[1.5px] border-black pb-0.5"></div>
+2091:                            <p className="text-[8pt] text-slate-500 font-sans mt-1.5 italic select-none">Tanda Tangan & Nama Terang</p>
+2092:                          </div>
+2093:                        </div>
+2094:
+2095:                        {/* Guru Kelas */}
+2096:                        <div className="flex flex-col items-center justify-between h-32">
+2097:                          <p className="text-[10.5pt] text-black font-bold">Guru Kelas / Wali Kelas</p>
+2098:                          <div className="flex flex-col items-center w-full">
+2099:                            <p className="font-bold text-black text-[10.5pt] text-center uppercase leading-tight select-all underline underline-offset-4 decoration-[1.5px]">
+2100:                              {waliKelasName || '____________________'}
+2101:                            </p>
+2102:                            {waliKelasNip ? (
+2103:                              <p className="text-[8.5pt] text-slate-700 font-mono mt-1.5 select-all">
+2104:                                NIP. {waliKelasNip}
+2105:                              </p>
+2106:                            ) : (
+2107:                              <p className="text-[8pt] text-slate-500 font-sans mt-1.5 italic select-none">Tanda Tangan & Nama Terang</p>
+2108:                            )}
+2109:                          </div>
+2110:                        </div>
+2111:                      </div>
+2112:                    </div>
+2113:                  </div>
+2114:                </div>
+2115:              </div>
+2116:            ))}
+2117:          </div>
+2118:        </div>,
+2119:        document.body
+2120:      )}
+2121:
+2122:      {/* SANDBOX SECURITY NOTICE MODAL */}
+2123:      {showSandboxNotice && (
+2124:        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-[999999] animate-in fade-in duration-200 no-print">
+2125:          <div className="bg-white rounded-2xl border border-slate-200 max-w-sm w-full shadow-2xl p-6 relative animate-in zoom-in-95 duration-200">
+2126:            <div className="flex flex-col items-center text-center">
+2127:              <div className="p-3 bg-indigo-50 text-indigo-600 rounded-2xl mb-4">
+2128:                <Printer className="h-6 w-6" />
+2129:              </div>
+2130:              <h3 className="text-base font-bold text-slate-900 mb-2">
+2131:                Kontrol Cetak Terproteksi
+2132:              </h3>
+2133:              <p className="text-xs text-slate-600 leading-relaxed mb-5">
+2134:                Tombol <span className="font-semibold text-indigo-600">Cetak Langsung</span> berhasil ditekan! Namun, respons cetak browser dibatasi oleh pengaman Iframe jika aplikasi dijalankan di panel pratinjau.
+2135:              </p>
+2136:              <p className="text-xs text-slate-500 bg-slate-50 rounded-xl p-3 border border-slate-100 leading-relaxed mb-6">
+2137:                Silakan ketuk tombol <span className="font-semibold text-slate-700">"Buka di Tab Baru"</span> di pojok layar utama untuk cetak printer langsung, atau unduh berkas melalui tombol <span className="font-semibold text-emerald-600">"Unduh PDF"</span> yang selalu aktif di halaman ini.
+2138:              </p>
+2139:              
+2140:              <button
+2141:                onClick={() => setShowSandboxNotice(false)}
+2142:                className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-bold text-xs rounded-xl transition-all cursor-pointer shadow-md hover:shadow-indigo-100"
+2143:              >
+2144:                Paham & Tutup Pesan
+2145:              </button>
+2146:            </div>
+2147:          </div>
+2148:        </div>
+2149:      )}
+2150:    </div>
+2151:  );
+2152:}
+2153:
+2154:// ==========================================
+2155:// MATHEMATICAL OKLCH TO sRGB CONVERSION
+2156:// ==========================================
+2157:function parseOklchColor(val: string): string | null {
+2158:  if (!val || typeof val !== 'string') return null;
+2159:  const match = val.match(/oklch\(([^)]+)\)/i);
+2160:  if (!match) return null;
+2161:  
+2162:  const contents = match[1].trim();
+2163:  const parts = contents.split(/[\s/]+/);
+2164:  if (parts.length < 3) return null;
+2165:  
+2166:  const lStr = parts[0];
+2167:  const cStr = parts[1];
+2168:  const hStr = parts[2];
+2169:  const aStr = parts[3] || '1';
+2170:  
+2171:  const l = lStr.endsWith('%') ? parseFloat(lStr) / 100 : parseFloat(lStr);
+2172:  const c = cStr.endsWith('%') ? parseFloat(cStr) / 100 : parseFloat(cStr);
+2173:  const h = parseFloat(hStr);
+2174:  
+2175:  let alpha = 1;
+2176:  if (aStr) {
+2177:    alpha = aStr.endsWith('%') ? parseFloat(aStr) / 100 : parseFloat(aStr);
+2178:  }
+2179:  
+2180:  if (isNaN(l) || isNaN(c) || isNaN(h)) return null;
+2181:  
+2182:  return oklchToRgb(l, c, h, alpha);
+2183:}
+2184:
+2185:function parseOklabColor(val: string): string | null {
+2186:  if (!val || typeof val !== 'string') return null;
+2187:  const match = val.match(/oklab\(([^)]+)\)/i);
+2188:  if (!match) return null;
+2189:  
+2190:  const contents = match[1].trim();
+2191:  const parts = contents.split(/[\s/]+/);
+2192:  if (parts.length < 3) return null;
+2193:  
+2194:  const lStr = parts[0];
+2195:  const aStr = parts[1];
+2196:  const bStr = parts[2];
+2197:  const alphaStr = parts[3] || '1';
+2198:  
+2199:  const l = lStr.endsWith('%') ? parseFloat(lStr) / 100 : parseFloat(lStr);
+2200:  const a = parseFloat(aStr);
+2201:  const b = parseFloat(bStr);
+2202:  
+2203:  let alpha = 1;
+2204:  if (alphaStr) {
+2205:    alpha = alphaStr.endsWith('%') ? parseFloat(alphaStr) / 100 : parseFloat(alphaStr);
+2206:  }
+2207:  if (isNaN(l) || isNaN(a) || isNaN(b)) return null;
+2208:  
+2209:  const l_ = l + 0.3963377774 * a + 0.2158037573 * b;
+2210:  const m_ = l - 0.1055613458 * a - 0.0638541728 * b;
+2211:  const s_ = l - 0.0894841775 * a - 1.2914855480 * b;
+2212:  
+2213:  const l3 = l_ * l_ * l_;
+2214:  const m3 = m_ * m_ * m_;
+2215:  const s3 = s_ * s_ * s_;
+2216:  
+2217:  const x = 4.0767416621 * l3 - 3.3077115913 * m3 + 0.2309699292 * s3;
+2218:  const y = -1.2684380046 * l3 + 2.6097574011 * m3 - 0.3413193965 * s3;
+2219:  const z = -0.0041960863 * l3 - 0.7034186147 * m3 + 1.7076147010 * s3;
+2220:  
+2221:  const r = 3.2404542 * x - 1.5371385 * y - 0.4985314 * z;
+2222:  const g = -0.9692660 * x + 1.8760108 * y + 0.0415560 * z;
+2223:  const b_val = 0.0556434 * x - 0.2040259 * y + 1.0572252 * z;
+2224:  
+2225:  const gamma = (c_val: number): number => {
+2226:    return c_val <= 0.0031308 ? 12.92 * c_val : 1.055 * Math.pow(c_val, 1 / 2.4) - 0.055;
+2227:  };
+2228:  
+2229:  const red = Math.round(Math.max(0, Math.min(1, gamma(r))) * 255);
+2230:  const green = Math.round(Math.max(0, Math.min(1, gamma(g))) * 255);
+2231:  const blue = Math.round(Math.max(0, Math.min(1, gamma(b_val))) * 255);
+2232:  
+2233:  return alpha === 1 
+2234:    ? `rgb(${red}, ${green}, ${blue})` 
+2235:    : `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+2236:}
+2237:
+2238:function oklchToRgb(l: number, c: number, h: number, alpha: number = 1): string {
+2239:  // Convert h from degrees to radians
+2240:  const hRad = (h * Math.PI) / 180;
+2241:  
+2242:  // OKLCH to OKLAB
+2243:  const a = c * Math.cos(hRad);
+2244:  const b = c * Math.sin(hRad);
+2245:  
+2246:  // OKLAB to LMS
+2247:  const l_ = l + 0.3963377774 * a + 0.2158037573 * b;
+2248:  const m_ = l - 0.1055613458 * a - 0.0638541728 * b;
+2249:  const s_ = l - 0.0894841775 * a - 1.2914855480 * b;
+2250:  
+2251:  const l3 = l_ * l_ * l_;
+2252:  const m3 = m_ * m_ * m_;
+2253:  const s3 = s_ * s_ * s_;
+2254:  
+2255:  // LMS to XYZ
+2256:  const x = 4.0767416621 * l3 - 3.3077115913 * m3 + 0.2309699292 * s3;
+2257:  const y = -1.2684380046 * l3 + 2.6097574011 * m3 - 0.3413193965 * s3;
+2258:  const z = -0.0041960863 * l3 - 0.7034186147 * m3 + 1.7076147010 * s3;
+2259:  
+2260:  // XYZ to RGB (linear)
+2261:  const r = 3.2404542 * x - 1.5371385 * y - 0.4985314 * z;
+2262:  const g = -0.9692660 * x + 1.8760108 * y + 0.0415560 * z;
+2263:  const b_val = 0.0556434 * x - 0.2040259 * y + 1.0572252 * z;
+2264:  
+2265:  // Gamma correction to sRGB
+2266:  const gamma = (c_val: number): number => {
+2267:    return c_val <= 0.0031308 ? 12.92 * c_val : 1.055 * Math.pow(c_val, 1 / 2.4) - 0.055;
+2268:  };
+2269:  
+2270:  const red = Math.round(Math.max(0, Math.min(1, gamma(r))) * 255);
+2271:  const green = Math.round(Math.max(0, Math.min(1, gamma(g))) * 255);
+2272:  const blue = Math.round(Math.max(0, Math.min(1, gamma(b_val))) * 255);
+2273:  
+2274:  return alpha === 1 
+2275:    ? `rgb(${red}, ${green}, ${blue})` 
+2276:    : `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+2277:}
+2278:
+2279:// Converts OKLCH definitions inside CSS to standard colors
+2280:function convertOklchCss(css: string): string {
+2281:  return css.replace(/oklch\(([^)]+)\)/gi, (_, contents: string) => {
+2282:    try {
+2283:      const parts = contents.trim().split(/[\s/]+/);
+2284:      if (parts.length < 3) return 'rgb(240, 240, 240)';
+2285:      
+2286:      const lStr = parts[0];
+2287:      const cStr = parts[1];
+2288:      const hStr = parts[2];
+2289:      const aStr = parts[3] || '1';
+2290:      
+2291:      const l = lStr.endsWith('%') ? parseFloat(lStr) / 100 : parseFloat(lStr);
+2292:      const c = cStr.endsWith('%') ? parseFloat(cStr) / 100 : parseFloat(cStr);
+2293:      const h = parseFloat(hStr);
+2294:      
+2295:      let alpha = 1;
+2296:      if (aStr) {
+2297:        alpha = aStr.endsWith('%') ? parseFloat(aStr) / 100 : parseFloat(aStr);
+2298:      }
+2299:      
+2300:      if (isNaN(l) || isNaN(c) || isNaN(h)) return 'rgb(240, 240, 240)';
+2301:      
+2302:      return oklchToRgb(l, c, h, alpha);
+2303:    } catch (e) {
+2304:      return 'rgb(240, 240, 240)';
+2305:    }
+2306:  });
+2307:}
+2308:

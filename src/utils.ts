@@ -1,0 +1,513 @@
+import * as XLSX from 'xlsx';
+import { Student, Teacher, Category, ScoreKey, scoreOptions } from './types';
+import { uploadFileToDrive, getOrCreateFolder } from './lib/drive.ts';
+
+// Convert grades count to stats for charts
+export function calculateClassStats(students: Student[], indicatorsCount: number) {
+  const totalGrades = students.length * indicatorsCount;
+  if (totalGrades === 0) return { BSB: 0, B: 0, MB: 0, BB: 0 };
+
+  let bsb = 0, b = 0, mb = 0, bb = 0;
+  students.forEach(s => {
+    Object.values(s.grades).forEach(g => {
+      if (g === 'BSB') bsb++;
+      else if (g === 'B') b++;
+      else if (g === 'MB') mb++;
+      else if (g === 'BB') bb++;
+    });
+  });
+
+  return {
+    BSB: Math.round((bsb / totalGrades) * 100),
+    B: Math.round((b / totalGrades) * 100),
+    MB: Math.round((mb / totalGrades) * 100),
+    BB: Math.round((bb / totalGrades) * 100),
+  };
+}
+
+export function exportSingleStudentToExcel(student: Student, waliKelasName: string, categories: Category[]) {
+  // Create a structured Excel layout mimicking the report card!
+  const rows: any[] = [];
+  
+  // Title / Metadata Headers
+  rows.push(['YAYASAN KARTIKA JAYA']);
+  rows.push(['LAPORAN PERKEMBANGAN NILAI KARTIKA (5NK)']);
+  rows.push(['Tahun Ajaran 2024 - 2025']);
+  rows.push([]);
+  
+  rows.push(['NAMA:', student.name, '', 'NOMOR INDUK:', student.nis]);
+  rows.push(['KELAS:', student.kelas, '', 'SEMESTER:', student.semester || 'Semester II (Genap)']);
+  rows.push([]);
+  
+  // Table Headers
+  rows.push([
+    'Kategori 5NK',
+    'Indikator Perilaku',
+    'Hasil Penilaian',
+    'Penjelasan Deskripsi Penilaian'
+  ]);
+
+  // Insert indicators with their assigned scores
+  categories.forEach(category => {
+    category.indicators.forEach((ind, i) => {
+      const scoreKey: ScoreKey = student.grades[ind.id] || 'B';
+      const scoreOpt = scoreOptions.find(o => o.key === scoreKey);
+      
+      rows.push([
+        i === 0 ? category.name : '', // only output category name on first indicator
+        ind.text,
+        scoreOpt?.label || scoreKey,
+        scoreOpt?.description || ''
+      ]);
+    });
+  });
+
+  rows.push([]);
+  rows.push(['Uraian Kesimpulan Pencapaian 5NK:', student.kesimpulan]);
+  rows.push(['Catatan Wali Kelas:', student.catatanWali]);
+  rows.push(['Catatan Orang Tua / Wali:', student.catatanOrangTua]);
+  rows.push([]);
+  rows.push(['Mengetahui,']);
+  rows.push(['Orang Tua / Wali', '', '', 'Guru Kelas / Wali Kelas']);
+  rows.push(['', '', '', '']);
+  rows.push(['____________________', '', '', waliKelasName]);
+
+  // Generate Excel workbook
+  const worksheet = XLSX.utils.aoa_to_sheet(rows);
+  
+  // Set basic column widths
+  worksheet['!cols'] = [
+    { wch: 20 }, // Kategori
+    { wch: 55 }, // Indikator
+    { wch: 25 }, // Hasil Penilaian
+    { wch: 50 }, // Deskripsi
+  ];
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, `Rapor_${student.nis}`);
+  
+  // Download file
+  XLSX.writeFile(workbook, `Rapor_5NK_${student.name.replace(/\s+/g, '_')}.xlsx`);
+}
+
+export function getVbaMacroInstructionsRows(): any[][] {
+  return [
+    ['PANDUAN AKTIVASI VBA MACRO UNTUK EVALUASI 5NK OFFLINE'],
+    ['========================================================================'],
+    ['Aplikasi Rapor 5NK mendukung penggunaan Macro offline untuk mengaudit, mengisi cepat,'],
+    ['dan merapikan rapor langsung di program Microsoft Excel tanpa internet.'],
+    [''],
+    ['LANGKAH-LANGKAH AKTIVASI DI EXCEL:'],
+    ['1. Simpan dokumen ini dengan format "Excel Macro-Enabled Workbook (*.xlsm)" agar kode bisa disimpan.'],
+    ['2. Tekan tombol keyboard [ ALT ] + [ F11 ] secara bersamaan untuk membuka Jendela Visual Basic Editor.'],
+    ['3. Klik menu [ Insert ] di bagian atas, kemudian klik [ Module ].'],
+    ['4. Salin (Copy) seluruh kode VBA yang ada di bawah ini, lalu Tempel (Paste) ke jendela editor kosong.'],
+    ['5. Tutup Jendela VBA Editor atau tekan tombol [ ALT ] + [ Q ] untuk kembali ke lembar kerja.'],
+    ['6. Di Excel, tekan [ ALT ] + [ F8 ], pilih nama Macro, lalu klik "Run" atau "Jalankan".'],
+    ['========================================================================'],
+    ['KODE VBA DI BAWAH INI DAPAT DISALIN:'],
+    [''],
+    ["' ===================================================================="],
+    ["' SCRIPT UTAMA MACRO AUDIT OFFLINE, AUTO FILL & STATISTIK 5NK"],
+    ["' ===================================================================="],
+    ['Sub AuditDataRumpang()'],
+    ['    Dim ws As Worksheet'],
+    ['    Set ws = ActiveSheet'],
+    ['    '],
+    ['    Dim lastRow As Long'],
+    ['    lastRow = ws.Cells(ws.Rows.Count, 2).End(xlUp).Row'],
+    ['    If lastRow < 2 Then lastRow = ws.Cells(ws.Rows.Count, 3).End(xlUp).Row'],
+    ['    '],
+    ['    If lastRow < 2 Then'],
+    ['        MsgBox "Sheet kosong atau format data siswa tidak dikenal!", vbCritical, "Gagal Audit"'],
+    ['        Exit Sub'],
+    ['    End If'],
+    ['    '],
+    ['    Dim missingCount As Long'],
+    ['    missingCount = 0'],
+    ['    Dim totalGraded As Long'],
+    ['    totalGraded = 0'],
+    ['    '],
+    ['    Dim cRow As Long, colIdx As Long'],
+    ['    Dim headerVal As String'],
+    ['    '],
+    ['    For cRow = 2 To lastRow'],
+    ['        colIdx = 1'],
+    ['        Do While colIdx <= 100'],
+    ['            headerVal = Trim(CStr(ws.Cells(1, colIdx).Value))'],
+    ['            If headerVal Like "Indicator_*" Or headerVal Like "*:*" Then'],
+    ['                Dim cellVal As String'],
+    ['                cellVal = Trim(CStr(ws.Cells(cRow, colIdx).Value))'],
+    ['                If cellVal = "" Or cellVal = "-" Or cellVal = " " Then'],
+    ['                    ws.Cells(cRow, colIdx).Interior.Color = RGB(255, 235, 235)'],
+    ['                    missingCount = missingCount + 1'],
+    ['                Else'],
+    ['                    ws.Cells(cRow, colIdx).Interior.Color = xlNone'],
+    ['                    totalGraded = totalGraded + 1'],
+    ['                End If'],
+    ['            End If'],
+    ['            colIdx = colIdx + 1'],
+    ['        Loop'],
+    ['    Next cRow'],
+    ['    '],
+    ['    If missingCount > 0 Then'],
+    ['        MsgBox "Ditemukan " & missingCount & " kolom nilai rumpang (kosong)!" & vbCrLf & _'],
+    ['               "Siswa yang nilainya rumpang telah ditandai warna merah muda di sheet aktif.", vbExclamation, "Rapor 5NK Offline Auditor"'],
+    ['    Else'],
+    ['        MsgBox "Audit Berhasil! Semua nilai indikator siswa (" & totalGraded & " entri) telah terisi lengkap.", vbInformation, "Integritas 100% Sempurna"'],
+    ['    End If'],
+    ['End Sub'],
+    [''],
+    ['Sub IsiNilaiRumpangB()'],
+    ['    Dim ws As Worksheet'],
+    ['    Set ws = ActiveSheet'],
+    ['    Dim lastRow As Long'],
+    ['    lastRow = ws.Cells(ws.Rows.Count, 2).End(xlUp).Row'],
+    ['    If lastRow < 2 Then lastRow = ws.Cells(ws.Rows.Count, 3).End(xlUp).Row'],
+    ['    '],
+    ['    If lastRow < 2 Then'],
+    ['        MsgBox "Sheet kosong atau format data tidak dikenal!", vbCritical, "Gagal"'],
+    ['        Exit Sub'],
+    ['    End If'],
+    ['    '],
+    ['    Dim fillCount As Long'],
+    ['    fillCount = 0'],
+    ['    Dim cRow As Long, colIdx As Long'],
+    ['    Dim headerVal As String'],
+    ['    '],
+    ['    Dim ans As Integer'],
+    ['    ans = MsgBox("Apakah Anda yakin ingin mengisi semua nilai indikator yang kosong di sheet aktif dengan nilai default B (Berkembang) secara massal?", vbYesNo + vbQuestion, "Konfirmasi")'],
+    ['    If ans = vbNo Then Exit Sub'],
+    ['    '],
+    ['    For cRow = 2 To lastRow'],
+    ['        colIdx = 1'],
+    ['        Do While colIdx <= 100'],
+    ['            headerVal = Trim(CStr(ws.Cells(1, colIdx).Value))'],
+    ['            If headerVal Like "Indicator_*" Or headerVal Like "*:*" Then'],
+    ['                Dim cellVal As String'],
+    ['                cellVal = Trim(CStr(ws.Cells(cRow, colIdx).Value))'],
+    ['                If cellVal = "" Or cellVal = "-" Or cellVal = " " Then'],
+    ['                    ws.Cells(cRow, colIdx).Value = "B"'],
+    ['                    ws.Cells(cRow, colIdx).Interior.Color = xlNone'],
+    ['                    fillCount = fillCount + 1'],
+    ['                End If'],
+    ['            End If'],
+    ['            colIdx = colIdx + 1'],
+    ['        Loop'],
+    ['    Next cRow'],
+    ['    '],
+    ['    MsgBox "Berhasil mengisi otomatis " & fillCount & " sel rumpang dengan nilai B.", vbInformation, "VBA Autofill Sukses"'],
+    ['End Sub'],
+    [''],
+    ['Sub TampilkanStatistikOffline()'],
+    ['    Dim ws As Worksheet'],
+    ['    Set ws = ActiveSheet'],
+    ['    Dim lastRow As Long'],
+    ['    lastRow = ws.Cells(ws.Rows.Count, 2).End(xlUp).Row'],
+    ['    If lastRow < 2 Then lastRow = ws.Cells(ws.Rows.Count, 3).End(xlUp).Row'],
+    ['    '],
+    ['    Dim bsb As Long, b As Long, mb As Long, bb As Long, total As Long'],
+    ['    bsb = 0: b = 0: mb = 0: bb = 0: total = 0'],
+    ['    '],
+    ['    Dim cRow As Long, colIdx As Long'],
+    ['    Dim headerVal As String'],
+    ['    '],
+    ['    For cRow = 2 To lastRow'],
+    ['        colIdx = 1'],
+    ['        Do While colIdx <= 100'],
+    ['            headerVal = Trim(CStr(ws.Cells(1, colIdx).Value))'],
+    ['            If headerVal Like "Indicator_*" Or headerVal Like "*:*" Then'],
+    ['                Dim cellVal As String'],
+    ['                cellVal = UCase(Trim(CStr(ws.Cells(cRow, colIdx).Value)))'],
+    ['                If cellVal = "BSB" Then'],
+    ['                    bsb = bsb + 1: total = total + 1'],
+    ['                ElseIf cellVal = "B" Then'],
+    ['                    b = b + 1: total = total + 1'],
+    ['                ElseIf cellVal = "MB" Then'],
+    ['                    mb = mb + 1: total = total + 1'],
+    ['                ElseIf cellVal = "BB" Then'],
+    ['                    bb = bb + 1: total = total + 1'],
+    ['                End If'],
+    ['            End If'],
+    ['            colIdx = colIdx + 1'],
+    ['        Loop'],
+    ['    Next cRow'],
+    ['    '],
+    ['    If total = 0 Then'],
+    ['        MsgBox "Belum ada entri nilai valid (BSB / B / MB / BB) di lembar kerja ini.", vbInformation, "Statistik Kosong"'],
+    ['        Exit Sub'],
+    ['    End If'],
+    ['    '],
+    ['    Dim msg As String'],
+    ['    msg = "SEBARAN CAPAIAN NILAI 5NK OFFLINE" & vbCrLf & _'],
+    ['          "Nama Lembar: " & ws.Name & vbCrLf & _'],
+    ['          "=========================================" & vbCrLf & _'],
+    ['          "● Berkembang Sangat Baik (BSB) : " & bsb & " (" & Round((bsb / total) * 100, 1) & "%)" & vbCrLf & _'],
+    ['          "● Berkembang (B)               : " & b & " (" & Round((b / total) * 100, 1) & "%)" & vbCrLf & _'],
+    ['          "● Mulai Berkembang (MB)         : " & mb & " (" & Round((mb / total) * 100, 1) & "%)" & vbCrLf & _'],
+    ['          "● Belum Berkembang (BB)         : " & bb & " (" & Round((bb / total) * 100, 1) & "%)" & vbCrLf & _'],
+    ['          "=========================================" & vbCrLf & _'],
+    ['          "Total Entri Nilai Tercatat: " & total & " sel."'],
+    ['          '],
+    ['    MsgBox msg, vbInformation, "Statistik Capaian Offline"'],
+    ['End Sub'],
+  ];
+}
+
+export function exportClassToExcel(students: Student[], className: string, waliKelasName: string, categories: Category[]) {
+  // Let's create an overview master spreadsheet for the entire class!
+  const rows: any[] = [];
+  
+  rows.push(['YAYASAN KARTIKA JAYA']);
+  rows.push([`REKAPITULASI PENILAIAN 5NK KELAS ${className}`]);
+  rows.push([`Wali Kelas: ${waliKelasName}`]);
+  rows.push([]);
+  
+  // Flatten indicators for tabular header columns
+  const indicatorIds: string[] = [];
+  const indicatorHeaders: string[] = [];
+  
+  categories.forEach(cat => {
+    cat.indicators.forEach(ind => {
+      indicatorIds.push(ind.id);
+      indicatorHeaders.push(`${cat.id}: ${ind.text.substring(0, 30)}...`);
+    });
+  });
+
+  const headers = ['No', 'NIS', 'Nama Siswa', 'L/P', ...indicatorHeaders, 'Kesimpulan', 'Catatan Wali'];
+  rows.push(headers);
+
+  students.forEach((student, index) => {
+    const studentRow = [
+      index + 1,
+      student.nis,
+      student.name,
+      student.gender,
+      ...indicatorIds.map(id => student.grades[id] || '-'),
+      student.kesimpulan,
+      student.catatanWali
+    ];
+    rows.push(studentRow);
+  });
+
+  const worksheet = XLSX.utils.aoa_to_sheet(rows);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, `Rekap_Kelas_${className}`);
+  
+  // Embed VBA Macro Instructions too so the teacher can use macro directly!
+  const vbaHeaders = getVbaMacroInstructionsRows();
+  const wsVba = XLSX.utils.aoa_to_sheet(vbaHeaders);
+  XLSX.utils.book_append_sheet(workbook, wsVba, 'VBA_Macro_Instruksi');
+  
+  XLSX.writeFile(workbook, `Rekap_5NK_Kelas_${className}.xlsx`);
+}
+
+// -------------------------------------------------------------
+// Excel Bulk Import Functions
+// -------------------------------------------------------------
+
+export function parseExcelDatabase(file: File): Promise<{ students?: Student[], teachers?: Teacher[] }> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = e.target?.result;
+        const workbook = XLSX.read(data, { type: 'binary' });
+
+        const result: { students?: Student[], teachers?: Teacher[] } = {};
+
+        // Parse Siswa (Students) Sheet
+        const studentSheetName = workbook.SheetNames.find(name => name.toLowerCase().includes('siswa') || name.toLowerCase().includes('murid'));
+        if (studentSheetName) {
+          const sheet = workbook.Sheets[studentSheetName];
+          const rawData: any[] = XLSX.utils.sheet_to_json(sheet);
+          
+          if (rawData && rawData.length > 0) {
+            const parsedStudents: Student[] = rawData.map((row, index) => {
+              const gradesObj: Record<string, ScoreKey> = {};
+              Object.keys(row).forEach(key => {
+                if (key.startsWith('Indicator_')) {
+                  const indId = key.replace('Indicator_', '');
+                  if (row[key] && row[key] !== '-') {
+                    gradesObj[indId] = row[key] as ScoreKey;
+                  }
+                }
+              });
+              
+              return {
+                id: row['ID'] || `STU_IMP_${Date.now()}_${index}`,
+                name: row['Nama Siswa'] || row['Nama'] || 'Tanpa Nama',
+                nis: String(row['NIS'] || ''),
+                kelas: row['Kelas'] || 'X-A',
+                gender: row['L/P'] || row['Gender'] || 'L',
+                semester: row['Semester'] || 'Semester II (Genap)',
+                grades: gradesObj,
+                kesimpulan: row['Kesimpulan'] || '',
+                catatanWali: row['Catatan Wali'] || '',
+                catatanOrangTua: row['Catatan Orang Tua'] || '',
+                completed: Object.keys(gradesObj).length > 0, // Roughly marks complete if has grades
+              };
+            });
+            result.students = parsedStudents;
+          }
+        }
+
+        // Parse Guru (Teachers) Sheet
+        const teacherSheetName = workbook.SheetNames.find(name => name.toLowerCase().includes('guru') || name.toLowerCase().includes('wali'));
+        if (teacherSheetName) {
+          const sheet = workbook.Sheets[teacherSheetName];
+          const rawData: any[] = XLSX.utils.sheet_to_json(sheet);
+          
+          if (rawData && rawData.length > 0) {
+            const parsedTeachers: Teacher[] = rawData.map((row, index) => ({
+              id: row['ID'] || `TCH_IMP_${Date.now()}_${index}`,
+              name: row['Nama Guru'] || row['Nama'] || 'Tanpa Nama',
+              role: row['Role'] || row['Jabatan'] || 'Guru',
+              classAssigned: row['Wali Kelas'] || row['Wali'] || undefined,
+              nip: String(row['NIP'] || ''),
+            }));
+            result.teachers = parsedTeachers;
+          }
+        }
+
+        resolve(result);
+      } catch (error) {
+        reject(error);
+      }
+    };
+    reader.onerror = (error) => reject(error);
+    reader.readAsBinaryString(file);
+  });
+}
+
+export function exportDatabaseBackupConfig(students: Student[], teachers: Teacher[]) {
+  const workbook = XLSX.utils.book_new();
+
+  // Export Students Sheet
+  const studentRows = students.map(s => {
+    const gradesCols: Record<string, string> = {};
+    Object.keys(s.grades).forEach(indId => {
+      gradesCols[`Indicator_${indId}`] = s.grades[indId];
+    });
+
+    return {
+      'ID': s.id,
+      'Nama Siswa': s.name,
+      'NIS': s.nis,
+      'Kelas': s.kelas,
+      'L/P': s.gender,
+      'Semester': s.semester,
+      ...gradesCols,
+      'Kesimpulan': s.kesimpulan,
+      'Catatan Wali': s.catatanWali,
+      'Catatan Orang Tua': s.catatanOrangTua,
+    };
+  });
+  const wsStudents = XLSX.utils.json_to_sheet(studentRows);
+  XLSX.utils.book_append_sheet(workbook, wsStudents, 'Master_Siswa');
+
+  // Export Teachers Sheet
+  const teacherRows = teachers.map(t => ({
+    'ID': t.id,
+    'Nama Guru': t.name,
+    'Role': t.role,
+    'Wali Kelas': t.classAssigned || '',
+    'NIP': t.nip || '',
+  }));
+  const wsTeachers = XLSX.utils.json_to_sheet(teacherRows);
+  XLSX.utils.book_append_sheet(workbook, wsTeachers, 'Master_Guru');
+
+  // Export VBA Macro Instructions Sheet
+  const vbaHeaders = getVbaMacroInstructionsRows();
+  const wsVba = XLSX.utils.aoa_to_sheet(vbaHeaders);
+  XLSX.utils.book_append_sheet(workbook, wsVba, 'VBA_Macro_Instruksi');
+
+  // Download File
+  XLSX.writeFile(workbook, `Database_Backup_5NK_${new Date().toISOString().split('T')[0]}.xlsx`);
+}
+
+/**
+ * Simple and offline-safe XOR encryption with Base64 encoding.
+ * Ensures privacy and security of school database backup files (.json).
+ */
+export function encryptData(text: string, key: string): string {
+  let result = '';
+  const cipherKey = key || 'KARTIKA_5NK_DEFAULT_SALT';
+  for (let i = 0; i < text.length; i++) {
+    const charCode = text.charCodeAt(i) ^ cipherKey.charCodeAt(i % cipherKey.length);
+    result += String.fromCharCode(charCode);
+  }
+  return btoa(unescape(encodeURIComponent(result)));
+}
+
+export function decryptData(encodedText: string, key: string): string {
+  try {
+    const text = decodeURIComponent(escape(atob(encodedText)));
+    let result = '';
+    const cipherKey = key || 'KARTIKA_5NK_DEFAULT_SALT';
+    for (let i = 0; i < text.length; i++) {
+      const charCode = text.charCodeAt(i) ^ cipherKey.charCodeAt(i % cipherKey.length);
+      result += String.fromCharCode(charCode);
+    }
+    return result;
+  } catch (e) {
+    throw new Error('Gagal mendekripsi berkas backup. Pastikan password Anda benar.');
+  }
+}
+
+export async function uploadExcelToGoogleDrive(students: Student[], teachers: Teacher[], accessToken: string) {
+  const workbook = XLSX.utils.book_new();
+
+  const studentRows = students.map(s => {
+    const gradesCols: Record<string, string> = {};
+    Object.keys(s.grades).forEach(indId => {
+      gradesCols[`Indicator_${indId}`] = s.grades[indId];
+    });
+
+    return {
+      'ID': s.id,
+      'Nama Siswa': s.name,
+      'NIS': s.nis,
+      'Kelas': s.kelas,
+      'L/P': s.gender,
+      'Semester': s.semester,
+      ...gradesCols,
+      'Kesimpulan': s.kesimpulan,
+      'Catatan Wali': s.catatanWali,
+      'Catatan Orang Tua': s.catatanOrangTua,
+    };
+  });
+  const wsStudents = XLSX.utils.json_to_sheet(studentRows);
+  XLSX.utils.book_append_sheet(workbook, wsStudents, 'Master_Siswa');
+
+  const teacherRows = teachers.map(t => ({
+    'ID': t.id,
+    'Nama Guru': t.name,
+    'Role': t.role,
+    'Wali Kelas': t.classAssigned || '',
+    'NIP': t.nip || '',
+  }));
+  const wsTeachers = XLSX.utils.json_to_sheet(teacherRows);
+  XLSX.utils.book_append_sheet(workbook, wsTeachers, 'Master_Guru');
+
+  const base64Str = XLSX.write(workbook, { bookType: 'xlsx', type: 'base64' });
+  const binaryString = window.atob(base64Str);
+  const binaryLen = binaryString.length;
+  const bytes = new Uint8Array(binaryLen);
+  for (let i = 0; i < binaryLen; i++) {
+    const ascii = binaryString.charCodeAt(i);
+    bytes[i] = ascii;
+  }
+  const blob = new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+
+  const filename = `Database_Backup_5NK_${new Date().toISOString().split('T')[0]}.xlsx`;
+
+  try {
+    const folderId = await getOrCreateFolder(accessToken, 'Backup Rapor 5NK');
+    return uploadFileToDrive(accessToken, blob, filename, folderId);
+  } catch (e) {
+    console.warn('Could not upload to target folder, uploading to root instead:', e);
+    return uploadFileToDrive(accessToken, blob, filename);
+  }
+}
+

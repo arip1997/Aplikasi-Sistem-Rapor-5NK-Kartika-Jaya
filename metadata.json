@@ -1,0 +1,6 @@
+{
+  "name": "Rapor 5NK Console",
+  "description": "Interactive Laporan Perkembangan Nilai Kartika (5NK) platform for teachers.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
