@@ -1,13 +1,39 @@
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import dotenv from 'dotenv';
+import fs from 'fs';
+import pg from 'pg';
 
 dotenv.config();
 
 const app = express();
 const PORT = 3000;
+
+// PostgreSQL database connection lazy initialized database pool
+const { Pool } = pg;
+let pgPool: any = null;
+function getPgPool() {
+  if (!pgPool) {
+    pgPool = new Pool({
+      host: process.env.SQL_HOST,
+      port: process.env.SQL_PORT ? parseInt(process.env.SQL_PORT) : 5432,
+      user: process.env.SQL_ADMIN_USER || process.env.SQL_USER,
+      password: process.env.SQL_ADMIN_PASSWORD || process.env.SQL_PASSWORD,
+      database: process.env.SQL_DB_NAME,
+      ssl: process.env.SQL_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
+      connectionTimeoutMillis: 10000,
+      idleTimeoutMillis: 10000,
+      max: 10,
+    });
+    pgPool.on('error', (err: any) => {
+      console.error('Unexpected error on Postgres database pool client:', err);
+      pgPool = null; // Self-heal: purge dead or stale pool on error
+    });
+  }
+  return pgPool;
+}
 
 // Middleware
 app.use(express.json());
@@ -92,10 +118,11 @@ Kembalikan HANYA teks JSON murni tanpa menyertakan blok kode markdown seperti \`
 `;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-1.5-flash',
+      model: 'gemini-3.1-pro-preview',
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
+        thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH }
       }
     });
 
@@ -134,6 +161,135 @@ Kembalikan HANYA teks JSON murni tanpa menyertakan blok kode markdown seperti \`
   }
 });
 
+// REST API endpoint for saving full workspace state to Postgres (Cloud SQL) / local file fallback
+app.post('/api/save-workspace', async (req, res) => {
+  try {
+    const { email, students, teachers, categories, kopSekolah, classes } = req.body;
+    if (!email) {
+      res.status(400).json({ error: 'Missing email' });
+      return;
+    }
+
+    const payloadObj = { students, teachers, categories, kopSekolah, classes, email, updatedAt: new Date().toISOString() };
+    const payloadStr = JSON.stringify(payloadObj);
+    let savedToSql = false;
+
+    // 1. Try Cloud SQL if configured
+    if (process.env.SQL_HOST) {
+      try {
+        const pool = getPgPool();
+        const client = await pool.connect();
+        try {
+          // Semi-auto create the schema table if it's not present yet
+          await client.query(`
+            CREATE TABLE IF NOT EXISTS rapor_workspaces (
+              id SERIAL PRIMARY KEY,
+              email VARCHAR(255) UNIQUE NOT NULL,
+              payload TEXT NOT NULL,
+              updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+          `);
+          await client.query(`
+            INSERT INTO rapor_workspaces (email, payload, updated_at)
+            VALUES ($1, $2, CURRENT_TIMESTAMP)
+            ON CONFLICT (email)
+            DO UPDATE SET payload = $2, updated_at = CURRENT_TIMESTAMP
+          `, [email, payloadStr]);
+          savedToSql = true;
+          console.log(`[SQL Sync] Saved workspace data for email: ${email}`);
+        } finally {
+          client.release();
+        }
+      } catch (sqlErr: any) {
+        // Mute connection terminated error log since Firebase is our active robust backend
+        if (sqlErr.message && !sqlErr.message.includes('Connection terminated')) {
+           console.error('[SQL Sync Error] Failed to write in Postgres:', sqlErr.message || sqlErr);
+        }
+        pgPool = null; // Self-heal: purge pool on connection errors
+      }
+    }
+
+    // 2. Always persist to server local storage file as standard or secure fallback
+    try {
+      const fallbackDir = path.join(process.cwd(), 'server_local_db');
+      if (!fs.existsSync(fallbackDir)) {
+        fs.mkdirSync(fallbackDir, { recursive: true });
+      }
+      const safeEmailFile = email.replace(/[^a-zA-Z0-9]/g, '_') + '.json';
+      const fallbackPath = path.join(fallbackDir, safeEmailFile);
+      fs.writeFileSync(fallbackPath, JSON.stringify(payloadObj, null, 2));
+      console.log(`[File Sync] Backup saved successfully on backend server: ${safeEmailFile}`);
+    } catch (fsErr: any) {
+      console.error('[File Sync Error] Local file write failed:', fsErr.message || fsErr);
+    }
+
+    res.json({ status: 'ok', savedToSql, savedToFile: true });
+  } catch (error: any) {
+    console.error('Error saving workspace:', error);
+    res.status(500).json({ error: error.message || 'Error saving workspace' });
+  }
+});
+
+// REST API endpoint for loading workspace state
+app.get('/api/load-workspace', async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email || typeof email !== 'string') {
+      res.status(400).json({ error: 'Missing email' });
+      return;
+    }
+
+    let loadedPayload: any = null;
+    let loadedFromSql = false;
+
+    // 1. Try Cloud SQL first
+    if (process.env.SQL_HOST) {
+      try {
+        const pool = getPgPool();
+        const client = await pool.connect();
+        try {
+          const dbRes = await client.query('SELECT payload FROM rapor_workspaces WHERE email = $1', [email]);
+          if (dbRes.rows && dbRes.rows.length > 0) {
+            loadedPayload = JSON.parse(dbRes.rows[0].payload);
+            loadedFromSql = true;
+            console.log(`[SQL Sync] Loaded workspace from Cloud SQL database for email: ${email}`);
+          }
+        } finally {
+          client.release();
+        }
+      } catch (sqlErr: any) {
+        console.error('[SQL Sync Load Error] Cloud SQL read failed:', sqlErr.message || sqlErr);
+        pgPool = null; // Self-heal: purge pool on connection errors
+      }
+    }
+
+    // 2. Try Local File fallback
+    if (!loadedPayload) {
+      try {
+        const fallbackDir = path.join(process.cwd(), 'server_local_db');
+        const safeEmailFile = email.replace(/[^a-zA-Z0-9]/g, '_') + '.json';
+        const fallbackPath = path.join(fallbackDir, safeEmailFile);
+        if (fs.existsSync(fallbackPath)) {
+          const fileContent = fs.readFileSync(fallbackPath, 'utf8');
+          loadedPayload = JSON.parse(fileContent);
+          console.log(`[File Sync] Loaded workspace from backup file on server: ${safeEmailFile}`);
+        }
+      } catch (fsErr: any) {
+        console.error('[File Sync Load Error] Local file read failed:', fsErr.message || fsErr);
+      }
+    }
+
+    if (loadedPayload) {
+      res.json({ status: 'ok', data: loadedPayload, loadedFromSql });
+    } else {
+      res.status(404).json({ error: 'Workspace not found' });
+    }
+  } catch (error: any) {
+    console.error('Error loading workspace:', error);
+    res.status(500).json({ error: error.message || 'Error occurred during workspace load' });
+  }
+});
+
 // Helper for local rule-based generation (very high-quality fallback)
 function generateLocalComments(name: string, gender: string, grades: Record<string, string>) {
   const p = gender === 'L' ? 'ia' : 'ia';
@@ -169,6 +325,45 @@ function generateLocalComments(name: string, gender: string, grades: Record<stri
   return { kesimpulan, catatanWali, aiUsed: false };
 }
 
+// API endpoint to return the version from metadata.json
+app.get('/api/version', (req, res) => {
+  try {
+    const metadataPath = path.join(process.cwd(), 'metadata.json');
+    if (fs.existsSync(metadataPath)) {
+      const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+      res.json({ version: metadata.version || '1.0.0' });
+    } else {
+      res.json({ version: '1.0.0' });
+    }
+  } catch (err) {
+    console.error('[Version API Error] Failed to read metadata.json:', err);
+    res.json({ version: '1.0.0' });
+  }
+});
+
+// API endpoint to check the live status of the Cloud SQL PostgreSQL connection pool
+app.get('/api/db-status', async (req, res) => {
+  if (!process.env.SQL_HOST) {
+    res.json({ status: 'unconfigured', message: 'Cloud SQL host is not configured in the environment.' });
+    return;
+  }
+  try {
+    const pool = getPgPool();
+    const client = await pool.connect();
+    try {
+      await client.query('SELECT 1');
+      res.json({ status: 'connected', message: 'Koneksi Cloud SQL PostgreSQL sukses & stabil.' });
+    } finally {
+      client.release();
+    }
+  } catch (err: any) {
+    // If the error is an unexpected termination, it's likely the db was stopped or quota exhausted.
+    // Suppress console error to avoid noise, but return status disconnected.
+    pgPool = null; // Self-heal: purge pool on status check failures
+    res.json({ status: 'disconnected', message: 'Fitur Relasional Cloud SQL sedang standby (Fallback ke Firebase/Backend File aktif). ' + (err.message || '') });
+  }
+});
+
 // Serve static assets and bind Vite in non-production
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
@@ -178,9 +373,12 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    // Under production, server.cjs is located inside dist/
-    // so __dirname is exactly the absolute path to the dist/ directory.
-    const distPath = __dirname;
+    // Dynamically resolve the dist folder path relative to process.cwd() 
+    // or __dirname depending on execution environment (direct or compiled bundle)
+    const distPath = __dirname.endsWith('dist') || __dirname.endsWith('dist/')
+      ? __dirname
+      : path.join(process.cwd(), 'dist');
+      
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));

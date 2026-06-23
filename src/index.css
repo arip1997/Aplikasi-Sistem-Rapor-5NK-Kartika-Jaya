@@ -44,6 +44,11 @@
   margin: 0 !important;
 }
 
+@page landscape-mode {
+  size: A4 landscape;
+  margin: 0 !important;
+}
+
 /* Print/PDF layout available globally for both Screen (html2pdf) and Print Media */
 .print-page {
   width: 210mm !important; /* A4 width */
@@ -63,6 +68,19 @@
   align-items: stretch !important;
   page-break-after: always !important;
   break-after: page !important;
+}
+
+.print-landscape .print-page {
+  width: 297mm !important; /* A4 Landscape width */
+  height: 210mm !important; /* A4 Landscape height */
+  max-height: 210mm !important;
+  page: landscape-mode;
+}
+
+@media print {
+  body.print-landscape {
+    page: landscape-mode;
+  }
 }
 
 /* Ensure proper page breaking between students and pages without trailing blank pages */
@@ -156,8 +174,8 @@
 
   .print-page {
     width: 210mm !important;
-    height: 297mm !important;
-    max-height: 297mm !important;
+    height: 296.5mm !important; /* Slightly below 297mm to prevent browser subpixel rounding page split overflows */
+    max-height: 296.5mm !important;
     margin: 0 !important;
     padding: 12mm 15mm !important;
     border: none !important;
@@ -234,6 +252,36 @@
     visibility: visible !important;
     opacity: 1 !important;
     overflow: visible !important;
+  }
+
+  /* Premium high-strict layout alignments for printing */
+  .print-page table {
+    table-layout: fixed !important;
+    width: 100% !important;
+  }
+
+  .print-page th, 
+  .print-page td {
+    padding: 2px 5px !important;
+    font-size: 9.5px !important; /* Unified with screen/pdf element calculations to ensure 100% 1:1 match */
+    line-height: 1.3 !important;
+    word-break: break-word !important;
+  }
+
+  .print-page h1,
+  .print-page h2,
+  .print-page h3,
+  .print-page h4 {
+    margin: 0 !important;
+    padding: 0 !important;
+    font-weight: 700 !important;
+  }
+
+  /* Prevent elements from leaking margins or breaking into empty trailing blocks */
+  img, svg {
+    max-width: 100% !important;
+    height: auto !important;
+    page-break-inside: avoid !important;
   }
 }
 

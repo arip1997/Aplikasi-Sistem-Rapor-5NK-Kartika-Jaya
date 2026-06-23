@@ -1,0 +1,23 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Catch-All Master deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+    
+    // Core safe verification functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function isOwner(userUid) {
+      return isSignedIn() && request.auth.uid == userUid;
+    }
+    
+    // Workspace collection rules
+    match /workspaces/{userUid} {
+      allow read, write: if isOwner(userUid);
+    }
+  }
+}

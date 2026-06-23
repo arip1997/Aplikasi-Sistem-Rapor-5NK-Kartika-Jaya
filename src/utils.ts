@@ -1,6 +1,26 @@
 import * as XLSX from 'xlsx';
 import { Student, Teacher, Category, ScoreKey, scoreOptions } from './types';
 import { uploadFileToDrive, getOrCreateFolder } from './lib/drive.ts';
+import { auth } from './firebase';
+
+export function formatProperName(name: string): string {
+  if (!name) return '';
+  return name.trim();
+}
+
+export function validateTeacherNameFormat(name: string): boolean {
+  if (!name) return false;
+  // If entirely uppercase, it's considered unformatted/bad (e.g., "BUDI S.PD.")
+  // We expect "Budi S.Pd."
+  if (name === name.toUpperCase() && name.length > 2) return false;
+  
+  // Also check if title exists but lacks dots, e.g., "SPd" instead of "S.Pd."
+  const lowerName = name.toLowerCase();
+  if (lowerName.includes('spd') && !lowerName.includes('s.pd')) return false;
+  if (lowerName.includes('mpd') && !lowerName.includes('m.pd')) return false;
+
+  return true;
+}
 
 // Convert grades count to stats for charts
 export function calculateClassStats(students: Student[], indicatorsCount: number) {
@@ -50,14 +70,14 @@ export function exportSingleStudentToExcel(student: Student, waliKelasName: stri
   // Insert indicators with their assigned scores
   categories.forEach(category => {
     category.indicators.forEach((ind, i) => {
-      const scoreKey: ScoreKey = student.grades[ind.id] || 'B';
-      const scoreOpt = scoreOptions.find(o => o.key === scoreKey);
+      const scoreKey = student.grades[ind.id];
+      const scoreOpt = scoreKey ? scoreOptions.find(o => o.key === scoreKey) : null;
       
       rows.push([
         i === 0 ? category.name : '', // only output category name on first indicator
         ind.text,
-        scoreOpt?.label || scoreKey,
-        scoreOpt?.description || ''
+        scoreOpt ? scoreOpt.label : (scoreKey || ''),
+        scoreOpt ? scoreOpt.description : ''
       ]);
     });
   });
@@ -65,7 +85,6 @@ export function exportSingleStudentToExcel(student: Student, waliKelasName: stri
   rows.push([]);
   rows.push(['Uraian Kesimpulan Pencapaian 5NK:', student.kesimpulan]);
   rows.push(['Catatan Wali Kelas:', student.catatanWali]);
-  rows.push(['Catatan Orang Tua / Wali:', student.catatanOrangTua]);
   rows.push([]);
   rows.push(['Mengetahui,']);
   rows.push(['Orang Tua / Wali', '', '', 'Guru Kelas / Wali Kelas']);
@@ -254,19 +273,15 @@ export function getVbaMacroInstructionsRows(): any[][] {
   ];
 }
 
-export function exportClassToExcel(students: Student[], className: string, waliKelasName: string, categories: Category[]) {
-  // Let's create an overview master spreadsheet for the entire class!
+export function generateClassExcelBlob(students: Student[], className: string, waliKelasName: string, categories: Category[]): Blob {
   const rows: any[] = [];
-  
   rows.push(['YAYASAN KARTIKA JAYA']);
   rows.push([`REKAPITULASI PENILAIAN 5NK KELAS ${className}`]);
   rows.push([`Wali Kelas: ${waliKelasName}`]);
   rows.push([]);
   
-  // Flatten indicators for tabular header columns
   const indicatorIds: string[] = [];
   const indicatorHeaders: string[] = [];
-  
   categories.forEach(cat => {
     cat.indicators.forEach(ind => {
       indicatorIds.push(ind.id);
@@ -276,30 +291,36 @@ export function exportClassToExcel(students: Student[], className: string, waliK
 
   const headers = ['No', 'NIS', 'Nama Siswa', 'L/P', ...indicatorHeaders, 'Kesimpulan', 'Catatan Wali'];
   rows.push(headers);
-
   students.forEach((student, index) => {
-    const studentRow = [
-      index + 1,
-      student.nis,
-      student.name,
-      student.gender,
+    rows.push([
+      index + 1, student.nis, student.name, student.gender,
       ...indicatorIds.map(id => student.grades[id] || '-'),
-      student.kesimpulan,
-      student.catatanWali
-    ];
-    rows.push(studentRow);
+      student.kesimpulan, student.catatanWali
+    ]);
   });
 
   const worksheet = XLSX.utils.aoa_to_sheet(rows);
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, `Rekap_Kelas_${className}`);
   
-  // Embed VBA Macro Instructions too so the teacher can use macro directly!
   const vbaHeaders = getVbaMacroInstructionsRows();
   const wsVba = XLSX.utils.aoa_to_sheet(vbaHeaders);
   XLSX.utils.book_append_sheet(workbook, wsVba, 'VBA_Macro_Instruksi');
   
-  XLSX.writeFile(workbook, `Rekap_5NK_Kelas_${className}.xlsx`);
+  const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+  return new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+export function exportClassToExcel(students: Student[], className: string, waliKelasName: string, categories: Category[]) {
+  const blob = generateClassExcelBlob(students, className, waliKelasName, categories);
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `Rekap_5NK_Kelas_${className}.xlsx`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.URL.revokeObjectURL(url);
 }
 
 // -------------------------------------------------------------
@@ -335,8 +356,8 @@ export function parseExcelDatabase(file: File): Promise<{ students?: Student[], 
               });
               
               return {
-                id: row['ID'] || `STU_IMP_${Date.now()}_${index}`,
-                name: row['Nama Siswa'] || row['Nama'] || 'Tanpa Nama',
+                id: row['ID'] || (row['NIS'] ? `STUD_NIS_${String(row['NIS']).trim()}` : `STU_IMP_${Date.now()}_${index}`),
+                name: formatProperName(row['Nama Siswa'] || row['Nama'] || 'Tanpa Nama'),
                 nis: String(row['NIS'] || ''),
                 kelas: row['Kelas'] || 'X-A',
                 gender: row['L/P'] || row['Gender'] || 'L',
@@ -360,8 +381,8 @@ export function parseExcelDatabase(file: File): Promise<{ students?: Student[], 
           
           if (rawData && rawData.length > 0) {
             const parsedTeachers: Teacher[] = rawData.map((row, index) => ({
-              id: row['ID'] || `TCH_IMP_${Date.now()}_${index}`,
-              name: row['Nama Guru'] || row['Nama'] || 'Tanpa Nama',
+              id: row['ID'] || (row['Wali Kelas'] || row['Wali'] ? `TCH_CLS_${String(row['Wali Kelas'] || row['Wali']).trim().toUpperCase()}` : `TCH_IMP_${Date.now()}_${index}`),
+              name: formatProperName(row['Nama Guru'] || row['Nama'] || 'Tanpa Nama'),
               role: row['Role'] || row['Jabatan'] || 'Guru',
               classAssigned: row['Wali Kelas'] || row['Wali'] || undefined,
               nip: String(row['NIP'] || ''),
@@ -510,4 +531,100 @@ export async function uploadExcelToGoogleDrive(students: Student[], teachers: Te
     return uploadFileToDrive(accessToken, blob, filename);
   }
 }
+
+export interface ChangeLog {
+  id: string;
+  timestamp: string;
+  type: string;
+  description: string;
+  operator?: string;
+}
+
+export function getChangeLogs(): ChangeLog[] {
+  if (typeof window === 'undefined') return [];
+  const stored = localStorage.getItem('rapor_5nk_change_logs');
+  return stored ? JSON.parse(stored) : [];
+}
+
+export function addChangeLog(type: string, description: string) {
+  if (typeof window === 'undefined') return;
+  const logs = getChangeLogs();
+  
+  let currentOperator = 'Pengguna Lokal (Offline)';
+  try {
+    if (auth && auth.currentUser) {
+      currentOperator = auth.currentUser.email || auth.currentUser.displayName || 'Pengguna Terautentikasi';
+    }
+  } catch (e) {
+    // silently fail
+  }
+
+  const newLog: ChangeLog = {
+    id: Math.random().toString(36).substring(2, 9),
+    timestamp: new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' }),
+    type,
+    description,
+    operator: currentOperator
+  };
+  const updatedLogs = [newLog, ...logs].slice(0, 100);
+  localStorage.setItem('rapor_5nk_change_logs', JSON.stringify(updatedLogs));
+  window.dispatchEvent(new Event('rapor_change_logs_updated'));
+}
+
+export function deleteChangeLog(id: string) {
+  if (typeof window === 'undefined') return;
+  const logs = getChangeLogs();
+  const updatedLogs = logs.filter(log => log.id !== id);
+  localStorage.setItem('rapor_5nk_change_logs', JSON.stringify(updatedLogs));
+  window.dispatchEvent(new Event('rapor_change_logs_updated'));
+}
+
+export function clearChangeLogs() {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem('rapor_5nk_change_logs');
+  window.dispatchEvent(new Event('rapor_change_logs_updated'));
+}
+
+export function exportLocalJsonBackup(students: Student[], teachers: Teacher[]) {
+  if (typeof window === 'undefined') return;
+  
+  let categories = [];
+  const categoriesStored = localStorage.getItem('rapor_5nk_categories');
+  if (categoriesStored) {
+    try {
+      categories = JSON.parse(categoriesStored);
+    } catch (_) {}
+  }
+
+  let kopSekolah = null;
+  const kopStored = localStorage.getItem('rapor_5nk_kop');
+  if (kopStored) {
+    try {
+      kopSekolah = JSON.parse(kopStored);
+    } catch (_) {}
+  }
+
+  const backupData = {
+    version: "1.0",
+    appName: "Rapor_5NK",
+    backupDate: new Date().toISOString(),
+    students,
+    teachers,
+    categories,
+    kopSekolah
+  };
+
+  const jsonString = JSON.stringify(backupData, null, 2);
+  const blob = new Blob([jsonString], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `Backup_Lokal_Rapor5NK_${new Date().toISOString().split('T')[0]}.json`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
 

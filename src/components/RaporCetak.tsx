@@ -1,9 +1,12 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { flushSync, createPortal } from 'react-dom';
 import JSZip from 'jszip';
-import { Student, Category, KopSekolah, scoreOptions } from '../types';
-import { Printer, Download, Eye, FileSpreadsheet, ArrowLeft, Heart, Award, Sparkles, FileText, Loader2, Archive, Search, Wrench, Sliders, Check, Layers, Cloud } from 'lucide-react';
+import { Student, Teacher, Category, KopSekolah, scoreOptions } from '../types';
+import { formatProperName } from '../utils';
+import { Printer, Download, Eye, FileSpreadsheet, ArrowLeft, Heart, Award, Sparkles, FileText, Loader2, Archive, Search, Wrench, Sliders, Check, Layers, Cloud, AlertTriangle } from 'lucide-react';
 import html2pdf from 'html2pdf.js';
+import { jsPDF } from 'jspdf';
+import html2canvas from 'html2canvas';
 import { uploadFileToDrive, getOrCreateFolder } from '../lib/drive.ts';
 import { googleSignIn, getAccessToken, initAuth } from '../firebase.ts';
 
@@ -16,6 +19,12 @@ interface RaporCetakProps {
   waliKelasNip?: string;
   onBack: () => void;
   onDownloadExcel: () => void;
+  teachers?: Teacher[];
+  onMarkAsPrinted?: (studentIds: string[]) => void;
+  autoTriggerBatchPdf?: boolean;
+  autoPrintImmediately?: boolean;
+  onResetAutoTrigger?: () => void;
+  onAddExportLog?: (type: 'EXCEL' | 'PDF', description: string, fileName: string, studentCount: number) => void;
 }
 
 export default function RaporCetak({
@@ -27,9 +36,31 @@ export default function RaporCetak({
   waliKelasNip,
   onBack,
   onDownloadExcel,
+  teachers = [],
+  onMarkAsPrinted,
+  autoTriggerBatchPdf = false,
+  autoPrintImmediately = false,
+  onResetAutoTrigger,
+  onAddExportLog,
 }: RaporCetakProps) {
   
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+
+  const getWaliKelas = (stu: Student) => {
+    if (teachers && teachers.length > 0) {
+      const match = teachers.find(t => (t.classAssigned || '').trim().toUpperCase() === (stu.kelas || '').trim().toUpperCase());
+      if (match) {
+        return {
+          name: formatProperName(match.name),
+          nip: match.nip ? match.nip.trim() : ''
+        };
+      }
+    }
+    return {
+      name: formatProperName(waliKelasName),
+      nip: waliKelasNip ? waliKelasNip.trim() : ''
+    };
+  };
   const [isGeneratingAll, setIsGeneratingAll] = useState(false);
   const [isUploadingToDrive, setIsUploadingToDrive] = useState(false);
   const [batchStudent, setBatchStudent] = useState<Student | null>(null);
@@ -56,6 +87,13 @@ export default function RaporCetak({
     currentStudentName: '',
   });
 
+  const [isGeneratingClassPdf, setIsGeneratingClassPdf] = useState(false);
+  const [classPdfStatus, setClassPdfStatus] = useState({
+    total: 0,
+    current: 0,
+    currentStudentName: '',
+  });
+
   useEffect(() => {
     const unsub = initAuth();
     return () => unsub();
@@ -65,6 +103,67 @@ export default function RaporCetak({
   const [isDiagnosticMode, setIsDiagnosticMode] = useState(false);
   const [showMarginsGuide, setShowMarginsGuide] = useState(true);
   const [showGridRuler, setShowGridRuler] = useState(false);
+  const [zoomLevel, setZoomLevel] = useState(1);
+  const [isPrintOptimizeEnabled, setIsPrintOptimizeEnabled] = useState(true);
+  const [isLandscape, setIsLandscape] = useState(false);
+  const [exportConfirmTarget, setExportConfirmTarget] = useState<'EXCEL'|'PDF_SELECTED'|'PDF_CLASS'|'ZIP_SELECTED'|'ZIP_CLASS'|null>(null);
+  const [classPdfFormat, setClassPdfFormat] = useState<'COMBINED'|'SEPARATE'>('COMBINED');
+
+  const [isSidebarOpenMobile, setIsSidebarOpenMobile] = useState(false);
+  const [isAutoFitPreview, setIsAutoFitPreview] = useState(true);
+  const [containerWidth, setContainerWidth] = useState(820);
+  const [isToolsExpandedMobile, setIsToolsExpandedMobile] = useState(false);
+
+  const canvasContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!canvasContainerRef.current) return;
+    const container = canvasContainerRef.current;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setContainerWidth(entry.contentRect.width || 820);
+      }
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
+  const confirmAction = () => {
+    switch (exportConfirmTarget) {
+      case 'EXCEL': onDownloadExcel(); break;
+      case 'PDF_SELECTED': handleDownloadPDF(); break;
+      case 'PDF_CLASS': 
+        if (classPdfFormat === 'COMBINED') {
+          handleDownloadClassPDF();
+        } else {
+          handleDownloadClassZIP();
+        }
+        break;
+      case 'ZIP_SELECTED': handleDownloadAllPDFs(); break;
+      case 'ZIP_CLASS': handleDownloadClassZIP(); break;
+    }
+    setExportConfirmTarget(null);
+  };
+
+  useEffect(() => {
+    if (isLandscape) {
+      document.body.classList.add('print-landscape');
+    } else {
+      document.body.classList.remove('print-landscape');
+    }
+    return () => document.body.classList.remove('print-landscape');
+  }, [isLandscape]);
+
+  useEffect(() => {
+    if (autoTriggerBatchPdf) {
+      const timer = setTimeout(() => {
+        handleDownloadClassPDF().finally(() => {
+          onResetAutoTrigger?.();
+        });
+      }, 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [autoTriggerBatchPdf]);
 
   // All class students from props or default to current student
   const classStudents = useMemo(() => {
@@ -73,8 +172,14 @@ export default function RaporCetak({
 
   const selectedClass = student.kelas;
 
+  const printMargins = useMemo(() => {
+    const saved = localStorage.getItem('rapor_5nk_print_margins');
+    return saved ? JSON.parse(saved) : { top: 12, bottom: 12, left: 15, right: 15 };
+  }, []);
+
   // Selected students representation inside the sidebar checkbox list
   const [selectedNisList, setSelectedNisList] = useState<string[]>([student.nis]);
+  const [filterPrintedStatus, setFilterPrintedStatus] = useState<'all' | 'printed' | 'not_printed'>('all');
   // Currently displayed student in on-screen Mock Preview
   const [previewNis, setPreviewNis] = useState<string>(student.nis);
 
@@ -88,23 +193,34 @@ export default function RaporCetak({
     return classStudents.filter(s => selectedSet.has(s.nis));
   }, [classStudents, selectedNisList]);
 
+  // Synchronize state when the target student prop changes
+  useEffect(() => {
+    if (student) {
+      setPreviewNis(student.nis);
+      setSelectedNisList([student.nis]);
+    }
+  }, [student]);
+
   // If a ZIP download or Drive upload is in progress, we render just the 1 active batchStudent under loop.
   // Otherwise, we render all of the checked/selected students so they compile/print as a combined set.
   const pdfRenderStudents = useMemo(() => {
-    if (isGeneratingAll || isUploadingToDrive || isSyncingAllToDrive || isGeneratingClassZip) {
+    if (isGeneratingClassPdf || isGeneratingAll || isUploadingToDrive || isSyncingAllToDrive || isGeneratingClassZip) {
       return batchStudent ? [batchStudent] : [];
     }
     return selectedStudents;
-  }, [isGeneratingAll, isUploadingToDrive, isSyncingAllToDrive, isGeneratingClassZip, batchStudent, selectedStudents]);
+  }, [isGeneratingClassPdf, isGeneratingAll, isUploadingToDrive, isSyncingAllToDrive, isGeneratingClassZip, batchStudent, selectedStudents]);
 
   const filteredClassStudents = useMemo(() => {
     const term = searchTerm.toLowerCase().trim();
-    if (!term) return classStudents;
-    return classStudents.filter(s =>
+    let result = classStudents;
+    if (filterPrintedStatus === 'printed') result = result.filter(s => s.printStatus);
+    if (filterPrintedStatus === 'not_printed') result = result.filter(s => !s.printStatus);
+    if (!term) return result;
+    return result.filter(s =>
       s.name.toLowerCase().includes(term) ||
       s.nis.includes(term)
     );
-  }, [classStudents, searchTerm]);
+  }, [classStudents, searchTerm, filterPrintedStatus]);
 
   const handleToggleStudent = (nis: string) => {
     setSelectedNisList(prev => {
@@ -160,182 +276,7 @@ export default function RaporCetak({
     }
   };
 
-  const getHtml2PdfOpt = (targetStudent: Student, originalElement: HTMLElement) => {
-    return {
-      margin:       0,
-      filename:     `Rapor_5NK_${targetStudent.name.replace(/\s+/g, '_')}_${targetStudent.nis}.pdf`,
-      image:        { type: 'jpeg', quality: 1.0 },
-      html2canvas:  { 
-        scale: 2, 
-        useCORS: true, 
-        letterRendering: true, 
-        logging: false,
-        scrollX: 0,
-        scrollY: 0,
-        backgroundColor: '#ffffff',
-        onclone: (clonedDoc: Document) => {
-          const clonedPrintSection = clonedDoc.getElementById('rapor-print-section');
-          if (clonedPrintSection) {
-            clonedPrintSection.style.setProperty('position', 'static', 'important');
-            clonedPrintSection.style.setProperty('left', '0', 'important');
-            clonedPrintSection.style.setProperty('top', '0', 'important');
-            clonedPrintSection.style.setProperty('width', '210mm', 'important');
-            clonedPrintSection.style.setProperty('height', 'auto', 'important');
-            clonedPrintSection.style.setProperty('overflow', 'visible', 'important');
-            clonedPrintSection.style.setProperty('z-index', 'auto', 'important');
-            clonedPrintSection.style.setProperty('opacity', '1', 'important');
-            clonedPrintSection.style.setProperty('display', 'block', 'important');
-            clonedPrintSection.style.setProperty('visibility', 'visible', 'important');
-          }
-          const clonedTarget = clonedDoc.getElementById('rapor-pdf-content');
-          if (clonedTarget) {
-            clonedTarget.classList.remove('print-only', 'hidden');
-            clonedTarget.style.display = 'block';
-            clonedTarget.style.position = 'static';
-            clonedTarget.style.visibility = 'visible';
-            clonedTarget.style.opacity = '1';
-            
-            const colorCache = new Map<string, string>();
-            let ctx: CanvasRenderingContext2D | null = null;
-            
-            const toSafeRgb = (val: string, fallback: string = 'transparent') => {
-              if (!val || typeof val !== 'string') return val;
-              if (colorCache.has(val)) return colorCache.get(val)!;
-              
-              if (val.includes('oklch')) {
-                const parsed = parseOklchColor(val);
-                if (parsed) {
-                  colorCache.set(val, parsed);
-                  return parsed;
-                }
-              }
-              if (val.includes('oklab')) {
-                const parsed = parseOklabColor(val);
-                if (parsed) {
-                  colorCache.set(val, parsed);
-                  return parsed;
-                }
-              }
-              if (val.includes('color-mix')) {
-                const nestedOklch = val.match(/oklch\(([^)]+)\)/i);
-                if (nestedOklch) {
-                  const parsed = parseOklchColor(nestedOklch[0]);
-                  if (parsed) {
-                    if (val.includes('transparent') || val.includes('rgba(0,0,0,0)')) {
-                      // fallback clean replacement
-                      const matchRgb = parsed.match(/\d+,\s*\d+,\s*\d+/);
-                      if (matchRgb) {
-                        const alphaVal = val.includes('0.') ? val.match(/0\.\d+/)?.[0] || '0.15' : '0.15';
-                        const adjusted = `rgba(${matchRgb[0]}, ${alphaVal})`;
-                        colorCache.set(val, adjusted);
-                        return adjusted;
-                      }
-                    }
-                    colorCache.set(val, parsed);
-                    return parsed;
-                  }
-                }
-                const nestedOklab = val.match(/oklab\(([^)]+)\)/i);
-                if (nestedOklab) {
-                  const parsed = parseOklabColor(nestedOklab[0]);
-                  if (parsed) {
-                    colorCache.set(val, parsed);
-                    return parsed;
-                  }
-                }
-              }
-              
-              // Only run canvas parsing of colors if they are not already parsed and contain oklch/oklab
-              if (!val.includes('oklch') && !val.includes('oklab') && !val.includes('color-mix')) {
-                return val;
-              }
-              
-              try {
-                if (!ctx) {
-                  const canvas = document.createElement('canvas');
-                  canvas.width = 1;
-                  canvas.height = 1;
-                  ctx = canvas.getContext('2d', { willReadFrequently: true });
-                }
-                
-                if (ctx) {
-                  ctx.clearRect(0, 0, 1, 1);
-                  ctx.fillStyle = val;
-                  ctx.fillRect(0, 0, 1, 1);
-                  const data = ctx.getImageData(0, 0, 1, 1).data;
-                  if (data[3] === 0) {
-                    colorCache.set(val, 'transparent');
-                    return 'transparent';
-                  }
-                  
-                  const rgbStr = `rgba(${data[0]}, ${data[1]}, ${data[2]}, ${data[3] / 255})`;
-                  colorCache.set(val, rgbStr);
-                  return rgbStr;
-                }
-              } catch (e) {}
-              
-              if (val.includes('0.4') || val.includes('0.96')) return 'rgb(241, 245, 249)';
-              if (val.includes('0.5') || val.includes('0.98')) return 'rgb(248, 250, 252)';
-              return fallback;
-            };
 
-            const syncStyles = (orig: HTMLElement, clone: HTMLElement) => {
-              try {
-                const computed = window.getComputedStyle(orig);
-                clone.style.color = toSafeRgb(computed.color, 'rgb(0, 0, 0)');
-                clone.style.backgroundColor = toSafeRgb(computed.backgroundColor, 'transparent');
-                
-                ['top', 'right', 'bottom', 'left'].forEach(pos => {
-                  try {
-                    const bc = computed.getPropertyValue(`border-${pos}-color`);
-                    if (bc) {
-                      clone.style.setProperty(`border-${pos}-color`, toSafeRgb(bc, 'rgb(0, 0, 0)'));
-                    }
-                  } catch (e) {}
-                });
-              } catch (e) {}
-              
-              const origChildren = Array.from(orig.children) as HTMLElement[];
-              const cloneChildren = Array.from(clone.children) as HTMLElement[];
-              for (let i = 0; i < origChildren.length; i++) {
-                if (cloneChildren[i]) {
-                  syncStyles(origChildren[i], cloneChildren[i]);
-                }
-              }
-            };
-
-            syncStyles(originalElement, clonedTarget);
-
-            try {
-              const rootComputed = window.getComputedStyle(originalElement);
-              clonedTarget.style.color = toSafeRgb(rootComputed.color, 'rgb(0,0,0)');
-              clonedTarget.style.backgroundColor = toSafeRgb(rootComputed.backgroundColor, 'rgb(255,255,255)');
-            } catch (err) {}
-          }
-
-          // Clean & sanitize style tags and elements inside the cloned content without deleting CSS files which ruins tailwind
-          try {
-            const styleElements = Array.from(clonedDoc.querySelectorAll('style'));
-            styleElements.forEach(styleTag => {
-              try {
-                styleTag.innerHTML = convertOklchCss(styleTag.innerHTML)
-                  .replace(/oklab\([^)]+\)/gi, 'rgba(0,0,0,0.1)')
-                  .replace(/color-mix\([^)]+\)/gi, 'rgba(0,0,0,0.1)');
-              } catch (e) {}
-            });
-
-            // Strip script tags to avoid background evaluation in cloned iframe
-            const scriptElements = Array.from(clonedDoc.querySelectorAll('script'));
-            scriptElements.forEach(el => el.remove());
-          } catch (err) {
-            console.error("Failed to sanitize cloned layout stylesheets:", err);
-          }
-        }
-      },
-      jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' },
-      pagebreak:    { mode: ['avoid-all', 'css', 'legacy'] }
-    };
-  };
 
   const runDryRunAuditAndVerifyDom = (expectedStudentCount: number): boolean => {
     console.group("🔍 [PDF DRY-RUN AUDIT] Verifikasi DOM & CSS Nodes");
@@ -421,17 +362,25 @@ export default function RaporCetak({
   };
 
   const handleDownloadPDF = async () => {
-    const html2pdfFn = typeof html2pdf === 'function' ? html2pdf : (html2pdf as any).default;
-    if (!html2pdfFn) {
-      console.error("[Cetak PDF Error] html2pdf library function is not loaded in window scope.");
+    setIsGeneratingPdf(true);
+    const printSection = document.getElementById('rapor-print-section');
+    const originalElement = document.getElementById('rapor-pdf-content');
+
+    if (!originalElement) {
+      console.error("[Cetak PDF Error] #rapor-pdf-content target selector element is missing from document DOM.");
+      setIsGeneratingPdf(false);
       return;
     }
 
-    setIsGeneratingPdf(true);
-    const printSection = document.getElementById('rapor-print-section');
+    const html2pdfFn = typeof html2pdf === 'function' ? html2pdf : (html2pdf as any).default;
+    if (!html2pdfFn) {
+      console.error("[Cetak PDF Error] html2pdf library function is not loaded in window scope.");
+      setIsGeneratingPdf(false);
+      return;
+    }
 
     try {
-      // Force a complete clean re-render of student data and flush updates synchronously
+      // Force a complete clean re-render of student data and flush updates
       flushSync(() => {
         setRenderTrigger(prev => prev + 1);
       });
@@ -448,41 +397,53 @@ export default function RaporCetak({
         printSection.style.setProperty('z-index', '99999', 'important');
       }
 
-      const originalElement = document.getElementById('rapor-pdf-content');
-      if (!originalElement) {
-        console.error("[Cetak PDF Error] #rapor-pdf-content target selector element is missing from document DOM.");
-        return;
-      }
-
-      // Force immediate layout reflow
-      void originalElement.offsetHeight;
-      
-      // Let the browser paint
-      await new Promise(resolve => setTimeout(resolve, 150));
-
-      // Run live dry-run DOM verification check with deep audits
-      const dryRunPassed = runDryRunAuditAndVerifyDom(selectedStudents.length);
-      if (!dryRunPassed) {
-        console.warn("[Dry-Run Warning] Detasemen validasi DOM menemukan ketidakcocokan visual; melanjutkan regenerasi paksa.");
-      }
+      // Allow DOM repaint
+      await new Promise(resolve => setTimeout(resolve, 300));
 
       let filename = `Rapor_5NK_Batch_${selectedClass}.pdf`;
       if (selectedStudents.length === 1) {
         const s = selectedStudents[0];
         filename = `Rapor_5NK_${s.name.replace(/\s+/g, '_')}_${s.nis}.pdf`;
+      } else {
+        filename = `Rapor_5NK_Gabungan_${selectedStudents.length}_Siswa.pdf`;
       }
 
-      const baseOpt = getHtml2PdfOpt(selectedStudents[0] || student, originalElement);
-      const opt = {
-        ...baseOpt,
-        filename: filename
-      };
+      console.log(`[PDF Generator] Starting jsPDF generation with filename: "${filename}"`);
+      
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4',
+        compress: true
+      });
 
-      console.log(`[PDF Generator] Starting html2pdf with filename: "${filename}"`);
-      await html2pdfFn().set(opt).from(originalElement).save();
-      console.log("[PDF Generator] File generated and download triggered successfully.");
+      let isFirstPage = true;
+      const pages = originalElement.querySelectorAll('.print-page');
+      for (let pIdx = 0; pIdx < pages.length; pIdx++) {
+        const pageEl = pages[pIdx] as HTMLElement;
+        const canvas = await html2canvas(pageEl, { scale: 2, useCORS: true, logging: false });
+        const imgData = canvas.toDataURL('image/jpeg', 0.95);
+        
+        if (!isFirstPage) pdf.addPage('a4', 'portrait');
+        isFirstPage = false;
+        pdf.addImage(imgData, 'JPEG', 0, 0, 210, 297);
+        
+        // Release memory instantly
+        canvas.width = 0;
+        canvas.height = 0;
+      }
+      
+      pdf.save(filename);
+      console.log("[PDF] High Quality PDF exported successfully using jsPDF.");
+      onAddExportLog?.(
+        'PDF',
+        `Cetak Rapor PDF (${selectedStudents.length === 1 ? selectedStudents[0].name : `${selectedStudents.length} Siswa Terpilih`})`,
+        filename,
+        selectedStudents.length
+      );
+      onMarkAsPrinted?.(selectedStudents.map(s => s.id));
     } catch (err) {
-      console.error("Kesalahan Unduh PDF:", err);
+      console.error("[Cetak PDF Error] Failed to generate PDF:", err);
     } finally {
       if (printSection) {
         printSection.style.removeProperty('position');
@@ -564,19 +525,38 @@ export default function RaporCetak({
 
         runDryRunAuditAndVerifyDom(1);
 
-        const baseOpt = getHtml2PdfOpt(curStudent, originalElement);
         let filename = `Rapor_5NK_${curStudent.name.replace(/\s+/g, '_')}_${curStudent.nis}.pdf`;
         
-        const opt = {
-          ...baseOpt,
-          filename
-        };
+        // Using direct html2canvas + jsPDF to prevent worker crashes inside loop
+        const pdf = new jsPDF({
+          orientation: 'portrait',
+          unit: 'mm',
+          format: 'a4',
+          compress: true
+        });
 
-        const pdfBlob = await html2pdfFn().set(opt).from(originalElement).output('blob');
+        let isFirstPage = true;
+        const pages = originalElement.querySelectorAll('.print-page');
+        for (let pIdx = 0; pIdx < pages.length; pIdx++) {
+          const pageEl = pages[pIdx] as HTMLElement;
+          const canvas = await html2canvas(pageEl, { scale: 2, useCORS: true, logging: false });
+          const imgData = canvas.toDataURL('image/jpeg', 0.95);
+          
+          if (!isFirstPage) pdf.addPage('a4', 'portrait');
+          isFirstPage = false;
+          pdf.addImage(imgData, 'JPEG', 0, 0, 210, 297);
+          
+          // Release memory instantly
+          canvas.width = 0;
+          canvas.height = 0;
+        }
+
+        const pdfBlob = pdf.output('blob');
         
         if (pdfBlob && pdfBlob.size > 0) {
           await uploadFileToDrive(token, pdfBlob, filename);
           uploadedCount++;
+          onMarkAsPrinted?.([curStudent.id]);
         }
       }
 
@@ -663,6 +643,57 @@ export default function RaporCetak({
       // Create or locate the dedicated folder
       const folderId = await getOrCreateFolder(token, targetFolderName);
 
+      // Auto-upload the comprehensive Excel report format to Google Drive as requested by user
+      try {
+        const XLSX = await import('xlsx');
+        const rows: any[] = [];
+        rows.push(['YAYASAN KARTIKA JAYA']);
+        rows.push([`REKAPITULASI PENILAIAN 5NK KELAS ${selectedClass}`]);
+        const schoolTeacher = teachers.find(t => (t.classAssigned || '').trim().toUpperCase() === (selectedClass || '').trim().toUpperCase());
+        const resolvedWaliKelasName = schoolTeacher ? schoolTeacher.name : waliKelasName;
+        rows.push([`Wali Kelas: ${resolvedWaliKelasName || '-'}`]);
+        rows.push([]);
+        
+        const indicatorIds: string[] = [];
+        const indicatorHeaders: string[] = [];
+        
+        categories.forEach(cat => {
+          cat.indicators.forEach(ind => {
+            indicatorIds.push(ind.id);
+            indicatorHeaders.push(`${cat.id}: ${ind.text.substring(0, 30)}...`);
+          });
+        });
+
+        const headers = ['No', 'NIS', 'Nama Siswa', 'L/P', ...indicatorHeaders, 'Kesimpulan', 'Catatan Wali'];
+        rows.push(headers);
+
+        classStudents.forEach((student, index) => {
+          const studentRow = [
+            index + 1,
+            student.nis,
+            student.name,
+            student.gender,
+            ...indicatorIds.map(id => student.grades[id] || '-'),
+            student.kesimpulan,
+            student.catatanWali
+          ];
+          rows.push(studentRow);
+        });
+
+        const worksheet = XLSX.utils.aoa_to_sheet(rows);
+        const workbook = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(workbook, worksheet, `Rekap_Kelas_${selectedClass}`);
+        
+        const out = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+        const excelBlob = new Blob([out], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const excelFilename = `Rekap_5NK_Kelas_${selectedClass}.xlsx`;
+        
+        await uploadFileToDrive(token, excelBlob, excelFilename, folderId);
+        console.log(`[Sync Engine] Automatically updated overall excel: ${excelFilename}`);
+      } catch (xlErr) {
+        console.error("Gagal mengunggah laporan Excel ke Google Drive:", xlErr);
+      }
+
       console.log(`[Sync Engine] Starting background sync of ${classStudents.length} student documents.`);
 
       for (let i = 0; i < classStudents.length; i++) {
@@ -690,15 +721,32 @@ export default function RaporCetak({
           void originalElement.offsetHeight;
           await new Promise(resolve => setTimeout(resolve, 100));
 
-          const baseOpt = getHtml2PdfOpt(curStudent, originalElement);
-          const filename = `Rapor_5NK_${curStudent.name.replace(/\s+/g, '_')}_${curStudent.nis}.pdf`;
-          
-          const opt = {
-            ...baseOpt,
-            filename
-          };
+          // Using direct html2canvas + jsPDF to prevent worker crashes inside background loop
+          const pdf = new jsPDF({
+            orientation: 'portrait',
+            unit: 'mm',
+            format: 'a4',
+            compress: true
+          });
 
-          const pdfBlob = await html2pdfFn().set(opt).from(originalElement).output('blob');
+          let isFirstPage = true;
+          const pages = originalElement.querySelectorAll('.print-page');
+          for (let pIdx = 0; pIdx < pages.length; pIdx++) {
+            const pageEl = pages[pIdx] as HTMLElement;
+            const canvas = await html2canvas(pageEl, { scale: 2, useCORS: true, logging: false });
+            const imgData = canvas.toDataURL('image/jpeg', 0.95);
+            
+            if (!isFirstPage) pdf.addPage('a4', 'portrait');
+            isFirstPage = false;
+            pdf.addImage(imgData, 'JPEG', 0, 0, 210, 297);
+            
+            // Release memory instantly
+            canvas.width = 0;
+            canvas.height = 0;
+          }
+
+          const filename = `Rapor_5NK_${curStudent.name.replace(/\s+/g, '_')}_${curStudent.nis}.pdf`;
+          const pdfBlob = pdf.output('blob');
           
           if (pdfBlob && pdfBlob.size > 0) {
             await uploadFileToDrive(token, pdfBlob, filename, folderId);
@@ -706,6 +754,7 @@ export default function RaporCetak({
               ...prev,
               completed: prev.completed + 1,
             }));
+            onMarkAsPrinted?.([curStudent.id]);
           } else {
             throw new Error("Gagal membuat fail PDF");
           }
@@ -814,29 +863,53 @@ export default function RaporCetak({
             console.warn(`[Batch Dry-Run Warning] Student "${curStudent.name}" failed complete pristine DOM audit verification.`);
           }
 
-          const opt = getHtml2PdfOpt(curStudent, originalElement);
           const filename = `Rapor_5NK_${curStudent.name.replace(/\s+/g, '_')}_${curStudent.nis}.pdf`;
           
-          const optWithClassFilename = {
-            ...opt,
-            filename
-          };
+          // Generate Blob directly from the fully stable element using direct html2canvas + jsPDF to prevent worker crashes
+          console.log(` - Generating jsPDF blob for ${curStudent.name}...`);
+          
+          const pdf = new jsPDF({
+            orientation: 'portrait',
+            unit: 'mm',
+            format: 'a4',
+            compress: true
+          });
 
-          // Generate Blob directly from the fully stable element
-          console.log(` - Generating html2pdf blob for ${curStudent.name}...`);
-          const pdfBlob = await html2pdfFn().set(optWithClassFilename).from(originalElement).output('blob');
+          let isFirstPage = true;
+          const pages = originalElement.querySelectorAll('.print-page');
+          for (let pIdx = 0; pIdx < pages.length; pIdx++) {
+            const pageEl = pages[pIdx] as HTMLElement;
+            const canvas = await html2canvas(pageEl, { scale: 2, useCORS: true, logging: false });
+            const imgData = canvas.toDataURL('image/jpeg', 0.95);
+            
+            if (!isFirstPage) pdf.addPage('a4', 'portrait');
+            isFirstPage = false;
+            pdf.addImage(imgData, 'JPEG', 0, 0, 210, 297);
+            
+            // Release memory instantly
+            canvas.width = 0;
+            canvas.height = 0;
+          }
+
+          let pdfBlob: Blob | null = pdf.output('blob');
           
           if (pdfBlob && pdfBlob.size > 0) {
             console.log(` ✅ Blob generated successfully: ${pdfBlob.size} bytes. MIME: ${pdfBlob.type}`);
-            folder.file(optWithClassFilename.filename, pdfBlob);
+            folder.file(filename, pdfBlob);
             setClassZipStatus(prev => ({
               ...prev,
               completed: prev.completed + 1,
             }));
+            onMarkAsPrinted?.([curStudent.id]);
           } else {
             console.error(` ❌ ERROR: Generated blob for "${curStudent.name}" is empty or failed!`);
             throw new Error(`Empty blob generated for student: ${curStudent.name}`);
           }
+
+          // Force release blob memory reference and wipe temporary canvases from DOM
+          pdfBlob = null;
+          const canvases = document.querySelectorAll('canvas');
+          canvases.forEach(canvas => canvas.remove());
         } catch (itemErr) {
           console.error(`Gagal membuat PDF untuk siswa ${curStudent.name}:`, itemErr);
           setClassZipStatus(prev => ({
@@ -856,12 +929,14 @@ export default function RaporCetak({
       const url = URL.createObjectURL(zipBlob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${folderName}.zip`;
+      const downloadName = `${folderName}.zip`;
+      a.download = downloadName;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
       console.log("[Batch Class ZIP Engine] Batch class processing completed successfully and ZIP downloaded.");
+      onAddExportLog?.('PDF', `Ekspor Arsip ZIP Massal (Seluruh Kelas ${selectedClass})`, downloadName, classStudents.length);
 
     } catch (err) {
       console.error("Kesalahan Unduh ZIP Seluruh Kelas:", err);
@@ -878,6 +953,115 @@ export default function RaporCetak({
         printSection.style.removeProperty('z-index');
       }
       setBatchStudent(null);
+    }
+  };
+
+  const handleDownloadClassPDF = async () => {
+    if (classStudents.length === 0) return;
+    
+    const printSection = document.getElementById('rapor-print-section');
+
+    try {
+      setIsGeneratingClassPdf(true);
+
+      if (printSection) {
+        printSection.style.setProperty('position', 'absolute', 'important');
+        printSection.style.setProperty('left', '-9999px', 'important');
+        printSection.style.setProperty('top', '0', 'important');
+        printSection.style.setProperty('width', '210mm', 'important');
+        printSection.style.setProperty('height', 'auto', 'important');
+        printSection.style.setProperty('overflow', 'visible', 'important');
+        printSection.style.setProperty('opacity', '1', 'important');
+        printSection.style.setProperty('z-index', '99999', 'important');
+      }
+
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4',
+        compress: true
+      });
+
+      let isFirstPage = true;
+
+      for (let i = 0; i < classStudents.length; i++) {
+        const curStudent = classStudents[i];
+        
+        flushSync(() => {
+          setBatchStudent(curStudent);
+          setClassPdfStatus({
+            total: classStudents.length,
+            current: i + 1,
+            currentStudentName: curStudent.name,
+          });
+          setRenderTrigger(prev => prev + 1);
+        });
+
+        const originalElement = document.getElementById('rapor-pdf-content');
+        if (!originalElement) continue;
+
+        void originalElement.offsetHeight;
+        
+        // Wait for images and layouts to settle
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        const pages = originalElement.querySelectorAll('.print-page');
+        for (let pIdx = 0; pIdx < pages.length; pIdx++) {
+          const pageEl = pages[pIdx] as HTMLElement;
+          const canvas = await html2canvas(pageEl, { scale: 2, useCORS: true, logging: false });
+          const imgData = canvas.toDataURL('image/jpeg', 0.95);
+          
+          if (!isFirstPage) {
+            pdf.addPage('a4', 'portrait');
+          }
+          isFirstPage = false;
+          
+          pdf.addImage(imgData, 'JPEG', 0, 0, 210, 297);
+          
+          // Clear canvas memory immediately
+          canvas.width = 0;
+          canvas.height = 0;
+        }
+      }
+
+      const filename = `Rapor_Massal_Kelas_${selectedClass}.pdf`;
+      console.log(`[Class PDF Generator] Saving assembled jsPDF with filename: "${filename}"`);
+      
+      if (autoPrintImmediately) {
+        pdf.autoPrint();
+        const blobUrl = pdf.output('bloburl');
+        window.open(blobUrl, '_blank');
+        try {
+          // Attempt to save as fallback
+          pdf.save(filename);
+        } catch (e) {}
+      } else {
+        pdf.save(filename);
+      }
+      
+      console.log("[Class PDF Generator] Bulk class PDF downloaded successfully.");
+      
+      onAddExportLog?.('PDF', `Cetak Rapor PDF Massal Tergabung (Seluruh Kelas ${selectedClass})`, filename, classStudents.length);
+      onMarkAsPrinted?.(classStudents.map(s => s.id));
+      
+    } catch (err) {
+      console.error("Kesalahan Unduh PDF Massal Kelas:", err);
+      alert("Gagal mengunduh rapor massal kelas. Silakan coba kembali.");
+    } finally {
+      setIsGeneratingClassPdf(false);
+      flushSync(() => {
+        setBatchStudent(null);
+      });
+      if (printSection) {
+        printSection.style.removeProperty('position');
+        printSection.style.removeProperty('left');
+        printSection.style.removeProperty('top');
+        printSection.style.removeProperty('width');
+        printSection.style.removeProperty('height');
+        printSection.style.removeProperty('overflow');
+        printSection.style.removeProperty('opacity');
+        printSection.style.removeProperty('z-index');
+      }
     }
   };
 
@@ -942,19 +1126,48 @@ export default function RaporCetak({
           console.warn(`[Batch Dry-Run Warning] Student "${curStudent.name}" failed complete pristine DOM audit verification.`);
         }
 
-        const opt = getHtml2PdfOpt(curStudent, originalElement);
+        const filename = `Rapor_5NK_${curStudent.name.replace(/\s+/g, '_')}_${curStudent.nis}.pdf`;
         
-        // Generate Blob directly from the fully stable element
-        console.log(` - Generating html2pdf blob for ${curStudent.name}...`);
-        const pdfBlob = await html2pdfFn().set(opt).from(originalElement).output('blob');
+        // Generate Blob using direct html2canvas + jsPDF to prevent worker crashes
+        console.log(` - Generating jsPDF blob for ${curStudent.name}...`);
+        
+        const pdf = new jsPDF({
+          orientation: 'portrait',
+          unit: 'mm',
+          format: 'a4',
+          compress: true
+        });
+
+        let isFirstPage = true;
+        const pages = originalElement.querySelectorAll('.print-page');
+        for (let pIdx = 0; pIdx < pages.length; pIdx++) {
+          const pageEl = pages[pIdx] as HTMLElement;
+          const canvas = await html2canvas(pageEl, { scale: 2, useCORS: true, logging: false });
+          const imgData = canvas.toDataURL('image/jpeg', 0.95);
+          
+          if (!isFirstPage) pdf.addPage('a4', 'portrait');
+          isFirstPage = false;
+          pdf.addImage(imgData, 'JPEG', 0, 0, 210, 297);
+          
+          // Release memory instantly
+          canvas.width = 0;
+          canvas.height = 0;
+        }
+
+        let pdfBlob: Blob | null = pdf.output('blob');
         
         if (pdfBlob && pdfBlob.size > 0) {
           console.log(` ✅ Blob generated successfully: ${pdfBlob.size} bytes. MIME: ${pdfBlob.type}`);
-          folder.file(opt.filename, pdfBlob);
+          folder.file(filename, pdfBlob);
         } else {
           console.error(` ❌ ERROR: Generated blob for "${curStudent.name}" is empty or failed!`);
           throw new Error(`Empty blob generated for student: ${curStudent.name}`);
         }
+
+        // Release references and clear html2canvas layout canvas elements to reduce memory usage
+        pdfBlob = null;
+        const canvases = document.querySelectorAll('canvas');
+        canvases.forEach(canvas => canvas.remove());
       }
 
       // Restore UI back to normal Selected Student
@@ -967,12 +1180,14 @@ export default function RaporCetak({
       const url = URL.createObjectURL(zipBlob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${folderName}.zip`;
+      const downloadName = `${folderName}.zip`;
+      a.download = downloadName;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
       console.log("[Batch PDF Engine] Batch processing completed successfully and ZIP downloaded.");
+      onAddExportLog?.('PDF', `Ekspor Arsip ZIP (${selectedStudents.length} Rapor Siswa Terpilih)`, downloadName, selectedStudents.length);
 
     } catch (err) {
       console.error("Kesalahan Unduh Semua PDF:", err);
@@ -993,158 +1208,404 @@ export default function RaporCetak({
     }
   };
 
-  // Kartika Jaya School Seal SVG Representation
+  // Kartika Jaya School Seal Representation from Google Drive (high precision overlay)
   const KartikaLogo = () => (
-    <svg width="80" height="80" viewBox="0 0 100 100" className="h-20 w-20 flex-none text-emerald-700 mx-auto" aria-hidden="true">
-      {/* Outer shield/crest */}
-      <polygon points="50,5 90,25 90,75 50,95 10,75 10,25" fill="#15803d" stroke="#facc15" strokeWidth="2.5" />
-      {/* Inner crest */}
-      <polygon points="50,12 82,28 82,72 50,88 18,72 18,28" fill="#16a34a" />
-      {/* Star */}
-      <polygon points="50,15 58,35 78,35 62,48 68,68 50,55 32,68 38,48 22,35 42,35" fill="#facc15" stroke="#ca8a04" strokeWidth="1" />
-      {/* Shield circle */}
-      <circle cx="50" cy="50" r="14" fill="#ffffff" stroke="#1e3a8a" strokeWidth="1.5" />
-      {/* Book symbol lines */}
-      <path d="M42,48 C46,51 50,47 50,47 C50,47 54,51 58,48 M42,52 C46,55 50,51 50,51 C50,51 54,55 58,52" stroke="#ea580c" strokeWidth="1.5" fill="none" />
-      {/* Laurel leaves branches at bottom */}
-      <path d="M22,60 Q30,85 50,82 Q70,85 78,60" stroke="#facc15" strokeWidth="2.5" fill="none" />
-      {/* Banner */}
-      <path d="M12,70 L30,75 L50,72 L70,75 L88,70 L84,78 L50,78 L16,78 Z" fill="#b91c1c" stroke="#facc15" strokeWidth="1" />
-      <text x="50" y="76" fill="#ffffff" fontSize="5" fontWeight="bold" textAnchor="middle" letterSpacing="0.5">KARTIKA JAYA</text>
-    </svg>
+    <img
+      src="https://lh3.googleusercontent.com/d/1SD7iCTF6AZsj54LY0KckHkgIS93wtzq3"
+      alt="Logo Kartika"
+      className="max-h-20 max-w-20 object-contain mx-auto"
+      referrerPolicy="no-referrer"
+      crossOrigin="anonymous"
+    />
   );
+
+  // Calculate auto-fit preview scaling factor and margin offset
+  const baseWidth = 830;
+  const scaleFactor = isAutoFitPreview && containerWidth && containerWidth < baseWidth 
+    ? (containerWidth - 24) / 794 
+    : zoomLevel;
+  const totalHeight = 2245; // Approx unscaled height of 2 A4 pages simulated on screen (1122px each)
+  const marginOffset = scaleFactor < 1 ? -totalHeight * (1 - scaleFactor) : 0;
 
   return (
     <div id="rapor-cetak-wrapper" className="flex flex-col gap-6">
+      {/* EXPORT CONFIRM DIALOG */}
+      {exportConfirmTarget && (
+        <div className="fixed inset-0 z-[9999] bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="bg-indigo-600 px-6 py-4 flex items-center justify-between">
+              <h3 className="text-white font-bold tracking-wide flex items-center gap-2">
+                <Archive className="h-5 w-5" /> 
+                Konfirmasi Ekspor Data
+              </h3>
+            </div>
+            <div className="p-6">
+              <p className="text-sm font-medium text-slate-700 leading-relaxed mb-4">
+                Anda akan melakukan proses ekspor 
+                {exportConfirmTarget === 'EXCEL' && <strong className="text-indigo-700 mx-1">Data Nilai ke Excel</strong>}
+                {exportConfirmTarget === 'PDF_SELECTED' && <strong className="text-indigo-700 mx-1">Rapor PDF ({selectedStudents.length > 1 ? 'Massal Terpilih' : 'Tunggal'})</strong>}
+                {exportConfirmTarget === 'PDF_CLASS' && <strong className="text-indigo-700 mx-1">Rapor PDF Massal (Seluruh Kelas)</strong>}
+                {exportConfirmTarget === 'ZIP_SELECTED' && <strong className="text-indigo-700 mx-1">Arsip ZIP (Terpilih)</strong>}
+                {exportConfirmTarget === 'ZIP_CLASS' && <strong className="text-indigo-700 mx-1">Arsip ZIP Massal (Seluruh Kelas)</strong>}
+                berikut rinciannya:
+              </p>
+
+              <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex flex-col gap-2.5 mb-6">
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-slate-500 font-medium">Kelas yang diproses:</span>
+                  <span className="font-bold text-slate-800">{student.kelas}</span>
+                </div>
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-slate-500 font-medium">Jumlah Data Siswa:</span>
+                  <span className="font-bold text-indigo-700 text-lg">
+                    {exportConfirmTarget.includes('CLASS') || exportConfirmTarget === 'EXCEL' ? classStudents.length : selectedStudents.length} 
+                    <span className="text-sm font-medium text-slate-600 ml-1">Siswa</span>
+                  </span>
+                </div>
+              </div>
+
+              {exportConfirmTarget === 'PDF_CLASS' && (
+                <div className="border border-indigo-100 bg-indigo-50/40 p-4 rounded-xl mb-6">
+                  <span className="text-[11px] font-bold text-indigo-800 uppercase tracking-wider block mb-3">Pilihlah Format PDF Seluruh Kelas:</span>
+                  <div className="flex flex-col gap-2.5">
+                    <label className="flex items-start gap-2.5 p-3 rounded-xl bg-white border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/20 cursor-pointer transition-all select-none">
+                      <input
+                        type="radio"
+                        name="classPdfFormat"
+                        checked={classPdfFormat === 'COMBINED'}
+                        onChange={() => setClassPdfFormat('COMBINED')}
+                        className="mt-0.5 text-indigo-600 focus:ring-indigo-500 cursor-pointer h-4 w-4"
+                      />
+                      <div>
+                        <span className="text-xs font-bold text-slate-800 block">Satu Dokumen PDF Gabungan</span>
+                        <span className="text-[10px] text-slate-500 block mt-0.5 leading-normal">Seluruh siswa digabungkan dalam satu berkas PDF tunggal berturut-turut.</span>
+                      </div>
+                    </label>
+                    <label className="flex items-start gap-2.5 p-3 rounded-xl bg-white border border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/20 cursor-pointer transition-all select-none">
+                      <input
+                        type="radio"
+                        name="classPdfFormat"
+                        checked={classPdfFormat === 'SEPARATE'}
+                        onChange={() => setClassPdfFormat('SEPARATE')}
+                        className="mt-0.5 text-indigo-600 focus:ring-indigo-500 cursor-pointer h-4 w-4"
+                      />
+                      <div>
+                        <span className="text-xs font-bold text-slate-800 block">Berkas PDF Terpisah per Siswa (.ZIP)</span>
+                        <span className="text-[10px] text-slate-500 block mt-0.5 leading-normal">Rapor setiap siswa diunduh sebagai PDF terpisah dibungkus rapi dalam arsip ZIP.</span>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex justify-end gap-3 mt-2">
+                <button
+                  onClick={() => setExportConfirmTarget(null)}
+                  className="px-4 py-2 text-sm font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  onClick={confirmAction}
+                  className="px-6 py-2 text-sm font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-md transition-all transform hover:-translate-y-0.5 active:translate-y-0 cursor-pointer"
+                >
+                  Lanjutkan Ekspor
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isPrintOptimizeEnabled && (
+        <style dangerouslySetInnerHTML={{ __html: `
+          @media print {
+            @page {
+              size: A4 portrait;
+              margin: 0;
+            }
+          }
+        `}} />
+      )}
       {/* Action panel & toolbar */}
-      <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex flex-wrap gap-3 items-center justify-between no-print">
-        <button
-          onClick={onBack}
-          className="px-4 py-2 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 flex items-center gap-2 cursor-pointer transition-colors shadow-xs"
-        >
-          <ArrowLeft className="h-4 w-4" /> Kembali ke Grid Excel
-        </button>
-
-        <div className="flex gap-2">
+      <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex flex-col gap-3 no-print">
+        {/* Row 1: Back & Title */}
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <button
-            onClick={() => setIsDiagnosticMode(prev => !prev)}
-            className={`px-4 py-2 text-xs font-bold rounded-lg flex items-center gap-2 cursor-pointer transition-all border transform hover:-translate-y-0.5 active:translate-y-0 ${
-              isDiagnosticMode
-                ? 'bg-amber-600 border-amber-700 text-white shadow-md hover:bg-amber-700 shadow-amber-100/50'
-                : 'bg-white border-slate-200 text-amber-700 hover:text-amber-800 hover:bg-amber-50 shadow-xs'
-            }`}
-            title="Aktifkan Mode Diagnostik untuk meninjau tata letak PDF secara presisi 1:1"
+            onClick={onBack}
+            className="px-4 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 flex items-center gap-2 cursor-pointer transition-colors shadow-xs"
           >
-            <Wrench className="h-4 w-4" />
-            <span>{isDiagnosticMode ? 'Tutup Diagnostik' : 'Mode Diagnostik'}</span>
-          </button>
-
-          <button
-            onClick={onDownloadExcel}
-            className="px-4 py-2 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg flex items-center gap-2 cursor-pointer transition-colors shadow-xs"
-          >
-            <FileSpreadsheet className="h-4 w-4" /> Excel (.xlsx)
+            <ArrowLeft className="h-4 w-4" /> Kembali ke Grid Excel
           </button>
           
           <button
-            onClick={handleDownloadAllPDFs}
-            disabled={isGeneratingPdf || isGeneratingAll || isGeneratingClassZip || isUploadingToDrive || isSyncingAllToDrive || selectedStudents.length === 0}
-            className={`px-4 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-lg flex items-center gap-2 cursor-pointer transition-all shadow-md hover:shadow-amber-100 transform hover:-translate-y-0.5 active:translate-y-0 min-w-36 justify-center ${isGeneratingAll ? 'opacity-75 cursor-not-allowed' : ''}`}
+            onClick={() => setIsToolsExpandedMobile(prev => !prev)}
+            className="lg:hidden px-3.5 py-2 text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
           >
-            {isGeneratingAll ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span>Memproses...</span>
-              </>
-            ) : (
-              <>
-                <Archive className="h-4 w-4" />
-                <span>Unduh ZIP Terpilih ({selectedStudents.length})</span>
-              </>
-            )}
+            <Sliders className="h-4 w-4 text-indigo-600" />
+            <span>Alat & Ekspor Lainnya</span>
+            <span className={`transition-transform duration-200 ${isToolsExpandedMobile ? 'rotate-180' : ''}`}>▼</span>
+          </button>
+        </div>
+
+        {/* Row 2: Standard Quick Actions (Responsive Grid) */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:flex lg:flex-wrap gap-2.5">
+          {/* 1. Cetak Langsung / Massal */}
+          <button
+            onClick={handlePrint}
+            disabled={isGeneratingPdf || isGeneratingAll || isGeneratingClassZip || isUploadingToDrive || isSyncingAllToDrive || selectedStudents.length === 0}
+            className={`px-3 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer transition-all shadow-md hover:shadow-indigo-100/50 ${
+              isGeneratingPdf || isGeneratingAll || isUploadingToDrive || isSyncingAllToDrive || isGeneratingClassZip ? 'opacity-50 cursor-allowed' : ''
+            }`}
+          >
+            <Printer className="h-4 w-4" />
+            <span className="truncate">{selectedStudents.length > 1 ? `Cetak Massal (${selectedStudents.length})` : 'Cetak Rapor'}</span>
           </button>
 
+          {/* 2. Unduh PDF / Gabungan */}
           <button
-            onClick={handleDownloadClassZIP}
-            disabled={isGeneratingPdf || isGeneratingAll || isGeneratingClassZip || isUploadingToDrive || isSyncingAllToDrive || classStudents.length === 0}
-            className={`px-4 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg flex items-center gap-2 cursor-pointer transition-all shadow-md hover:shadow-emerald-100 transform hover:-translate-y-0.5 active:translate-y-0 min-w-36 justify-center ${isGeneratingClassZip ? 'opacity-75 cursor-not-allowed' : ''}`}
-          >
-            {isGeneratingClassZip ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span>Memproses ZIP ({classZipStatus.current}/{classZipStatus.total})...</span>
-              </>
-            ) : (
-              <>
-                <Archive className="h-4 w-4" />
-                <span>Unduh ZIP Satu Kelas ({classStudents.length})</span>
-              </>
-            )}
-          </button>
-
-          <button
-            onClick={handleDownloadPDF}
+            onClick={() => setExportConfirmTarget('PDF_SELECTED')}
             disabled={isGeneratingPdf || isGeneratingAll || isGeneratingClassZip || isUploadingToDrive || isSyncingAllToDrive || selectedStudents.length === 0}
-            className={`px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-lg flex items-center gap-2 cursor-pointer transition-all shadow-md hover:shadow-rose-100 transform hover:-translate-y-0.5 active:translate-y-0 ${isGeneratingPdf ? 'opacity-75 cursor-not-allowed' : ''}`}
+            className={`px-3 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer transition-all shadow-md hover:shadow-rose-100/50 ${isGeneratingPdf ? 'opacity-75 cursor-not-allowed' : ''}`}
           >
             {isGeneratingPdf ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
-                <span>Mengekspor...</span>
+                <span className="truncate">Proses...</span>
               </>
             ) : (
               <>
                 <FileText className="h-4 w-4" />
-                <span>{selectedStudents.length > 1 ? `Unduh Gabungan PDF (${selectedStudents.length})` : 'Unduh PDF'}</span>
+                <span className="truncate">{selectedStudents.length > 1 ? `PDF Gabungan (${selectedStudents.length})` : 'Unduh PDF'}</span>
               </>
             )}
           </button>
 
+          {/* 3. Excel Download */}
           <button
-            onClick={handleSaveToDrive}
-            disabled={isUploadingToDrive || isGeneratingPdf || isGeneratingAll || isGeneratingClassZip || isSyncingAllToDrive || selectedStudents.length === 0}
-            className={`px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg flex items-center gap-2 cursor-pointer transition-all shadow-md hover:shadow-blue-100 transform hover:-translate-y-0.5 active:translate-y-0 ${isUploadingToDrive ? 'opacity-75 cursor-not-allowed' : ''}`}
+            onClick={() => setExportConfirmTarget('EXCEL')}
+            className="px-3 py-2 text-xs font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg flex items-center justify-center gap-1.5 cursor-pointer transition-colors shadow-xs"
           >
-            {isUploadingToDrive ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span>Menyimpan ke Drive...</span>
-              </>
-            ) : (
-              <>
-                <Cloud className="h-4 w-4" />
-                <span>Simpan ke Drive</span>
-              </>
-            )}
+            <FileSpreadsheet className="h-4 w-4 text-emerald-700" />
+            <span className="truncate">Excel (.xlsx)</span>
           </button>
 
-          <button
-            id="sync-google-drive-btn"
-            onClick={handleSyncAllToDrive}
-            disabled={isSyncingAllToDrive || isUploadingToDrive || isGeneratingPdf || isGeneratingAll || isGeneratingClassZip || classStudents.length === 0}
-            className={`px-4 py-2 text-xs font-bold text-white bg-teal-600 hover:bg-teal-700 rounded-lg flex items-center gap-2 cursor-pointer transition-all shadow-md hover:shadow-teal-100 transform hover:-translate-y-0.5 active:translate-y-0 ${isSyncingAllToDrive ? 'opacity-75 cursor-not-allowed' : ''}`}
-          >
-            {isSyncingAllToDrive ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span>Syncing ({syncStatus.current}/{syncStatus.total})...</span>
-              </>
-            ) : (
-              <>
-                <Cloud className="h-4 w-4 animate-pulse" />
-                <span>Sync to Google Drive</span>
-              </>
-            )}
-          </button>
+          {/* On Desktop, we show the rest inline. On Mobile, we hide them in the collapsible panel under row 2 */}
+          <div className="hidden lg:flex lg:flex-wrap gap-2.5 items-center w-full lg:w-auto mt-2 lg:mt-0">
+            {/* Auto-Fit Toggle Desktop */}
+            <div className="flex items-center gap-2 bg-white border border-slate-200 px-3 py-1 bg-slate-50 border-r-0 rounded-l-lg hover:bg-slate-100 transition-colors">
+              <button onClick={() => { setIsAutoFitPreview(false); setZoomLevel(prev => Math.max(0.5, prev - 0.1)); }} className="text-slate-500 hover:text-indigo-600 font-extrabold cursor-pointer px-1">-</button>
+              <span className="text-[10px] font-bold text-slate-700 w-8 text-center">{Math.round(zoomLevel * 100)}%</span>
+              <button onClick={() => { setIsAutoFitPreview(false); setZoomLevel(prev => Math.min(2, prev + 0.1)); }} className="text-slate-500 hover:text-indigo-600 font-extrabold cursor-pointer px-1">+</button>
+            </div>
+            <label className="flex items-center gap-1.5 cursor-pointer select-none bg-white border border-slate-200 px-3 py-1.5 rounded-r-lg border-l hover:bg-slate-50 transition-colors mr-2">
+              <input
+                type="checkbox"
+                checked={isAutoFitPreview}
+                onChange={(e) => {
+                  setIsAutoFitPreview(e.target.checked);
+                  if (e.target.checked) setZoomLevel(1);
+                }}
+                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-505 h-3.5 w-3.5 cursor-pointer"
+              />
+              <span className="text-[10px] font-extrabold text-slate-700">Autofit Preview</span>
+            </label>
 
-          <button
-            onClick={handlePrint}
-            disabled={isGeneratingPdf || isGeneratingAll || isGeneratingClassZip || isUploadingToDrive || isSyncingAllToDrive || selectedStudents.length === 0}
-            className={`px-5 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg flex items-center gap-2 cursor-pointer transition-all shadow-md hover:shadow-indigo-100 transform hover:-translate-y-0.5 active:translate-y-0 ${isGeneratingPdf || isGeneratingAll || isUploadingToDrive || isSyncingAllToDrive || isGeneratingClassZip ? 'opacity-50 cursor-not-allowed' : ''}`}
-          >
-            <Printer className="h-4 w-4" /> {selectedStudents.length > 1 ? `Cetak Massal (${selectedStudents.length})` : 'Cetak Langsung'}
-          </button>
+            {/* Margin Guide Toggle */}
+            <label className="flex items-center gap-1.5 cursor-pointer select-none bg-white border border-slate-200 px-3 py-1.5 rounded-lg hover:bg-slate-50 transition-colors mr-2">
+              <input
+                type="checkbox"
+                checked={showMarginsGuide}
+                onChange={(e) => setShowMarginsGuide(e.target.checked)}
+                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-505 h-3.5 w-3.5 cursor-pointer"
+              />
+              <span className="text-[10px] font-extrabold text-slate-700">Margin Guide</span>
+            </label>
+
+            {/* Optimize Print checkbox */}
+            <label className="flex items-center gap-1.5 cursor-pointer select-none bg-white border border-slate-200 px-3 py-1.5 rounded-lg hover:bg-slate-50 transition-colors">
+              <input
+                type="checkbox"
+                checked={isPrintOptimizeEnabled}
+                onChange={(e) => setIsPrintOptimizeEnabled(e.target.checked)}
+                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-505 h-3.5 w-3.5 cursor-pointer"
+              />
+              <span className="text-[10px] font-extrabold text-slate-700">Optimize Print (A4)</span>
+            </label>
+
+            {/* Diagnostic Mode */}
+            <button
+              onClick={() => setIsDiagnosticMode(prev => !prev)}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg flex items-center gap-1.5 cursor-pointer transition-all border ${
+                isDiagnosticMode
+                  ? 'bg-amber-600 border-amber-700 text-white hover:bg-amber-700'
+                  : 'bg-white border-slate-200 text-amber-700 hover:bg-amber-50'
+              }`}
+              title="Audit tata letak PDF 1:1"
+            >
+              <Wrench className="h-3.5 w-3.5" />
+              <span>Diagnostic</span>
+            </button>
+
+            {/* ZIP Selected */}
+            <button
+              onClick={() => setExportConfirmTarget('ZIP_SELECTED')}
+              disabled={isGeneratingPdf || isGeneratingAll || isGeneratingClassZip || isUploadingToDrive || isSyncingAllToDrive || selectedStudents.length === 0}
+              className="px-3 py-1.5 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-lg flex items-center gap-1.5 cursor-pointer transition-all disabled:opacity-50"
+            >
+              <Archive className="h-3.5 w-3.5" />
+              <span>ZIP Terpilih ({selectedStudents.length})</span>
+            </button>
+
+            {/* ZIP Class */}
+            <button
+              onClick={() => setExportConfirmTarget('ZIP_CLASS')}
+              disabled={isGeneratingPdf || isGeneratingAll || isGeneratingClassZip || isUploadingToDrive || isSyncingAllToDrive || classStudents.length === 0}
+              className="px-3 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg flex items-center gap-1.5 cursor-pointer transition-all disabled:opacity-50"
+            >
+              <Archive className="h-3.5 w-3.5" />
+              <span>Ekspor ZIP Kelas</span>
+            </button>
+
+            {/* Class PDF Combined */}
+            <button
+              onClick={() => setExportConfirmTarget('PDF_CLASS')}
+              disabled={isGeneratingClassPdf || isGeneratingPdf || isGeneratingAll || isGeneratingClassZip || isUploadingToDrive || isSyncingAllToDrive || classStudents.length === 0}
+              className="px-3 py-1.5 text-xs font-bold text-white bg-violet-600 hover:bg-violet-700 rounded-lg flex items-center gap-1.5 cursor-pointer transition-all disabled:opacity-50"
+            >
+              <FileText className="h-3.5 w-3.5" />
+              <span>PDF Kelas</span>
+            </button>
+
+            {/* Save single to GDrive */}
+            <button
+              onClick={handleSaveToDrive}
+              disabled={isUploadingToDrive || isGeneratingPdf || isGeneratingAll || isGeneratingClassZip || isSyncingAllToDrive || selectedStudents.length === 0}
+              className="px-3 py-1.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg flex items-center gap-1.5 cursor-pointer transition-all disabled:opacity-50"
+            >
+              <Cloud className="h-3.5 w-3.5" />
+              <span>Ke Drive</span>
+            </button>
+
+            {/* Sync all class to GDrive */}
+            <button
+              onClick={handleSyncAllToDrive}
+              disabled={isSyncingAllToDrive || isUploadingToDrive || isGeneratingPdf || isGeneratingAll || isGeneratingClassZip || classStudents.length === 0}
+              className="px-3 py-1.5 text-xs font-bold text-white bg-teal-600 hover:bg-teal-700 rounded-lg flex items-center gap-1.5 cursor-pointer transition-all disabled:opacity-50"
+            >
+              <Cloud className="h-3.5 w-3.5" />
+              <span>Sync Drive</span>
+            </button>
+          </div>
         </div>
+
+        {/* Collapsible secondary panel for mobile */}
+        {isToolsExpandedMobile && (
+          <div className="lg:hidden p-3.5 bg-white border border-slate-200 rounded-xl flex flex-col gap-3 animate-in slide-in-from-top-2 duration-200 mt-1">
+            <span className="text-[10px] font-bold text-slate-400 border-b border-slate-100 pb-1.5 uppercase block">⚙️ Opsi Penyesuaian & Format Lainnya</span>
+            
+            {/* Toggles */}
+            <div className="grid grid-cols-2 gap-2">
+              <label className="flex items-center gap-2 cursor-pointer select-none bg-slate-50 border border-slate-200 p-2 rounded-lg hover:bg-slate-100">
+                <input
+                  type="checkbox"
+                  checked={isAutoFitPreview}
+                  onChange={(e) => setIsAutoFitPreview(e.target.checked)}
+                  className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
+                />
+                <span className="text-xs font-semibold text-slate-700">Autofit Preview</span>
+              </label>
+
+              <label className="flex items-center gap-2 cursor-pointer select-none bg-slate-50 border border-slate-200 p-2 rounded-lg hover:bg-slate-100">
+                <input
+                  type="checkbox"
+                  checked={isPrintOptimizeEnabled}
+                  onChange={(e) => setIsPrintOptimizeEnabled(e.target.checked)}
+                  className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
+                />
+                <span className="text-xs font-semibold text-slate-700">Optimize Print (A4)</span>
+              </label>
+            </div>
+
+            {/* System operations Buttons Grid */}
+            <div className="grid grid-cols-2 gap-2 mt-1">
+              <button
+                onClick={() => {
+                  setIsDiagnosticMode(prev => !prev);
+                  setIsToolsExpandedMobile(false);
+                }}
+                className={`p-2.5 rounded-lg border text-xs font-bold flex items-center justify-center gap-1.5 ${
+                  isDiagnosticMode 
+                    ? 'bg-amber-600 border-amber-700 text-white' 
+                    : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                <Wrench className="h-3.5 w-3.5" />
+                <span>Mode Diagnostik</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setExportConfirmTarget('ZIP_SELECTED');
+                  setIsToolsExpandedMobile(false);
+                }}
+                disabled={isGeneratingPdf || isGeneratingAll || isGeneratingClassZip || isUploadingToDrive || isSyncingAllToDrive || selectedStudents.length === 0}
+                className="p-2.5 rounded-lg bg-amber-605 hover:bg-amber-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 disabled:opacity-50"
+              >
+                <Archive className="h-3.5 w-3.5" />
+                <span>ZIP Terpilih ({selectedStudents.length})</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setExportConfirmTarget('ZIP_CLASS');
+                  setIsToolsExpandedMobile(false);
+                }}
+                disabled={isGeneratingPdf || isGeneratingAll || isGeneratingClassZip || isUploadingToDrive || isSyncingAllToDrive || classStudents.length === 0}
+                className="p-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 disabled:opacity-50"
+              >
+                <Archive className="h-3.5 w-3.5" />
+                <span>Ekspor ZIP Kelas</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setExportConfirmTarget('PDF_CLASS');
+                  setIsToolsExpandedMobile(false);
+                }}
+                disabled={isGeneratingClassPdf || isGeneratingPdf || isGeneratingAll || isGeneratingClassZip || isUploadingToDrive || isSyncingAllToDrive || classStudents.length === 0}
+                className="p-2.5 rounded-lg bg-violet-650 hover:bg-violet-750 text-white text-xs font-bold flex items-center justify-center gap-1.5 disabled:opacity-50"
+              >
+                <FileText className="h-3.5 w-3.5" />
+                <span>PDF Kelas</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  handleSaveToDrive();
+                  setIsToolsExpandedMobile(false);
+                }}
+                disabled={isUploadingToDrive || isGeneratingPdf || isGeneratingAll || isGeneratingClassZip || isSyncingAllToDrive || selectedStudents.length === 0}
+                className="p-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 disabled:opacity-50"
+              >
+                <Cloud className="h-3.5 w-3.5" />
+                <span>Simpan ke Drive</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  handleSyncAllToDrive();
+                  setIsToolsExpandedMobile(false);
+                }}
+                disabled={isSyncingAllToDrive || isUploadingToDrive || isGeneratingPdf || isGeneratingAll || isGeneratingClassZip || classStudents.length === 0}
+                className="p-2.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 disabled:opacity-50"
+              >
+                <Cloud className="h-3.5 w-3.5" />
+                <span>Sync to GDrive</span>
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Visual notice */}
@@ -1164,108 +1625,157 @@ export default function RaporCetak({
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start no-print">
         {/* STUDENT SELECTION SIDEBAR */}
-        <div className="lg:col-span-1 bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-col gap-4 h-fit lg:sticky lg:top-6 selection:bg-transparent">
-          <div className="flex flex-col gap-1 pb-3 border-b border-slate-100">
-            <h3 className="font-bold text-slate-800 text-xs tracking-tight flex items-center gap-2">
-              <Award className="h-4 w-4 text-indigo-600 flex-none" />
-              Daftar Siswa Kelas {selectedClass}
-            </h3>
-            <p className="text-[10px] text-slate-500 leading-normal">
-              Pilih satu atau beberapa siswa untuk pratinjau, cetak massal, atau ekspor gabungan.
-            </p>
-          </div>
-
-          {/* Search bar */}
-          <div className="relative">
-            <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Cari nama / NIS..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-indigo-500 focus:bg-white text-slate-700 transition-all placeholder:text-slate-400"
-            />
-          </div>
-
-          {/* Selection stats & Select All */}
-          <div className="flex items-center justify-between py-1 bg-slate-50 px-2 rounded-lg border border-slate-100">
-            <label className="flex items-center gap-2 cursor-pointer select-none py-1 flex-1">
-              <input
-                type="checkbox"
-                checked={filteredClassStudents.length > 0 && filteredClassStudents.every(s => selectedNisList.includes(s.nis))}
-                ref={(el) => {
-                  if (el) {
-                    const someSelected = filteredClassStudents.some(s => selectedNisList.includes(s.nis));
-                    const allSelected = filteredClassStudents.every(s => selectedNisList.includes(s.nis));
-                    el.indeterminate = someSelected && !allSelected;
-                  }
-                }}
-                onChange={(e) => handleSelectAll(e.target.checked)}
-                className="rounded border border-slate-300 text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5 cursor-pointer accent-indigo-600"
-              />
-              <span className="text-[11px] font-bold text-slate-700">Pilih Semua</span>
-            </label>
-            <span className="text-[9px] font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded-md flex-none">
-              {selectedNisList.length} / {classStudents.length}
-            </span>
-          </div>
-
-          {/* Students Scroll List */}
-          <div className="flex flex-col gap-1 max-h-[500px] overflow-y-auto pr-1">
-            {filteredClassStudents.length === 0 ? (
-              <div className="text-center py-6 text-slate-400 text-xs font-medium">
-                Siswa tidak ditemukan
+        <div className="lg:col-span-1 bg-white border border-slate-200 rounded-2xl p-3 sm:p-4 shadow-sm flex flex-col gap-3 h-fit lg:sticky lg:top-6 selection:bg-transparent">
+          {/* Mobile Collapse Header toggle */}
+          <div className="flex items-center justify-between pb-1 lg:pb-3 lg:border-b lg:border-slate-100">
+            <div className="flex flex-col gap-1">
+              <h3 className="font-bold text-slate-800 text-xs tracking-tight flex items-center gap-1.5 justify-start">
+                <Award className="h-4 w-4 text-indigo-600 flex-none" />
+                Daftar Siswa Kelas {selectedClass}
+              </h3>
+              <p className="text-[10px] text-slate-500 leading-normal hidden lg:block">
+                Pilih satu atau beberapa siswa untuk pratinjau, cetak massal, atau ekspor gabungan.
+              </p>
+              {/* Active preview name display widget details on mobile */}
+              <div className="lg:hidden text-[10px] text-indigo-800 bg-indigo-55/65 border border-indigo-100/50 px-2 py-0.5 rounded-md font-bold mt-1 max-w-[180px] sm:max-w-xs truncate">
+                Siswa: {classStudents.find(cs => cs.nis === previewNis)?.name || '-'}
               </div>
-            ) : (
-              filteredClassStudents.map((s) => {
-                const isChecked = selectedNisList.includes(s.nis);
-                const isActivePreview = s.nis === previewNis;
-                return (
-                  <div
-                    key={s.nis}
-                    onClick={() => setPreviewNis(s.nis)}
-                    className={`group w-full flex items-center justify-between p-2 rounded-xl border transition-all text-left cursor-pointer ${
-                      isActivePreview
-                        ? 'bg-indigo-50 border-indigo-200'
-                        : 'bg-white border-slate-100 hover:bg-slate-50 hover:border-slate-200'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                      <div 
-                        onClick={(e) => {
-                          e.stopPropagation(); // Avoid changing preview when clicking checkbox
-                          handleToggleStudent(s.nis);
-                        }}
-                        className="flex items-center justify-center p-0.5"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          readOnly
-                          className="rounded border border-slate-300 text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5 cursor-pointer accent-indigo-600"
-                        />
+            </div>
+            
+            <button
+              onClick={() => setIsSidebarOpenMobile(prev => !prev)}
+              className="lg:hidden px-3 py-1.5 text-[11px] font-bold text-slate-700 bg-slate-100 border border-slate-200 rounded-lg flex items-center gap-1 transition-all cursor-pointer"
+            >
+              <span>{isSidebarOpenMobile ? 'Sembunyikan' : 'Pilih Siswa'}</span>
+              <span className={`text-[9px] transition-transform duration-200 ${isSidebarOpenMobile ? 'rotate-180' : ''}`}>▼</span>
+            </button>
+          </div>
+
+          <div className={`${isSidebarOpenMobile ? 'flex' : 'hidden lg:flex'} flex-col gap-3.5`}>
+            {/* Filter print status */}
+            <div className="flex bg-slate-200 p-0.5 rounded-lg border border-slate-300">
+              <button
+                onClick={() => setFilterPrintedStatus('all')}
+                className={`flex-1 px-2 py-1.5 text-[10px] sm:text-xs font-semibold rounded-md transition-colors ${filterPrintedStatus === 'all' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+              >
+                Semua
+              </button>
+              <button
+                onClick={() => setFilterPrintedStatus('not_printed')}
+                className={`flex-1 px-2 py-1.5 text-[10px] sm:text-xs font-semibold rounded-md transition-colors ${filterPrintedStatus === 'not_printed' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+              >
+                Belum
+              </button>
+              <button
+                onClick={() => setFilterPrintedStatus('printed')}
+                className={`flex-1 px-2 py-1.5 text-[10px] sm:text-xs font-semibold rounded-md transition-colors ${filterPrintedStatus === 'printed' ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
+              >
+                Dicetak
+              </button>
+            </div>
+
+            {/* Search bar */}
+            <div className="relative">
+              <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Cari nama / NIS..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-indigo-500 focus:bg-white text-slate-700 transition-all placeholder:text-slate-400"
+              />
+            </div>
+
+            {/* Selection stats & Select All */}
+            <div className="flex items-center justify-between py-1 bg-slate-50 px-2 rounded-lg border border-slate-100">
+              <label className="flex items-center gap-2 cursor-pointer select-none py-1 flex-1">
+                <input
+                  type="checkbox"
+                  checked={filteredClassStudents.length > 0 && filteredClassStudents.every(s => selectedNisList.includes(s.nis))}
+                  ref={(el) => {
+                    if (el) {
+                      const someSelected = filteredClassStudents.some(s => selectedNisList.includes(s.nis));
+                      const allSelected = filteredClassStudents.every(s => selectedNisList.includes(s.nis));
+                      el.indeterminate = someSelected && !allSelected;
+                    }
+                  }}
+                  onChange={(e) => handleSelectAll(e.target.checked)}
+                  className="rounded border border-slate-300 text-indigo-600 focus:ring-indigo-550 h-3.5 w-3.5 cursor-pointer accent-indigo-600"
+                />
+                <span className="text-[11px] font-bold text-slate-700">Pilih Semua</span>
+              </label>
+              <span className="text-[9px] font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded-md flex-none">
+                {selectedNisList.length} / {classStudents.length}
+              </span>
+            </div>
+
+            {/* Students Scroll List */}
+            <div className="flex flex-col gap-1 max-h-[300px] lg:max-h-[500px] overflow-y-auto pr-1">
+              {filteredClassStudents.length === 0 ? (
+                <div className="text-center py-6 text-slate-400 text-xs font-medium">
+                  Siswa tidak ditemukan
+                </div>
+              ) : (
+                filteredClassStudents.map((s) => {
+                  const isChecked = selectedNisList.includes(s.nis);
+                  const isActivePreview = s.nis === previewNis;
+                  return (
+                    <div
+                      key={s.nis}
+                      onClick={() => {
+                        setPreviewNis(s.nis);
+                        if (selectedNisList.length === 1 || !selectedNisList.includes(s.nis)) {
+                          setSelectedNisList([s.nis]);
+                        }
+                      }}
+                      className={`group w-full flex items-center justify-between p-2 rounded-xl border transition-all text-left cursor-pointer ${
+                        isActivePreview
+                          ? 'bg-indigo-50 border-indigo-200'
+                          : 'bg-white border-slate-100 hover:bg-slate-50 hover:border-slate-200'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                        <div 
+                          onClick={(e) => {
+                            e.stopPropagation(); // Avoid changing preview when clicking checkbox
+                            handleToggleStudent(s.nis);
+                          }}
+                          className="flex items-center justify-center p-0.5"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            readOnly
+                            className="rounded border border-slate-300 text-indigo-600 focus:ring-indigo-550 h-3.5 w-3.5 cursor-pointer accent-indigo-605"
+                          />
+                        </div>
+                        <div className="min-w-0 pr-1 flex-1">
+                          <p className={`text-[11px] font-bold truncate flex items-center gap-1.5 ${
+                            isActivePreview ? 'text-indigo-900' : 'text-slate-800'
+                          }`}>
+                            {s.name}
+                            {s.printStatus && (
+                              <span title="Berhasil Dicetak / Diunduh" className="flex items-center justify-center bg-emerald-50 text-emerald-600 rounded-full p-0.5">
+                                <Check className="w-3 h-3" />
+                              </span>
+                            )}
+                          </p>
+                          <p className="text-[9px] text-slate-400 font-mono mt-0.5">
+                            NIS. {s.nis}
+                          </p>
+                        </div>
                       </div>
-                      <div className="min-w-0 pr-1 flex-1">
-                        <p className={`text-[11px] font-bold uppercase truncate ${
-                          isActivePreview ? 'text-indigo-900' : 'text-slate-800'
-                        }`}>
-                          {s.name}
-                        </p>
-                        <p className="text-[9px] text-slate-400 font-mono mt-0.5">
-                          NIS. {s.nis}
-                        </p>
-                      </div>
+                      
+                      {isActivePreview && (
+                        <span className="text-[8px] font-bold text-indigo-605 bg-indigo-100/50 px-1 py-0.5 rounded flex-none uppercase tracking-wider scale-90">
+                          Aktif
+                        </span>
+                      )}
                     </div>
-                    
-                    {isActivePreview && (
-                      <span className="text-[8px] font-bold text-indigo-600 bg-indigo-100/50 px-1 py-0.5 rounded flex-none uppercase tracking-wider scale-90">
-                        Aktif
-                      </span>
-                    )}
-                  </div>
-                );
-              })
-            )}
+                  );
+                })
+              )}
+            </div>
           </div>
         </div>
 
@@ -1318,12 +1828,36 @@ export default function RaporCetak({
                       <Layers className="h-3.5 w-3.5 text-amber-700" /> Tampilkan Kisi Grid Ruler (Milimeter)
                     </span>
                   </label>
+
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={isLandscape}
+                      onChange={(e) => setIsLandscape(e.target.checked)}
+                      className="rounded border-amber-400 text-amber-700 focus:ring-amber-500 h-4 w-4 cursor-pointer accent-amber-700"
+                    />
+                    <span className="font-bold flex items-center gap-1">
+                      <FileText className="h-3.5 w-3.5 text-amber-700" /> Orientasi Print Landscape
+                    </span>
+                  </label>
                 </div>
               </div>
 
               {/* SIMULATED WORKBENCH CANVAS */}
-              <div className="bg-slate-700/90 p-8 rounded-2xl border border-slate-600 shadow-inner flex flex-col items-center gap-8 overflow-x-auto select-none no-print">
-                <div className={`simulate-print w-fit ${showMarginsGuide ? 'show-margins-guide' : ''} ${showGridRuler ? 'show-grid-ruler' : ''}`}>
+              <div 
+                ref={canvasContainerRef}
+                className="bg-slate-700/90 p-4 sm:p-8 rounded-2xl border border-slate-600 shadow-inner overflow-x-auto overflow-y-hidden select-none no-print w-full flex justify-start sm:justify-center"
+              >
+                <div 
+                  className={`simulate-print w-fit shrink-0 ${showMarginsGuide ? 'show-margins-guide' : ''} ${showGridRuler ? 'show-grid-ruler' : ''}`}
+                  style={scaleFactor < 1 ? {
+                    transform: `scale(${scaleFactor})`,
+                    transformOrigin: 'top left',
+                    width: '794px',
+                    marginBottom: `${marginOffset}px`,
+                    transition: 'transform 0.15s ease-out'
+                  } : undefined}
+                >
                   
                   {/* PRINT PAGE 1 SIMULATION */}
                   <div className="print-page relative">
@@ -1333,7 +1867,7 @@ export default function RaporCetak({
                         <div className="flex items-start gap-4 mb-0.5">
                           <div className="h-20 w-20 flex flex-col justify-center items-center flex-none">
                             {kopSekolah.logoUrl ? (
-                              <img src={kopSekolah.logoUrl} alt="Logo Sekolah" className="max-h-20 max-w-20 object-contain" referrerPolicy="no-referrer" crossOrigin="anonymous" />
+                              <img src={kopSekolah.logoUrl} alt="Logo Sekolah" className="max-h-20 max-w-20 object-contain" referrerPolicy="no-referrer" crossOrigin={kopSekolah.logoUrl.startsWith('data:') ? undefined : 'anonymous'} />
                             ) : (
                               <div className="h-20 w-20 bg-neutral-100 flex items-center justify-center font-sans font-bold text-xs">LOGO</div>
                             )}
@@ -1371,7 +1905,7 @@ export default function RaporCetak({
                         <div className="flex items-center">
                           <span className="w-24 font-bold flex-none text-left">NAMA</span>
                           <span className="mr-2 font-bold">:</span>
-                          <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5 uppercase text-left">{activeStudent.name}</span>
+                          <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5 text-left">{activeStudent.name}</span>
                         </div>
                         <div className="flex items-center text-[9pt]">
                           <span className="w-28 font-bold flex-none text-left">NOMOR INDUK</span>
@@ -1391,7 +1925,7 @@ export default function RaporCetak({
                       </div>
 
                       {/* Table */}
-                      <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
+                      <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug table-fixed avoid-break">
                         <colgroup>
                           <col style={{ width: '15%' }} />
                           <col style={{ width: '41%' }} />
@@ -1434,7 +1968,7 @@ export default function RaporCetak({
                         <tbody>
                           {/* Cinta Tanah Air */}
                           {categories.find(c => c.id === 'CTA')?.indicators.map((ind, i) => {
-                            const activeScore = activeStudent.grades[ind.id] || 'B';
+                            const activeScore = activeStudent.grades[ind.id];
                             return (
                               <tr key={ind.id}>
                                 {i === 0 && (
@@ -1466,7 +2000,7 @@ export default function RaporCetak({
 
                           {/* Disiplin */}
                           {categories.find(c => c.id === 'DSP')?.indicators.map((ind, i) => {
-                            const activeScore = activeStudent.grades[ind.id] || 'B';
+                            const activeScore = activeStudent.grades[ind.id];
                             return (
                               <tr key={ind.id}>
                                 {i === 0 && (
@@ -1498,7 +2032,7 @@ export default function RaporCetak({
 
                           {/* Berbudi Luhur (3 indicators) */}
                           {categories.find(c => c.id === 'BBL')?.indicators.map((ind, i) => {
-                            const activeScore = activeStudent.grades[ind.id] || 'B';
+                            const activeScore = activeStudent.grades[ind.id];
                             return (
                               <tr key={ind.id}>
                                 {i === 0 && (
@@ -1533,7 +2067,7 @@ export default function RaporCetak({
                             const certCat = categories.find(c => c.id === 'CRD');
                             if (!certCat || certCat.indicators.length === 0) return null;
                             const ind = certCat.indicators[0];
-                            const activeScore = activeStudent.grades[ind.id] || 'B';
+                            const activeScore = activeStudent.grades[ind.id];
                             return (
                               <tr key={ind.id}>
                                 <td 
@@ -1568,7 +2102,7 @@ export default function RaporCetak({
                   <div className="print-page relative">
                     <div className="flex flex-col gap-4">
                       {/* Table continuation on Page 2 */}
-                      <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
+                      <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug table-fixed avoid-break">
                         <colgroup>
                           <col style={{ width: '15%' }} />
                           <col style={{ width: '41%' }} />
@@ -1584,7 +2118,7 @@ export default function RaporCetak({
                             if (!certCat || certCat.indicators.length < 2) return null;
                             const remaining = certCat.indicators.slice(1);
                             return remaining.map((ind, idx) => {
-                              const activeScore = activeStudent.grades[ind.id] || 'B';
+                              const activeScore = activeStudent.grades[ind.id];
                               return (
                                 <tr key={ind.id}>
                                   {idx === 0 && (
@@ -1615,7 +2149,7 @@ export default function RaporCetak({
 
                           {/* Terampil (3 indicators) */}
                           {categories.find(c => c.id === 'TRM')?.indicators.map((ind, i) => {
-                            const activeScore = activeStudent.grades[ind.id] || 'B';
+                            const activeScore = activeStudent.grades[ind.id];
                             return (
                               <tr key={ind.id}>
                                 {i === 0 && (
@@ -1674,8 +2208,8 @@ export default function RaporCetak({
                           <div className="bg-neutral-100 border-b border-black p-1.5">
                             <p className="font-bold text-[9pt] text-black text-left">Catatan Orang Tua/Wali:</p>
                           </div>
-                          <div className="p-2.5 min-h-[85px] text-justify text-[9pt] text-slate-500 italic leading-relaxed font-sans">
-                            {activeStudent.catatanOrangTua || 'Kami berkomitmen untuk terus membimbing anak di rumah sesuai arahan sekolah.'}
+                          <div className="p-2.5 min-h-[85px] text-justify text-[9pt] text-slate-500 italic leading-relaxed font-sans whitespace-pre-wrap">
+                            {activeStudent.catatanOrangTua !== undefined ? activeStudent.catatanOrangTua : 'Kami berkomitmen untuk terus membimbing anak di rumah sesuai arahan sekolah.'}
                           </div>
                         </div>
                       </div>
@@ -1687,27 +2221,51 @@ export default function RaporCetak({
                         </p>
                         <div className="grid grid-cols-2 gap-12 text-center text-sans">
                           {/* Orang Tua */}
-                          <div className="flex flex-col items-center justify-between h-32">
+                          <div className="flex flex-col items-center justify-between h-32 relative">
                             <p className="text-[10.5pt] text-black font-bold select-none">Orang Tua / Wali</p>
+                            <div className="h-16 flex items-center justify-center relative w-full">
+                              {kopSekolah.signatureParentUrl ? (
+                                <img
+                                  src={kopSekolah.signatureParentUrl}
+                                  alt="Tanda Tangan Orang Tua"
+                                  className="max-h-16 max-w-[180px] object-contain"
+                                  referrerPolicy="no-referrer"
+                                />
+                              ) : (
+                                <div className="h-4"></div>
+                              )}
+                            </div>
                             <div className="flex flex-col items-center w-full">
                               <div className="w-48 border-b-[1.5px] border-black pb-0.5"></div>
-                              <p className="text-[8pt] text-slate-500 font-sans mt-1.5 italic select-none">Tanda Tangan & Nama Terang</p>
+                              <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none">Tanda Tangan & Nama Terang</p>
                             </div>
                           </div>
 
                           {/* Guru Kelas */}
-                          <div className="flex flex-col items-center justify-between h-32">
+                          <div className="flex flex-col items-center justify-between h-32 relative">
                             <p className="text-[10.5pt] text-black font-bold">Guru Kelas / Wali Kelas</p>
+                            <div className="h-16 flex items-center justify-center relative w-full">
+                              {kopSekolah.signatureTeacherUrl ? (
+                                <img
+                                  src={kopSekolah.signatureTeacherUrl}
+                                  alt="Tanda Tangan Guru"
+                                  className="max-h-16 max-w-[180px] object-contain"
+                                  referrerPolicy="no-referrer"
+                                />
+                              ) : (
+                                <div className="h-4"></div>
+                              )}
+                            </div>
                             <div className="flex flex-col items-center w-full font-sans">
-                              <p className="font-bold text-black text-[10.5pt] text-center uppercase leading-tight select-all underline underline-offset-4 decoration-[1.5px]">
-                                {waliKelasName || '____________________'}
+                              <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px]">
+                                {getWaliKelas(activeStudent).name || '____________________'}
                               </p>
-                              {waliKelasNip ? (
-                                <p className="text-[8.5pt] text-slate-700 font-mono mt-1.5 select-all">
-                                  NIP. {waliKelasNip}
+                              {getWaliKelas(activeStudent).nip && getWaliKelas(activeStudent).nip.trim() !== '' && getWaliKelas(activeStudent).nip.trim() !== '-' ? (
+                                <p className="text-[8.5pt] text-slate-700 font-mono mt-1 select-all">
+                                  NIP. {getWaliKelas(activeStudent).nip}
                                 </p>
                               ) : (
-                                <p className="text-[8pt] text-slate-500 font-sans mt-1.5 italic select-none">Tanda Tangan & Nama Terang</p>
+                                <p className="text-[8pt] text-slate-500 font-sans mt-0.5 italic select-none">Tanda Tangan & Nama Terang</p>
                               )}
                             </div>
                           </div>
@@ -1721,14 +2279,14 @@ export default function RaporCetak({
             </div>
           ) : (
             <>
-              <div className="bg-neutral-100/50 p-6 xl:p-12 rounded-2xl border border-slate-200/80 shadow-inner flex justify-center no-print selection:bg-transparent">
+              <div className="bg-neutral-100/50 p-4 md:p-6 rounded-2xl border border-slate-200/80 shadow-inner flex justify-start md:justify-center overflow-x-auto w-full no-print selection:bg-transparent">
         <div className="bg-white border border-slate-300 shadow-2xl p-[12mm_15mm] w-[210mm] min-h-[297mm] h-[297mm] max-h-[297mm] overflow-hidden box-border text-[11pt] text-black font-sans leading-relaxed flex flex-col justify-between">
           <div>
             {/* Header block with organization logo & info */}
             <div className="flex items-start gap-4 mb-1">
               <div className="h-24 w-24 flex flex-col justify-center items-center flex-none">
                 {kopSekolah.logoUrl ? (
-                  <img src={kopSekolah.logoUrl} alt="Logo Sekolah" className="max-h-24 max-w-24 object-contain" referrerPolicy="no-referrer" crossOrigin="anonymous" />
+                  <img src={kopSekolah.logoUrl} alt="Logo Sekolah" className="max-h-24 max-w-24 object-contain" referrerPolicy="no-referrer" crossOrigin={kopSekolah.logoUrl.startsWith('data:') ? undefined : 'anonymous'} />
                 ) : (
                   <KartikaLogo />
                 )}
@@ -1766,7 +2324,7 @@ export default function RaporCetak({
               <div className="flex items-center">
                 <span className="w-[70px] font-bold flex-none">NAMA</span>
                 <span className="mr-2 font-bold">:</span>
-                <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5 uppercase">{activeStudent.name}</span>
+                <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5">{activeStudent.name}</span>
               </div>
               <div className="flex items-center">
                 <span className="w-[110px] font-bold flex-none">NOMOR INDUK</span>
@@ -1786,7 +2344,7 @@ export default function RaporCetak({
             </div>
 
             {/* The core 5NK indicators evaluation table */}
-            <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug">
+            <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug table-fixed">
               <colgroup>
                 <col style={{ width: '15%' }} />
                 <col style={{ width: '41%' }} />
@@ -1829,7 +2387,7 @@ export default function RaporCetak({
               <tbody>
                 {/* Cinta Tanah Air (3 indicators) */}
                 {categories.find(c => c.id === 'CTA')?.indicators.map((ind, i) => {
-                  const activeScore = activeStudent.grades[ind.id] || 'B';
+                  const activeScore = activeStudent.grades[ind.id];
                   return (
                     <tr key={ind.id} className="hover:bg-slate-50/40">
                       {i === 0 && (
@@ -1861,7 +2419,7 @@ export default function RaporCetak({
 
                 {/* Disiplin (3 indicators) */}
                 {categories.find(c => c.id === 'DSP')?.indicators.map((ind, i) => {
-                  const activeScore = activeStudent.grades[ind.id] || 'B';
+                  const activeScore = activeStudent.grades[ind.id];
                   return (
                     <tr key={ind.id} className="hover:bg-slate-50/40">
                       {i === 0 && (
@@ -1893,7 +2451,7 @@ export default function RaporCetak({
 
                 {/* Berbudi Luhur (3 indicators) */}
                 {categories.find(c => c.id === 'BBL')?.indicators.map((ind, i) => {
-                  const activeScore = activeStudent.grades[ind.id] || 'B';
+                  const activeScore = activeStudent.grades[ind.id];
                   return (
                     <tr key={ind.id} className="hover:bg-slate-50/40">
                       {i === 0 && (
@@ -1928,7 +2486,7 @@ export default function RaporCetak({
                   const certCat = categories.find(c => c.id === 'CRD');
                   if (!certCat || certCat.indicators.length === 0) return null;
                   const ind = certCat.indicators[0];
-                  const activeScore = activeStudent.grades[ind.id] || 'B';
+                  const activeScore = activeStudent.grades[ind.id];
                   return (
                     <tr key={ind.id} className="hover:bg-slate-50/40">
                       <td 
@@ -1961,11 +2519,11 @@ export default function RaporCetak({
       </div>
 
       {/* --- PAGE 2 MOCK PREVIEW --- */}
-      <div className="bg-neutral-100/50 p-6 xl:p-12 rounded-2xl border border-slate-200/80 shadow-inner flex justify-center no-print">
+      <div className="bg-neutral-100/50 p-4 md:p-6 rounded-2xl border border-slate-200/80 shadow-inner flex justify-start md:justify-center overflow-x-auto w-full no-print">
         <div className="bg-white border border-slate-300 shadow-2xl p-[12mm_15mm] w-[210mm] min-h-[297mm] h-[297mm] max-h-[297mm] overflow-hidden box-border text-[11pt] text-black font-sans leading-relaxed flex flex-col justify-between">
           <div className="flex flex-col gap-4">
             {/* Table continuation on screen Page 2 */}
-            <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug">
+            <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug table-fixed">
               <colgroup>
                 <col style={{ width: '15%' }} />
                 <col style={{ width: '41%' }} />
@@ -1981,7 +2539,7 @@ export default function RaporCetak({
                   if (!certCat || certCat.indicators.length < 2) return null;
                   const remaining = certCat.indicators.slice(1);
                   return remaining.map((ind, idx) => {
-                    const activeScore = activeStudent.grades[ind.id] || 'B';
+                    const activeScore = activeStudent.grades[ind.id];
                     return (
                       <tr key={ind.id} className="hover:bg-slate-50/40">
                         {idx === 0 && (
@@ -2012,7 +2570,7 @@ export default function RaporCetak({
 
                 {/* Terampil (3 indicators) */}
                 {categories.find(c => c.id === 'TRM')?.indicators.map((ind, i) => {
-                  const activeScore = activeStudent.grades[ind.id] || 'B';
+                  const activeScore = activeStudent.grades[ind.id];
                   return (
                     <tr key={ind.id} className="hover:bg-slate-50/40">
                       {i === 0 && (
@@ -2077,8 +2635,8 @@ export default function RaporCetak({
                 <div className="bg-white border-b border-black p-1.5">
                   <p className="font-bold text-[9pt] text-black text-left">Catatan Orang Tua/Wali:</p>
                 </div>
-                <div className="p-2.5 min-h-[85px] text-justify text-[9pt] text-slate-500 italic leading-relaxed font-sans">
-                  {activeStudent.catatanOrangTua || 'Kami berkomitmen untuk terus membimbing anak di rumah sesuai arahan sekolah.'}
+                <div className="p-2.5 min-h-[85px] text-justify text-[9pt] text-slate-500 italic leading-relaxed font-sans whitespace-pre-wrap">
+                  {activeStudent.catatanOrangTua !== undefined ? activeStudent.catatanOrangTua : 'Kami berkomitmen untuk terus membimbing anak di rumah sesuai arahan sekolah.'}
                 </div>
               </div>
             </div>
@@ -2090,27 +2648,51 @@ export default function RaporCetak({
               </p>
               <div className="grid grid-cols-2 gap-12 text-center">
                 {/* Orang Tua */}
-                <div className="flex flex-col items-center justify-between h-32">
+                <div className="flex flex-col items-center justify-between h-32 relative">
                   <p className="text-[10.5pt] text-black font-bold select-none">Orang Tua / Wali</p>
+                  <div className="h-16 flex items-center justify-center relative w-full">
+                    {kopSekolah.signatureParentUrl ? (
+                      <img
+                        src={kopSekolah.signatureParentUrl}
+                        alt="Tanda Tangan Orang Tua"
+                        className="max-h-16 max-w-[180px] object-contain"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <div className="h-4"></div>
+                    )}
+                  </div>
                   <div className="flex flex-col items-center w-full">
                     <div className="w-48 border-b-[1.5px] border-black pb-0.5"></div>
-                    <p className="text-[8pt] text-slate-500 font-sans mt-1.5 italic select-none">Tanda Tangan & Nama Terang</p>
+                    <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none">Tanda Tangan & Nama Terang</p>
                   </div>
                 </div>
 
                 {/* Guru Kelas */}
-                <div className="flex flex-col items-center justify-between h-32">
+                <div className="flex flex-col items-center justify-between h-32 relative">
                   <p className="text-[10.5pt] text-black font-bold">Guru Kelas / Wali Kelas</p>
+                  <div className="h-16 flex items-center justify-center relative w-full">
+                    {kopSekolah.signatureTeacherUrl ? (
+                      <img
+                        src={kopSekolah.signatureTeacherUrl}
+                        alt="Tanda Tangan Guru"
+                        className="max-h-16 max-w-[180px] object-contain"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <div className="h-4"></div>
+                    )}
+                  </div>
                   <div className="flex flex-col items-center w-full">
-                    <p className="font-bold text-black text-[10.5pt] text-center uppercase leading-tight select-all underline underline-offset-4 decoration-[1.5px]">
-                      {waliKelasName || '____________________'}
+                    <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px]">
+                      {getWaliKelas(activeStudent).name || '____________________'}
                     </p>
-                    {waliKelasNip ? (
-                      <p className="text-[8.5pt] text-slate-700 font-mono mt-1.5 select-all">
-                        NIP. {waliKelasNip}
+                    {getWaliKelas(activeStudent).nip && getWaliKelas(activeStudent).nip.trim() !== '' && getWaliKelas(activeStudent).nip.trim() !== '-' ? (
+                      <p className="text-[8.5pt] text-slate-700 font-mono mt-1 select-all">
+                        NIP. {getWaliKelas(activeStudent).nip}
                       </p>
                     ) : (
-                      <p className="text-[8pt] text-slate-500 font-sans mt-1.5 italic select-none">Tanda Tangan & Nama Terang</p>
+                      <p className="text-[8pt] text-slate-500 font-sans mt-0.5 italic select-none">Tanda Tangan & Nama Terang</p>
                     )}
                   </div>
                 </div>
@@ -2132,7 +2714,7 @@ export default function RaporCetak({
       {createPortal(
         <div id="rapor-print-section">
           <div id="rapor-pdf-content" key={renderTrigger} className="bg-white text-black">
-            {pdfRenderStudents.map((selSt) => (
+            {pdfRenderStudents && pdfRenderStudents.length > 0 ? pdfRenderStudents.map((selSt) => (
               <div key={selSt.nis} className="student-pdf-group">
                 {/* PRINT PAGE 1 */}
                 <div className="print-page w-[210mm] h-[297mm] max-h-[297mm] overflow-visible p-[12mm_15mm] box-border text-[11pt] leading-relaxed flex flex-col justify-between">
@@ -2143,7 +2725,7 @@ export default function RaporCetak({
                       <div className="flex items-start gap-4 mb-0.5">
                         <div className="h-20 w-20 flex flex-col justify-center items-center flex-none">
                           {kopSekolah.logoUrl ? (
-                            <img src={kopSekolah.logoUrl} alt="Logo Sekolah" className="max-h-20 max-w-20 object-contain" referrerPolicy="no-referrer" crossOrigin="anonymous" />
+                            <img src={kopSekolah.logoUrl} alt="Logo Sekolah" className="max-h-20 max-w-20 object-contain" referrerPolicy="no-referrer" crossOrigin={kopSekolah.logoUrl.startsWith('data:') ? undefined : 'anonymous'} />
                           ) : (
                             <KartikaLogo />
                           )}
@@ -2182,7 +2764,7 @@ export default function RaporCetak({
                       <div className="flex items-center">
                         <span className="w-[70px] font-bold flex-none">NAMA</span>
                         <span className="mr-2 font-bold">:</span>
-                        <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5 uppercase">{selSt.name}</span>
+                        <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5">{formatProperName(selSt.name)}</span>
                       </div>
                       <div className="flex items-center text-[9pt]">
                         <span className="w-[110px] font-bold flex-none">NOMOR INDUK</span>
@@ -2202,7 +2784,7 @@ export default function RaporCetak({
                     </div>
 
                     {/* Table */}
-                    <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
+                    <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug table-fixed avoid-break">
                       <colgroup>
                         <col style={{ width: '15%' }} />
                         <col style={{ width: '41%' }} />
@@ -2245,7 +2827,7 @@ export default function RaporCetak({
                       <tbody>
                         {/* Cinta Tanah Air (3 indicators) */}
                         {categories.find(c => c.id === 'CTA')?.indicators.map((ind, i) => {
-                          const activeScore = selSt.grades[ind.id] || 'B';
+                          const activeScore = selSt.grades[ind.id];
                           return (
                             <tr key={ind.id}>
                               {i === 0 && (
@@ -2277,7 +2859,7 @@ export default function RaporCetak({
 
                         {/* Disiplin (3 indicators) */}
                         {categories.find(c => c.id === 'DSP')?.indicators.map((ind, i) => {
-                          const activeScore = selSt.grades[ind.id] || 'B';
+                          const activeScore = selSt.grades[ind.id];
                           return (
                             <tr key={ind.id}>
                               {i === 0 && (
@@ -2309,7 +2891,7 @@ export default function RaporCetak({
 
                         {/* Berbudi Luhur (3 indicators) */}
                         {categories.find(c => c.id === 'BBL')?.indicators.map((ind, i) => {
-                          const activeScore = selSt.grades[ind.id] || 'B';
+                          const activeScore = selSt.grades[ind.id];
                           return (
                             <tr key={ind.id}>
                               {i === 0 && (
@@ -2344,7 +2926,7 @@ export default function RaporCetak({
                           const certCat = categories.find(c => c.id === 'CRD');
                           if (!certCat || certCat.indicators.length === 0) return null;
                           const ind = certCat.indicators[0];
-                          const activeScore = selSt.grades[ind.id] || 'B';
+                          const activeScore = selSt.grades[ind.id];
                           return (
                             <tr key={ind.id}>
                               <td 
@@ -2379,7 +2961,7 @@ export default function RaporCetak({
                 <div className="print-page w-[210mm] h-[297mm] max-h-[297mm] overflow-visible p-[12mm_15mm] box-border text-[11pt] leading-relaxed flex flex-col justify-between">
                   <div className="flex flex-col gap-4">
                     {/* Table continuation on Page 2 */}
-                    <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
+                    <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug table-fixed avoid-break">
                       <colgroup>
                         <col style={{ width: '15%' }} />
                         <col style={{ width: '41%' }} />
@@ -2395,7 +2977,7 @@ export default function RaporCetak({
                           if (!certCat || certCat.indicators.length < 2) return null;
                           const remaining = certCat.indicators.slice(1);
                           return remaining.map((ind, idx) => {
-                            const activeScore = selSt.grades[ind.id] || 'B';
+                            const activeScore = selSt.grades[ind.id];
                             return (
                               <tr key={ind.id}>
                                 {idx === 0 && (
@@ -2426,7 +3008,7 @@ export default function RaporCetak({
 
                         {/* Terampil (3 indicators) */}
                         {categories.find(c => c.id === 'TRM')?.indicators.map((ind, i) => {
-                          const activeScore = selSt.grades[ind.id] || 'B';
+                          const activeScore = selSt.grades[ind.id];
                           return (
                             <tr key={ind.id}>
                               {i === 0 && (
@@ -2491,8 +3073,8 @@ export default function RaporCetak({
                         <div className="bg-white border-b border-black p-1.5">
                           <p className="font-bold text-[9pt] text-black text-left">Catatan Orang Tua/Wali:</p>
                         </div>
-                        <div className="p-2.5 min-h-[85px] text-justify text-[9pt] text-slate-500 italic leading-relaxed font-sans">
-                          {selSt.catatanOrangTua || 'Kami berkomitmen untuk terus membimbing anak di rumah sesuai arahan sekolah.'}
+                        <div className="p-2.5 min-h-[85px] text-justify text-[9pt] text-slate-500 italic leading-relaxed font-sans whitespace-pre-wrap">
+                          {selSt.catatanOrangTua !== undefined ? selSt.catatanOrangTua : 'Kami berkomitmen untuk terus membimbing anak di rumah sesuai arahan sekolah.'}
                         </div>
                       </div>
                     </div>
@@ -2504,27 +3086,51 @@ export default function RaporCetak({
                       </p>
                       <div className="grid grid-cols-2 gap-12 text-center">
                         {/* Orang Tua */}
-                        <div className="flex flex-col items-center justify-between h-32">
+                        <div className="flex flex-col items-center justify-between h-32 relative">
                           <p className="text-[10.5pt] text-black font-bold select-none">Orang Tua / Wali</p>
+                          <div className="h-16 flex items-center justify-center relative w-full">
+                            {kopSekolah.signatureParentUrl ? (
+                              <img
+                                src={kopSekolah.signatureParentUrl}
+                                alt="Tanda Tangan Orang Tua"
+                                className="max-h-16 max-w-[180px] object-contain"
+                                referrerPolicy="no-referrer"
+                              />
+                            ) : (
+                              <div className="h-4"></div>
+                            )}
+                          </div>
                           <div className="flex flex-col items-center w-full">
                             <div className="w-48 border-b-[1.5px] border-black pb-0.5"></div>
-                            <p className="text-[8pt] text-slate-500 font-sans mt-1.5 italic select-none">Tanda Tangan & Nama Terang</p>
+                            <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none">Tanda Tangan & Nama Terang</p>
                           </div>
                         </div>
 
                         {/* Guru Kelas */}
-                        <div className="flex flex-col items-center justify-between h-32">
+                        <div className="flex flex-col items-center justify-between h-32 relative">
                           <p className="text-[10.5pt] text-black font-bold">Guru Kelas / Wali Kelas</p>
-                          <div className="flex flex-col items-center w-full">
-                            <p className="font-bold text-black text-[10.5pt] text-center uppercase leading-tight select-all underline underline-offset-4 decoration-[1.5px]">
-                              {waliKelasName || '____________________'}
+                          <div className="h-16 flex items-center justify-center relative w-full">
+                            {kopSekolah.signatureTeacherUrl ? (
+                              <img
+                                src={kopSekolah.signatureTeacherUrl}
+                                alt="Tanda Tangan Guru"
+                                className="max-h-16 max-w-[180px] object-contain"
+                                referrerPolicy="no-referrer"
+                              />
+                            ) : (
+                              <div className="h-4"></div>
+                            )}
+                          </div>
+                          <div className="flex flex-col items-center w-full font-sans">
+                            <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px]">
+                              {getWaliKelas(selSt).name || '____________________'}
                             </p>
-                            {waliKelasNip ? (
-                              <p className="text-[8.5pt] text-slate-700 font-mono mt-1.5 select-all">
-                                NIP. {waliKelasNip}
+                            {getWaliKelas(selSt).nip && getWaliKelas(selSt).nip.trim() !== '' && getWaliKelas(selSt).nip.trim() !== '-' ? (
+                              <p className="text-[8.5pt] text-slate-700 font-mono mt-1 select-all">
+                                NIP. {getWaliKelas(selSt).nip}
                               </p>
                             ) : (
-                              <p className="text-[8pt] text-slate-500 font-sans mt-1.5 italic select-none">Tanda Tangan & Nama Terang</p>
+                              <p className="text-[8pt] text-slate-500 font-sans mt-0.5 italic select-none">Tanda Tangan & Nama Terang</p>
                             )}
                           </div>
                         </div>
@@ -2533,7 +3139,12 @@ export default function RaporCetak({
                   </div>
                 </div>
               </div>
-            ))}
+            )) : (
+              <div className="w-[210mm] h-[297mm] flex flex-col gap-2 items-center justify-center font-bold text-slate-400 bg-slate-50 italic">
+                <AlertTriangle className="h-10 w-10 text-slate-300" />
+                <p>Data murid gagal dimuat atau kosong.</p>
+              </div>
+            )}
           </div>
         </div>,
         document.body
@@ -2695,6 +3306,46 @@ export default function RaporCetak({
               <p>Rapor untuk seluruh siswa kelas <strong>{selectedClass}</strong> telah berhasil diekspor sebagai dokumen PDF individual dan dikemas ke dalam satu arsip ZIP.</p>
             </div>
           )}
+        </div>
+      )}
+
+      {isGeneratingClassPdf && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[99999] flex flex-col items-center justify-center p-4 no-print animate-in fade-in duration-200">
+          <div className="bg-white border border-slate-200 rounded-2xl shadow-2xl p-6 max-w-md w-full flex flex-col items-center text-center gap-4 animate-in zoom-in-95 duration-200">
+            <div className="h-16 w-16 bg-violet-50 text-violet-600 rounded-full flex items-center justify-center mb-2">
+              <Loader2 className="h-8 w-8 animate-spin" />
+            </div>
+            
+            <div>
+              <h4 className="font-bold text-slate-800 text-lg mb-1">
+                Menyusun Laporan PDF Massal
+              </h4>
+              <p className="text-sm text-slate-500">
+                Memproses {classPdfStatus.total} siswa menjadi satu fail PDF...
+              </p>
+            </div>
+
+            <div className="w-full bg-slate-100 rounded-full h-3 mb-1 overflow-hidden relative">
+              <div 
+                className="bg-violet-600 h-3 rounded-full transition-all duration-300 ease-out" 
+                style={{ width: `${(classPdfStatus.current / (classPdfStatus.total || 1)) * 100}%` }}
+              ></div>
+            </div>
+            
+            <div className="flex justify-between w-full text-xs font-bold text-slate-500">
+              <span>{Math.round((classPdfStatus.current / (classPdfStatus.total || 1)) * 100)}%</span>
+              <span>{classPdfStatus.current} dari {classPdfStatus.total} selesai</span>
+            </div>
+
+            <div className="bg-slate-50/80 border border-slate-100 rounded-xl p-3 w-full text-left">
+              <p className="font-mono text-[10px] text-slate-500 uppercase tracking-wider mb-1">Sedang memproses:</p>
+              <p className="font-bold text-violet-700 text-sm truncate">{classPdfStatus.currentStudentName}</p>
+            </div>
+            
+            <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
+              * Jangan memuat ulang atau menutup halaman ini sampai proses otomatis selesai.
+            </p>
+          </div>
         </div>
       )}
     </div>

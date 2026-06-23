@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
+import { motion } from 'framer-motion';
 import { Student, Category, ScoreKey, scoreOptions } from '../types';
-import { Sparkles, CheckSquare, RefreshCw, BarChart4, Cpu, Play, Check, AlertTriangle, HelpCircle } from 'lucide-react';
+import { Sparkles, CheckSquare, RefreshCw, BarChart4, Cpu, Play, Check, AlertTriangle, HelpCircle, Users, StopCircle, Loader2, Trash2, RotateCcw } from 'lucide-react';
 
 interface MacroPanelProps {
   selectedStudent: Student | null;
@@ -10,8 +11,11 @@ interface MacroPanelProps {
   onUpdateFullClassScores: (score: ScoreKey) => void;
   onUpdateStudentGrades: (studentId: string, grades: Record<string, ScoreKey>) => void;
   onUpdateComments: (studentId: string, kesimpulan: string, Notes: string) => void;
+  onUpdateBulkComments: (updates: { studentId: string; kesimpulan: string; catatanWali: string }[]) => void;
   onRefreshData: () => void;
   waliKelasName: string;
+  onClearStudentGrades: (studentId: string) => void;
+  onClearClassGrades: () => void;
 }
 
 export default function MacroPanel({
@@ -22,8 +26,11 @@ export default function MacroPanel({
   onUpdateFullClassScores,
   onUpdateStudentGrades,
   onUpdateComments,
+  onUpdateBulkComments,
   onRefreshData,
   waliKelasName,
+  onClearStudentGrades,
+  onClearClassGrades,
 }: MacroPanelProps) {
   const [runningMacro, setRunningMacro] = useState<string | null>(null);
   const [integrityReport, setIntegrityReport] = useState<{
@@ -36,6 +43,127 @@ export default function MacroPanel({
 
   const [bulkGrade, setBulkGrade] = useState<ScoreKey>('B');
   const [aiError, setAiError] = useState<string | null>(null);
+  const [showClearClassConfirm, setShowClearClassConfirm] = useState(false);
+  const [showClearStudentConfirm, setShowClearStudentConfirm] = useState(false);
+
+  const [bulkAiState, setBulkAiState] = useState<{
+    running: boolean;
+    current: number;
+    total: number;
+    studentName: string;
+    logs: string[];
+    errors: number;
+  } | null>(null);
+  const bulkAbortRef = useRef<boolean>(false);
+
+  // Macro 1b: Run Bulk/Class AI Comment Generator
+  const runBulkClassAiGenerator = async () => {
+    if (students.length === 0) return;
+    setRunningMacro('BULK_AI_GENERATOR');
+    bulkAbortRef.current = false;
+    
+    const total = students.length;
+    const logs: string[] = ['Menghubungi asisten AI untuk memproses kelas ' + selectedClass + '...'];
+    const updatesList: { studentId: string; kesimpulan: string; catatanWali: string }[] = [];
+    
+    setBulkAiState({
+      running: true,
+      current: 0,
+      total,
+      studentName: students[0].name,
+      logs: [...logs],
+      errors: 0,
+    });
+
+    let errorsCount = 0;
+    
+    for (let i = 0; i < total; i++) {
+      if (bulkAbortRef.current) {
+        logs.push('⚠️ Aksi dibatalkan oleh Pengguna.');
+        setBulkAiState(prev => prev ? { ...prev, logs: [...logs] } : null);
+        break;
+      }
+      
+      const st = students[i];
+      setBulkAiState(prev => prev ? { ...prev, current: i + 1, studentName: st.name } : null);
+      logs.push(`⏳ Menganalisis skor & karakter [${i + 1}/${total}]: ${st.name}...`);
+      setBulkAiState(prev => prev ? { ...prev, logs: [...logs] } : null);
+      
+      try {
+        const response = await fetch('/api/generate-comments', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            studentName: st.name,
+            gender: st.gender,
+            grades: st.grades,
+            className: selectedClass,
+            waliKelasName: waliKelasName,
+          }),
+        });
+
+        if (!response.ok) throw new Error('Response error');
+        const data = await response.json();
+        
+        updatesList.push({
+          studentId: st.id,
+          kesimpulan: data.kesimpulan,
+          catatanWali: data.catatanWali,
+        });
+        
+        // Push current set of updates atomically
+        onUpdateBulkComments([...updatesList]);
+        
+        logs.push(`✅ Generasi sukses instan untuk ${st.name}`);
+        setBulkAiState(prev => prev ? { ...prev, logs: [...logs] } : null);
+        
+        // Ensure student has full grade updates triggered
+        onUpdateStudentGrades(st.id, { ...st.grades });
+      } catch (err) {
+        console.error(err);
+        errorsCount++;
+        
+        // Fallback local rule-based generation
+        const bsbCount = Object.values(st.grades).filter(s => s === 'BSB').length;
+        let kesimpulan = '';
+        let catatanWali = '';
+
+        if (bsbCount > 10) {
+          kesimpulan = `${st.name} menunjukkan kepribadian luar biasa sebagai murid Kartika yang sangat cemerlang. Seluruh indikator nilai 5NK berkembang secara konsisten di atas rata-rata kelompok belajarnya.`;
+          catatanWali = `Sangat bangga atas dedikasi dan kepemimpinan yang ditunjukkan oleh ${st.name}. Teruslah menginspirasi teman-teman sekelas!`;
+        } else {
+          kesimpulan = `${st.name} berkembang dengan stabil dan harmonis di seluruh aspek 5NK (Cinta Tanah Air, Disiplin, Berbudi Luhur, Cerdas, Terampil). Selalu menunjukkan sikap kerja sama dan akhlak mulia.`;
+          catatanWali = `Tingkatkan kedisiplinan belajar dan pertahankan semangat juangmu, bapak/ibu wali kelas selalu mendukung kesuksesanmu!`;
+        }
+        
+        updatesList.push({
+          studentId: st.id,
+          kesimpulan,
+          catatanWali,
+        });
+        
+        onUpdateBulkComments([...updatesList]);
+        
+        logs.push(`ℹ️ Selesai: ${st.name} (Aturan Lokal Cadangan)`);
+        setBulkAiState(prev => prev ? { ...prev, logs: [...logs], errors: errorsCount } : null);
+        
+        onUpdateStudentGrades(st.id, { ...st.grades });
+      }
+      
+      // Delay to let user see progress nicely
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    
+    if (!bulkAbortRef.current) {
+      logs.push(`🎉 Laporan rampung! Berhasil menghasilkan saran personal pengembangan karakter untuk seluruh murid.`);
+      setBulkAiState(prev => prev ? { ...prev, logs: [...logs] } : null);
+    }
+    
+    setTimeout(() => {
+      setBulkAiState(null);
+      setRunningMacro(null);
+    }, 2000);
+  };
 
   // Macro 1: Run Gemini AI Comment Generator
   const runAiCommentGenerator = async () => {
@@ -158,7 +286,14 @@ export default function MacroPanel({
   const percentBB = totalCells > 0 ? Math.round((totalBB / totalCells) * 100) : 0;
 
   return (
-    <div id="macro-panel" className="flex flex-col gap-5 no-print bg-white p-5 rounded-xl border border-slate-200 shadow-sm h-full overflow-y-auto">
+    <motion.div 
+      initial={{ opacity: 0, x: 20 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: 20 }}
+      transition={{ duration: 0.3, ease: 'easeOut' }}
+      id="macro-panel" 
+      className="flex flex-col gap-5 no-print bg-white p-5 rounded-xl border border-slate-200 shadow-sm h-full overflow-y-auto"
+    >
       <div>
         <h3 className="text-xs font-bold text-slate-400 font-mono tracking-wider uppercase mb-1">
           Excel VBA Macro Controller
@@ -169,8 +304,8 @@ export default function MacroPanel({
         <p className="text-xs text-slate-500 mt-1">Esekusi fungsi otomatis (Macro VBA) untuk mempermudah dan mempercepat penyusunan rapor.</p>
       </div>
 
-      {/* MACRO 1: AI SUGGESTION FOR SELECTED STUDENT */}
-      <div className="border border-indigo-100 bg-indigo-50/40 p-4 rounded-xl flex flex-col gap-3">
+      {/* MACRO 1: AI SUGGESTION & AUTOMATED GENERAL REPORT */}
+      <div className="border border-indigo-100 bg-indigo-50/40 p-4 rounded-xl flex flex-col gap-3 animate-in fade-in duration-200">
         <div className="flex items-start justify-between">
           <div>
             <div className="flex items-center gap-1.5">
@@ -178,39 +313,111 @@ export default function MacroPanel({
               <h5 className="text-xs font-bold text-indigo-900 uppercase tracking-wide">Macro 1: Gemini AI Commenter</h5>
             </div>
             <p className="text-xs text-indigo-700/80 mt-1 dark:text-indigo-800">
-              Analisis nilai 5NK secara menyeluruh dan buat kesimpulan rapor otomatis menggunakan AI.
+              Analisis tren nilai 5NK & buat deskripsi saran pengembangan karakter personal otomatis instan.
             </p>
           </div>
-          <Sparkles className="h-5 w-5 text-indigo-500 flex-none" />
+          <Sparkles className="h-5 w-5 text-indigo-500 flex-none animate-pulse" />
         </div>
 
-        {selectedStudent ? (
-          <div className="bg-white border border-indigo-100 rounded-lg p-2.5 mt-1 text-xs">
-            <p className="text-slate-400 font-bold mb-1 font-mono text-[9px]">Siswa Terpilih:</p>
-            <p className="font-bold text-slate-800 truncate">{selectedStudent.name}</p>
-            
-            <button
-              onClick={runAiCommentGenerator}
-              disabled={runningMacro !== null}
-              className={`mt-2 w-full py-2 px-3 rounded-lg text-xs font-bold text-white flex items-center justify-center gap-2 cursor-pointer transition-all ${
-                runningMacro === 'AI_GENERATOR' 
-                  ? 'bg-indigo-400 cursor-not-allowed'
-                  : 'bg-indigo-600 hover:bg-indigo-700 hover:shadow-indigo-100 ring-2 ring-indigo-500/50'
-              }`}
-            >
-              <Play className="h-3 w-3 fill-white" />
-              {runningMacro === 'AI_GENERATOR' ? 'Menjalankan Macro AI...' : 'Jalankan Macro AI'}
-            </button>
+        {bulkAiState && bulkAiState.running ? (
+          /* Bulk AI Progress Monitor */
+          <div className="bg-white border border-indigo-150 rounded-xl p-3 text-xs flex flex-col gap-3 shadow-sm animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between font-bold text-indigo-900">
+              <span className="flex items-center gap-1.5 font-sans">
+                <Loader2 className="h-3.5 w-3.5 text-indigo-600 animate-spin" />
+                Saran Karakter Otomatis
+              </span>
+              <span className="text-[10px] bg-indigo-100 text-indigo-700 font-mono px-2 py-0.5 rounded-full">
+                {bulkAiState.current} / {bulkAiState.total} Murid
+              </span>
+            </div>
+
+            {/* Progress Bar */}
+            <div className="space-y-1">
+              <div className="flex justify-between text-[10px] text-slate-500 font-medium">
+                <span className="truncate max-w-[170px] inline-block">Mengolah: <strong className="text-slate-700">{bulkAiState.studentName}</strong></span>
+                <span>{Math.round((bulkAiState.current / bulkAiState.total) * 100)}%</span>
+              </div>
+              <div className="h-2 w-full bg-indigo-105 bg-slate-100 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-indigo-600 rounded-full transition-all duration-300"
+                  style={{ width: `${(bulkAiState.current / bulkAiState.total) * 100}%` }}
+                ></div>
+              </div>
+            </div>
+
+            {/* Scrollable logs */}
+            <div className="bg-slate-900 text-[10px] font-mono text-slate-300 p-2 rounded-lg max-h-24 overflow-y-auto flex flex-col gap-1 select-none">
+              {bulkAiState.logs.map((log, lIdx) => (
+                <div key={lIdx} className="leading-snug">{log}</div>
+              ))}
+            </div>
+
+            {/* Actions */}
+            <div className="flex justify-end">
+              <button
+                onClick={() => {
+                  bulkAbortRef.current = true;
+                }}
+                className="py-1 px-2.5 text-[10px] text-rose-600 hover:bg-rose-50 border border-rose-200 rounded-md font-semibold cursor-pointer transition-colors flex items-center gap-1"
+              >
+                <StopCircle className="h-3 w-3" /> Batalkan Proses
+              </button>
+            </div>
+          </div>
+        ) : (
+          /* Normal Controls */
+          <div className="flex flex-col gap-2.5">
+            {/* Action 1: Selected Student AI */}
+            <div className="bg-white border border-indigo-100 rounded-lg p-2.5 text-xs">
+              <p className="text-slate-400 font-bold mb-1 font-mono text-[9px] uppercase">Pilihan 1: Murid Terpilih</p>
+              {selectedStudent ? (
+                <div>
+                  <p className="font-bold text-slate-800 truncate">{selectedStudent.name}</p>
+                  <button
+                    onClick={runAiCommentGenerator}
+                    disabled={runningMacro !== null}
+                    className={`mt-2 w-full py-2 px-3 rounded-lg text-xs font-bold text-white flex items-center justify-center gap-2 cursor-pointer transition-all ${
+                      runningMacro === 'AI_GENERATOR' 
+                        ? 'bg-indigo-400 cursor-not-allowed'
+                        : 'bg-indigo-600 hover:bg-indigo-700 hover:shadow-indigo-100'
+                    }`}
+                  >
+                    <Play className="h-3 w-3 fill-white animate-pulse" />
+                    {runningMacro === 'AI_GENERATOR' ? 'Menjalankan...' : 'Jalankan AI Murid Aktif'}
+                  </button>
+                </div>
+              ) : (
+                <p className="text-slate-400 italic font-medium py-1">Pilih siswa di tabel untuk opsi ini.</p>
+              )}
+            </div>
+
+            {/* Action 2: Bulk Class AI Generator */}
+            <div className="bg-white border border-indigo-100 rounded-lg p-2.5 text-xs">
+              <p className="text-slate-400 font-bold mb-1 font-mono text-[9px] uppercase font-bold">Pilihan 2: Otomatisasi Kelas</p>
+              <p className="text-[11px] text-slate-600 font-sans leading-normal">
+                Analisis tren nilai & simpan komentar personal untuk semua <strong>{students.length} murid</strong> kelas <strong>{selectedClass}</strong> secara otomatis.
+              </p>
+              <button
+                onClick={runBulkClassAiGenerator}
+                disabled={runningMacro !== null || students.length === 0}
+                className={`mt-2.5 w-full py-2.5 px-3 rounded-lg text-xs font-bold text-white flex items-center justify-center gap-2 cursor-pointer transition-all ${
+                  runningMacro === 'BULK_AI_GENERATOR' 
+                    ? 'bg-indigo-400 cursor-not-allowed'
+                    : 'bg-indigo-800 hover:bg-slate-900 hover:shadow-indigo-100 shadow-sm'
+                }`}
+              >
+                <Users className="h-3.5 w-3.5 animate-pulse" />
+                Generate Laporan Otomatis (1 Kelas)
+              </button>
+            </div>
+
             {aiError && (
-              <p className="text-[10px] text-amber-600 mt-1 leading-normal italic flex items-start gap-1">
+              <p className="text-[10px] text-amber-600 mt-0.5 leading-normal italic flex items-start gap-1 bg-amber-50 p-1.5 rounded border border-amber-100 font-medium font-sans">
                 <AlertTriangle className="h-3 w-3 flex-none mt-0.5" />
                 {aiError}
               </p>
             )}
-          </div>
-        ) : (
-          <div className="text-center py-4 bg-slate-100 rounded-lg text-xs text-slate-400 italic">
-            Silakan pilih murid terlebih dahulu di grid Excel
           </div>
         )}
       </div>
@@ -256,6 +463,118 @@ export default function MacroPanel({
             <RefreshCw className={`h-3 w-3 ${runningMacro === 'BULK_GRADE' ? 'animate-spin' : ''}`} />
             {runningMacro === 'BULK_GRADE' ? 'Mengisi Data...' : 'Isi Semua Nilai Roster'}
           </button>
+        </div>
+      </div>
+
+      {/* MACRO 5: BATAL ASPEK PENILAIAN */}
+      <div className="border border-rose-100 bg-rose-50/20 p-4 rounded-xl flex flex-col gap-3">
+        <div className="flex items-start justify-between">
+          <div>
+            <h5 className="text-xs font-bold text-rose-900 uppercase tracking-wide">Macro 5: Batal Aspek Penilaian</h5>
+            <p className="text-xs text-rose-700/80 mt-1">
+              Kosongkan predikat penilaian yang sudah terisi untuk pemformatan ulang data.
+            </p>
+          </div>
+          <RotateCcw className="h-5 w-5 text-rose-500 flex-none" />
+        </div>
+
+        <div className="flex flex-col gap-2.5">
+          {/* Action 1: Single student clear */}
+          <div className="bg-white border border-rose-100 rounded-lg p-3 text-xs">
+            <p className="text-slate-400 font-bold mb-1.5 font-mono text-[9px] uppercase">Pilihan 1: Murid Terpilih</p>
+            {selectedStudent ? (
+              <div>
+                <p className="font-semibold text-slate-700 truncate mb-2">
+                  Murid: <strong className="text-slate-800">{selectedStudent.name}</strong>
+                </p>
+                
+                {showClearStudentConfirm ? (
+                  <div className="bg-rose-50 p-2.5 rounded-lg border border-rose-100 text-center animate-in zoom-in-95 duration-150">
+                    <p className="text-[11px] text-rose-800 font-medium mb-2 leading-relaxed">
+                      Yakin kosongkan semua nilai rapor {selectedStudent.name}?
+                    </p>
+                    <div className="flex items-center justify-center gap-2">
+                      <button
+                        onClick={() => {
+                          onClearStudentGrades(selectedStudent.id);
+                          setShowClearStudentConfirm(false);
+                          setIntegrityReport(null);
+                        }}
+                        className="py-1 px-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded text-[10px] font-bold cursor-pointer"
+                      >
+                        Ya, Kosongkan
+                      </button>
+                      <button
+                        onClick={() => setShowClearStudentConfirm(false)}
+                        className="py-1 px-2.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded text-[10px] font-semibold cursor-pointer"
+                      >
+                        Batal
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => {
+                      setShowClearStudentConfirm(true);
+                      setShowClearClassConfirm(false);
+                    }}
+                    className="w-full py-2 px-3 bg-white hover:bg-rose-50 text-rose-600 border border-rose-200 hover:border-rose-300 rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer shadow-xs animate-in duration-100"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Batal Nilai Murid Ini
+                  </button>
+                )}
+              </div>
+            ) : (
+              <p className="text-slate-400 italic py-1">Pilih siswa di tabel untuk opsi ini.</p>
+            )}
+          </div>
+
+          {/* Action 2: Mass class clear */}
+          <div className="bg-white border border-rose-100 rounded-lg p-3 text-xs">
+            <p className="text-slate-400 font-bold mb-1.5 font-mono text-[9px] uppercase">Pilihan 2: Otomatisasi Kelas (Masal)</p>
+            <p className="text-[11px] text-slate-600 mb-2 leading-relaxed">
+              Kosongkan seluruh nilai roster 5NK untuk <strong>{students.length} murid</strong> kelas <strong>{selectedClass}</strong> secara massal.
+            </p>
+
+            {showClearClassConfirm ? (
+              <div className="bg-rose-50 p-2.5 rounded-lg border border-rose-100 text-center animate-in zoom-in-95 duration-150">
+                <p className="text-[11px] text-rose-800 font-bold mb-2 leading-relaxed">
+                  ⚠️ PERINGATAN: Seluruh nilai murid kelas {selectedClass} akan dihapus permanen! Anda yakin?
+                </p>
+                <div className="flex items-center justify-center gap-2">
+                  <button
+                    onClick={() => {
+                      onClearClassGrades();
+                      setShowClearClassConfirm(false);
+                      setIntegrityReport(null);
+                    }}
+                    className="py-1 px-3 bg-red-600 hover:bg-red-700 text-white rounded text-[10px] font-bold cursor-pointer"
+                  >
+                    Ya, Kosongkan Semua
+                  </button>
+                  <button
+                    onClick={() => setShowClearClassConfirm(false)}
+                    className="py-1 px-3 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded text-[10px] font-semibold cursor-pointer"
+                  >
+                    Batal
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => {
+                  setShowClearClassConfirm(true);
+                  setShowClearStudentConfirm(false);
+                }}
+                disabled={students.length === 0}
+                className="w-full py-2 px-3 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                Batal Nilai Masal Kelas ({selectedClass})
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -362,6 +681,6 @@ export default function MacroPanel({
           </div>
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 }

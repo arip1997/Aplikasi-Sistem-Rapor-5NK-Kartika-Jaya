@@ -8,6 +8,8 @@ export interface KopSekolah {
   alamat: string;
   tahunAjaran: string;
   logoUrl: string;
+  signatureTeacherUrl?: string;
+  signatureParentUrl?: string;
 }
 
 export interface ScoreOption {
@@ -45,8 +47,9 @@ export interface Student {
   grades: Record<string, ScoreKey>; // maps indicator.id to ScoreKey
   kesimpulan: string;
   catatanWali: string;
-  catatanOrangTua: string;
+  catatanOrangTua?: string;
   completed: boolean;
+  printStatus?: boolean; // Tracks if a student has been printed or exported
 }
 
 export const scoreOptions: ScoreOption[] = [

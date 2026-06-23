@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Student, Category, ScoreKey, scoreOptions } from '../types';
 import { 
   Sparkles, 
@@ -12,7 +12,8 @@ import {
   Lock,
   UserCheck,
   Search,
-  X
+  X,
+  RotateCcw
 } from 'lucide-react';
 
 interface EvaluationFormProps {
@@ -22,6 +23,9 @@ interface EvaluationFormProps {
   onSelectStudentId: (id: string) => void;
   onUpdateStudent: (student: Student) => void;
   onViewReport: () => void;
+  onClearStudentGrades: (studentId: string) => void;
+  onClearClassGrades: () => void;
+  selectedClass?: string;
 }
 
 export default function EvaluationForm({
@@ -31,9 +35,31 @@ export default function EvaluationForm({
   onSelectStudentId,
   onUpdateStudent,
   onViewReport,
+  onClearStudentGrades,
+  onClearClassGrades,
+  selectedClass = '',
 }: EvaluationFormProps) {
   const [activeCategoryIndex, setActiveCategoryIndex] = useState(0);
   const [studentSearch, setStudentSearch] = useState('');
+  const [showResetStudentConfirm, setShowResetStudentConfirm] = useState(false);
+  const [showResetClassConfirm, setShowResetClassConfirm] = useState(false);
+
+  // Focus Tracker for active Indicator card keyboard operations
+  const [focusedIndicatorId, setFocusedIndicatorId] = useState<string | null>(null);
+
+  // Sync focus when active category changes
+  const activeCategory = categories[activeCategoryIndex];
+
+  useMemo(() => {
+    if (activeCategory && activeCategory.indicators.length > 0) {
+      const activeIds = activeCategory.indicators.map(i => i.id);
+      if (!focusedIndicatorId || !activeIds.includes(focusedIndicatorId)) {
+        setFocusedIndicatorId(activeCategory.indicators[0].id);
+      }
+    } else {
+      setFocusedIndicatorId(null);
+    }
+  }, [activeCategoryIndex, activeCategory]);
 
   // Filter students based on search string
   const filteredStudents = useMemo(() => {
@@ -65,11 +91,123 @@ export default function EvaluationForm({
     return { completedCount, percentage };
   }, [student, allIndicatorIds]);
 
-  const activeCategory = categories[activeCategoryIndex];
+  // Keyboard shortcut listener effect
+  useEffect(() => {
+    if (!student || activeCategoryIndex >= categories.length || !activeCategory) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore if typing inside text fields (search input, or comment textareas)
+      const tagName = document.activeElement?.tagName;
+      if (tagName === 'INPUT' || tagName === 'TEXTAREA') {
+        return;
+      }
+
+      const activeIds = activeCategory.indicators.map(i => i.id);
+      let currentFocusId = focusedIndicatorId;
+      if (!currentFocusId || !activeIds.includes(currentFocusId)) {
+        if (activeCategory.indicators.length > 0) {
+          currentFocusId = activeCategory.indicators[0].id;
+        } else {
+          return;
+        }
+      }
+
+      const currentIndex = activeCategory.indicators.findIndex(i => i.id === currentFocusId);
+      const key = e.key.toLowerCase();
+
+      // Helpers to change score and optionally move next
+      const applyScoreAndMoveNext = (score: ScoreKey) => {
+        handleScoreChange(currentFocusId!, score);
+        
+        // Auto-scroll / move to next indicator
+        if (currentIndex < activeCategory.indicators.length - 1) {
+          setFocusedIndicatorId(activeCategory.indicators[currentIndex + 1].id);
+        } else {
+          // If last indicator of category, move to next category!
+          if (activeCategoryIndex < categories.length - 1) {
+            setActiveCategoryIndex(prev => prev + 1);
+          } else {
+            // Move to comments index
+            setActiveCategoryIndex(categories.length);
+          }
+        }
+      };
+
+      if (key === '1' || key === 's') {
+        e.preventDefault();
+        applyScoreAndMoveNext('BSB');
+      } else if (key === '2' || key === 'b') {
+        e.preventDefault();
+        applyScoreAndMoveNext('B');
+      } else if (key === '3' || key === 'm') {
+        e.preventDefault();
+        applyScoreAndMoveNext('MB');
+      } else if (key === '4' || key === 'k') {
+        e.preventDefault();
+        applyScoreAndMoveNext('BB');
+      } else if (key === '0' || key === 'backspace' || key === 'delete') {
+        e.preventDefault();
+        const nextGrades = { ...student.grades };
+        delete nextGrades[currentFocusId!];
+        
+        const scoredCount = Object.keys(nextGrades).filter(id => allIndicatorIds.includes(id)).length;
+        const isCompleted = scoredCount === allIndicatorIds.length;
+        
+        onUpdateStudent({
+          ...student,
+          grades: nextGrades,
+          completed: isCompleted
+        });
+      }
+      
+      // Focus Navigation
+      else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (currentIndex > 0) {
+          setFocusedIndicatorId(activeCategory.indicators[currentIndex - 1].id);
+        }
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (currentIndex < activeCategory.indicators.length - 1) {
+          setFocusedIndicatorId(activeCategory.indicators[currentIndex + 1].id);
+        }
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        // Go to previous category tab
+        if (activeCategoryIndex > 0) {
+          setActiveCategoryIndex(prev => prev - 1);
+        }
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        // Go to next category tab
+        if (activeCategoryIndex < categories.length) {
+          setActiveCategoryIndex(prev => prev + 1);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [student, activeCategoryIndex, focusedIndicatorId, activeCategory, categories, allIndicatorIds]);
 
   const handleScoreChange = (indicatorId: string, score: ScoreKey) => {
     if (!student) return;
-    const nextGrades = { ...student.grades, [indicatorId]: score };
+    
+    // 🛡️ Data Validation Layer: Ensure score is strictly within the allowed 5NK scale
+    const validScores: ScoreKey[] = ['BSB', 'B', 'MB', 'BB'];
+    if (!validScores.includes(score)) {
+      alert(`[VALIDASI ERROR] Nilai "${score}" tidak valid!\nNilai harus salah satu dari: BSB, B, MB, BB.`);
+      return;
+    }
+
+    const nextGrades = { ...student.grades };
+    if (nextGrades[indicatorId] === score) {
+      delete nextGrades[indicatorId];
+    } else {
+      nextGrades[indicatorId] = score;
+    }
     
     // Compute completeness
     const scoredCount = Object.keys(nextGrades).filter(id => allIndicatorIds.includes(id)).length;
@@ -139,13 +277,11 @@ export default function EvaluationForm({
 
     const finalKesimpulan = `${strengthText} Secara menyeluruh, nilai-nilai pembentuk kepribadian Pancasila (Cinta Tanah Air, Disiplin, Berbudi Luhur, Cerdas, Terampil) tercerna sangat baik. ${improvementText}`;
     const finalCatatanWali = `Prestasi budi pekerti yang luar biasa! Teruskan semangat belajar ini, gapailah cita-citamu dengan kegigihan.`;
-    const finalCatatanOrangTua = `Terima kasih bapak/ibu Wali Kelas atas laporannya. Kami sekeluarga berkomitmen penuh membimbingnya di luar sekolah.`;
 
     onUpdateStudent({
       ...student,
       kesimpulan: finalKesimpulan,
-      catatanWali: finalCatatanWali,
-      catatanOrangTua: finalCatatanOrangTua
+      catatanWali: finalCatatanWali
     });
   };
 
@@ -194,7 +330,17 @@ export default function EvaluationForm({
         </div>
 
         {student && (
-          <div className="flex items-center gap-3 text-xs w-full md:w-auto justify-end">
+          <div className="flex flex-wrap items-center gap-3 text-xs w-full md:w-auto justify-end">
+            <div className="hidden lg:flex items-center gap-2 text-[10px] text-slate-500 bg-white border border-slate-200 px-2 py-1 rounded-md shadow-xs select-none">
+              <span className="font-bold text-slate-700">⌨️ Pintasan Wizard:</span>
+              <span><kbd className="bg-slate-50 border border-slate-300 px-1 rounded font-mono font-bold text-slate-800">1</kbd>/<kbd className="bg-slate-50 border border-slate-200 px-1 rounded font-mono font-bold text-slate-800">S</kbd> Sangat Baik</span>
+              <span><kbd className="bg-slate-50 border border-slate-300 px-1 rounded font-mono font-bold text-slate-800">2</kbd>/<kbd className="bg-slate-50 border border-slate-200 px-1 rounded font-mono font-bold text-slate-800">B</kbd> Berkembang</span>
+              <span><kbd className="bg-slate-50 border border-slate-300 px-1 rounded font-mono font-bold text-slate-800">3</kbd>/<kbd className="bg-slate-50 border border-slate-200 px-1 rounded font-mono font-bold text-slate-800">M</kbd> Mulai</span>
+              <span><kbd className="bg-slate-50 border border-slate-300 px-1 rounded font-mono font-bold text-slate-800">4</kbd>/<kbd className="bg-slate-50 border border-slate-200 px-1 rounded font-mono font-bold text-slate-800">K</kbd> Belum</span>
+              <span className="text-slate-300">|</span>
+              <span>Navigasi: <kbd className="font-mono font-bold">↑</kbd><kbd className="font-mono font-bold">↓</kbd> Pindah Aspek</span>
+            </div>
+            
             <span className="text-slate-400 font-medium">Status Pengisian Rapor:</span>
             <span className={`px-2.5 py-1 rounded-full font-bold font-mono ${
               currentProgress.percentage === 100 
@@ -211,8 +357,8 @@ export default function EvaluationForm({
         <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
           
           {/* Active Wizard Navigation on Left (For medium screens and larger) */}
-          <div className="w-full md:w-56 bg-slate-50 border-r border-slate-200 p-4 flex flex-col gap-2 overflow-y-auto shrink-0">
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-2 mb-2">Aspek Penilaian</span>
+          <div className="w-full md:w-56 bg-slate-50 border-b md:border-b-0 md:border-r border-slate-200 p-3 sm:p-4 flex flex-row md:flex-col gap-2 overflow-x-auto md:overflow-y-auto shrink-0 select-none">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-2 mb-2 hidden md:block">Aspek Penilaian</span>
             {categories.map((cat, idx) => {
               // Count completed indicators in this category
               const catInds = cat.indicators.map(i => i.id);
@@ -223,21 +369,21 @@ export default function EvaluationForm({
                 <button
                   key={cat.id}
                   onClick={() => setActiveCategoryIndex(idx)}
-                  className={`w-full py-2 px-3 text-left rounded-lg text-xs font-bold flex items-center justify-between transition-colors cursor-pointer ${
+                  className={`shrink-0 md:shrink-1 w-auto min-w-[140px] md:w-full py-2 px-3 text-left rounded-lg text-xs font-bold flex items-center justify-between transition-colors cursor-pointer gap-2 ${
                     activeCategoryIndex === idx 
-                      ? 'bg-emerald-600 text-white' 
-                      : 'text-slate-600 hover:bg-slate-200/60'
+                      ? 'bg-emerald-600 text-white shadow-xs' 
+                      : 'text-slate-600 bg-white md:bg-transparent border border-slate-200 md:border-transparent hover:bg-slate-200/60'
                   }`}
                 >
                   <span className="truncate">{cat.name}</span>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold shadow-2xs ${
                     activeCategoryIndex === idx
                       ? 'bg-emerald-700 text-white'
                       : isCatCompleted 
                         ? 'bg-emerald-100 text-emerald-800' 
                         : 'bg-slate-200 text-slate-600'
                   }`}>
-                    {doneCount} / {catInds.length}
+                    {doneCount}/{catInds.length}
                   </span>
                 </button>
               );
@@ -245,17 +391,17 @@ export default function EvaluationForm({
 
             <button
               onClick={() => setActiveCategoryIndex(categories.length)}
-              className={`w-full py-2 px-3 text-left rounded-lg text-xs font-bold flex items-center justify-between transition-colors cursor-pointer mt-4 ${
+              className={`shrink-0 md:shrink-1 w-auto min-w-[160px] md:w-full py-2 px-3 text-left rounded-lg text-xs font-bold flex items-center justify-between transition-colors cursor-pointer md:mt-4 gap-2 ${
                 activeCategoryIndex === categories.length 
-                  ? 'bg-emerald-600 text-white' 
-                  : 'text-slate-600 hover:bg-slate-200/60'
+                  ? 'bg-emerald-600 text-white shadow-xs' 
+                  : 'text-slate-600 bg-white md:bg-transparent border border-slate-200 md:border-transparent hover:bg-slate-200/60'
               }`}
             >
-              <span className="flex items-center gap-1.5">
-                <FileText className="h-3.5 w-3.5" />
-                Masukan Deskripsi/Catatan
+              <span className="flex items-center gap-1.5 truncate">
+                <FileText className="h-3.5 w-3.5 flex-none" />
+                <span className="truncate">Deskripsi/Catatan</span>
               </span>
-              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${
+              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold shadow-2xs ${
                 activeCategoryIndex === categories.length
                   ? 'bg-emerald-700 text-white'
                   : (student.kesimpulan && student.catatanWali) 
@@ -265,6 +411,93 @@ export default function EvaluationForm({
                 {(student.kesimpulan && student.catatanWali) ? '✓' : '...'}
               </span>
             </button>
+
+            {/* Reset / Batal Nilai Section */}
+            <div className="hidden md:flex mt-8 pt-4 border-t border-slate-200 flex-col gap-2.5">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest px-2">
+                Batal/Reset Nilai
+              </span>
+              
+              {/* Reset Siswa Terpilih (Satu Murid) */}
+              {showResetStudentConfirm ? (
+                <div className="bg-rose-50 p-2 border border-rose-200 rounded-lg text-center animate-in zoom-in-95 duration-100">
+                  <p className="text-[10px] text-rose-800 font-semibold mb-1.5 leading-snug">
+                    Hapus semua predikat {student.name}?
+                  </p>
+                  <div className="flex items-center justify-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onClearStudentGrades(student.id);
+                        setShowResetStudentConfirm(false);
+                      }}
+                      className="py-1 px-2.5 bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold rounded cursor-pointer transition-colors"
+                    >
+                      Ya, Hapus
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowResetStudentConfirm(false)}
+                      className="py-1 px-2.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-[10px] font-semibold rounded cursor-pointer transition-colors"
+                    >
+                      Batal
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowResetStudentConfirm(true);
+                    setShowResetClassConfirm(false);
+                  }}
+                  className="w-full py-2 px-3 bg-white hover:bg-rose-50/50 text-rose-600 border border-rose-200 hover:border-rose-300 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-xs"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Batal Nilai Murid Ini
+                </button>
+              )}
+
+              {/* Reset Nilai Masal Satu Kelas */}
+              {showResetClassConfirm ? (
+                <div className="bg-red-50 p-2.5 border border-red-200 rounded-lg text-center animate-in zoom-in-95 duration-100">
+                  <p className="text-[10px] text-red-800 font-bold mb-1.5 leading-relaxed">
+                    ⚠️ Hapus nilai SELURUH siswa kelas {selectedClass}?
+                  </p>
+                  <div className="flex items-center justify-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onClearClassGrades();
+                        setShowResetClassConfirm(false);
+                      }}
+                      className="py-1 px-2.5 bg-red-600 hover:bg-red-700 text-white text-[10px] font-bold rounded cursor-pointer transition-colors"
+                    >
+                      Ya, Hapus Semua
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setShowResetClassConfirm(false)}
+                      className="py-1 px-2.5 bg-slate-200 hover:bg-slate-300 text-slate-700 text-[10px] font-semibold rounded cursor-pointer transition-colors"
+                    >
+                      Batal
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowResetClassConfirm(true);
+                    setShowResetStudentConfirm(false);
+                  }}
+                  className="w-full py-2 px-3 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-xs"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Batal Nilai Masal Kelas
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Active Wizard Form Pane on Right */}
@@ -284,14 +517,25 @@ export default function EvaluationForm({
                 <div className="flex flex-col gap-6">
                   {activeCategory.indicators.map((ind, indIdx) => {
                     const currentVal = student.grades[ind.id];
+                    const isCardFocused = focusedIndicatorId === ind.id;
                     
                     return (
-                      <div key={ind.id} className="border border-slate-200 rounded-xl p-4 flex flex-col gap-3 selection:bg-transparent">
+                      <div 
+                        key={ind.id} 
+                        onClick={() => setFocusedIndicatorId(ind.id)}
+                        className={`transition-all duration-150 border rounded-xl p-4 flex flex-col gap-3 selection:bg-transparent cursor-pointer ${
+                          isCardFocused 
+                            ? 'border-emerald-500 ring-2 ring-emerald-100 bg-emerald-50/20' 
+                            : 'border-slate-200 bg-white hover:bg-slate-50/50'
+                        }`}
+                      >
                         <div className="flex items-start gap-2">
-                          <span className="text-xs font-mono font-bold bg-slate-100 text-slate-600 px-2 py-0.5 rounded mt-0.5">
+                          <span className={`text-xs font-mono font-bold px-2 py-0.5 rounded mt-0.5 ${
+                            isCardFocused ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-600'
+                          }`}>
                             {ind.id}
                           </span>
-                          <p className="text-xs font-semibold text-slate-700 leading-relaxed">
+                          <p className={`text-xs font-semibold leading-relaxed ${isCardFocused ? 'text-slate-900 font-bold' : 'text-slate-700'}`}>
                             {ind.text}
                           </p>
                         </div>
@@ -371,12 +615,18 @@ export default function EvaluationForm({
                       id="form-kesimpulan"
                       value={student.kesimpulan || ''}
                       onChange={(e) => handleCommentChange('kesimpulan', e.target.value)}
+                      onKeyDown={(e) => {
+                        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                          e.preventDefault();
+                          onViewReport();
+                        }
+                      }}
                       rows={4}
                       placeholder="Tulis uraian kesimpulan perilaku siswa..."
                       className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-sans leading-relaxed focus:outline-none focus:ring-1 focus:ring-emerald-500"
                     />
                   </div>
-
+ 
                   {/* Catatan wali kelas */}
                   <div className="flex flex-col gap-1.5 text-xs">
                     <div className="flex justify-between items-center">
@@ -389,6 +639,12 @@ export default function EvaluationForm({
                       id="form-catatan-wali"
                       value={student.catatanWali || ''}
                       onChange={(e) => handleCommentChange('catatanWali', e.target.value)}
+                      onKeyDown={(e) => {
+                        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                          e.preventDefault();
+                          onViewReport();
+                        }
+                      }}
                       rows={3}
                       placeholder="Uraian motivasi bagi perkembangan siswa..."
                       className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-sans leading-relaxed focus:outline-none focus:ring-1 focus:ring-emerald-500"
@@ -402,6 +658,12 @@ export default function EvaluationForm({
                       id="form-catatan-ortu"
                       value={student.catatanOrangTua || ''}
                       onChange={(e) => handleCommentChange('catatanOrangTua', e.target.value)}
+                      onKeyDown={(e) => {
+                        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                          e.preventDefault();
+                          onViewReport();
+                        }
+                      }}
                       rows={2}
                       placeholder="Masukan tanggapan, respon, atau komitmen orang tua..."
                       className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-sans leading-relaxed focus:outline-none focus:ring-1 focus:ring-emerald-500"

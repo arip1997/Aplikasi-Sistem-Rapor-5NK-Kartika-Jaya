@@ -1,0 +1,25 @@
+{
+  "entities": {
+    "rapor_workspaces": {
+      "title": "Rapor Workspace State",
+      "description": "Entire structured state of the student report applet, saving the user from needing manual local backups",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "description": "Email address of the authenticated owner" },
+        "students": { "type": "string", "description": "JSON string of Student[] array" },
+        "teachers": { "type": "string", "description": "JSON string of Teacher[] array" },
+        "categories": { "type": "string", "description": "JSON string of Category[] array" },
+        "kopSekolah": { "type": "string", "description": "JSON string of KopSekolah metadata" },
+        "classes": { "type": "string", "description": "JSON string of class string list" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Timestamp of the last sync operation" }
+      },
+      "required": ["email", "students", "teachers", "categories", "kopSekolah", "classes", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/workspaces/{userUid}": {
+      "schema": "rapor_workspaces",
+      "description": "Custom user storage workspace containing all configuration and student grade data"
+    }
+  }
+}

@@ -14,7 +14,6 @@ export default defineConfig(() => {
     build: {
       outDir: 'dist',
       assetsDir: 'assets',
-      emptyOutDir: false, // Ensure we don't wipe compiled server.cjs in any sequential build execution
       sourcemap: true,
     },
     server: {

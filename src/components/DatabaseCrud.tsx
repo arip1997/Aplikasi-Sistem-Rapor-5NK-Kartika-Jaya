@@ -1,7 +1,9 @@
 import { useState, useId, FormEvent, useRef, useEffect, ChangeEvent } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Student, Teacher, Category, Indicator, ScoreKey, KopSekolah } from '../types';
 import { SCHOOL_CLASSES, DEFAULT_KOP } from '../data';
-import { exportDatabaseBackupConfig, parseExcelDatabase, uploadExcelToGoogleDrive, encryptData, decryptData } from '../utils';
+import { exportDatabaseBackupConfig, parseExcelDatabase, uploadExcelToGoogleDrive, encryptData, decryptData, addChangeLog, getChangeLogs, clearChangeLogs, deleteChangeLog, exportLocalJsonBackup, ChangeLog, formatProperName } from '../utils';
+import { normalizeAllData, hasValidAcademicTitle } from '../normalization';
 import { initAuth, googleSignIn, getAccessToken, logout } from '../firebase';
 import { 
   UserPlus, 
@@ -22,7 +24,10 @@ import {
   Download,
   Upload,
   Lock,
-  Unlock
+  Unlock,
+  History,
+  RotateCcw,
+  SpellCheck
 } from 'lucide-react';
 
 interface DatabaseCrudProps {
@@ -52,7 +57,22 @@ export default function DatabaseCrud({
   classes,
   onUpdateClasses,
 }: DatabaseCrudProps) {
-  const [activeSubTab, setActiveSubTab] = useState<'siswa' | 'guru' | 'indikator' | 'kop' | 'backup'>('siswa');
+  const [activeSubTab, setActiveSubTab] = useState<'siswa' | 'guru' | 'indikator' | 'kop' | 'backup' | 'riwayat'>('siswa');
+  const [changeLogs, setChangeLogs] = useState<ChangeLog[]>([]);
+  const [logSearchQuery, setLogSearchQuery] = useState('');
+
+  // Sync change logs
+  useEffect(() => {
+    const loadLogs = () => {
+      setChangeLogs(getChangeLogs());
+    };
+    loadLogs();
+    window.addEventListener('rapor_change_logs_updated', loadLogs);
+    return () => {
+      window.removeEventListener('rapor_change_logs_updated', loadLogs);
+    };
+  }, []);
+
   const [siswaSearch, setSiswaSearch] = useState('');
   const [guruSearch, setGuruSearch] = useState('');
   
@@ -67,7 +87,19 @@ export default function DatabaseCrud({
 
   // Kop Sekolah Edit State
   const [editKop, setEditKop] = useState<KopSekolah>(kopSekolah);
-  
+  useEffect(() => {
+    setEditKop(kopSekolah);
+  }, [kopSekolah]);
+  const [printMargins, setPrintMargins] = useState(() => {
+    const saved = localStorage.getItem('rapor_5nk_print_margins');
+    return saved ? JSON.parse(saved) : { top: 12, bottom: 12, left: 15, right: 15 };
+  });
+
+  const updatePrintMargins = (newMargins: { top: number, bottom: number, left: number, right: number }) => {
+    setPrintMargins(newMargins);
+    localStorage.setItem('rapor_5nk_print_margins', JSON.stringify(newMargins));
+  };
+    
   // Modals / Editor states
   const [editingSiswa, setEditingSiswa] = useState<Student | null>(null);
   const [isSiswaFormOpen, setIsSiswaFormOpen] = useState(false);
@@ -93,13 +125,75 @@ export default function DatabaseCrud({
 
   const [editingIndicator, setEditingIndicator] = useState<{ catId: string; ind: Indicator } | null>(null);
   const [isIndicatorFormOpen, setIsIndicatorFormOpen] = useState(false);
+
+  // Close modals on Esc
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsSiswaFormOpen(false);
+        setIsGuruFormOpen(false);
+        setIsIndicatorFormOpen(false);
+        setIsAddClassModalOpen(false);
+        setIsCsvMappingOpen(false);
+        setEditingSiswa(null);
+        setEditingGuru(null);
+        setEditingIndicator(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
   const [currentCatIdForInd, setCurrentCatIdForInd] = useState('');
   const [newIndText, setNewIndText] = useState('');
+
+  const [selectedStudentIds, setSelectedStudentIds] = useState<Set<string>>(new Set());
 
   // ----------------- SISWA CRUD OPERATIONS -----------------
   const filteredStudentsByClass = students.filter(s => s.kelas === selectedClass && 
     (s.name.toLowerCase().includes(siswaSearch.toLowerCase()) || s.nis.includes(siswaSearch))
   );
+
+  const handleSelectAllStudentsInCurrentView = (e: ChangeEvent<HTMLInputElement>) => {
+    if (e.target.checked) {
+      setSelectedStudentIds(new Set(filteredStudentsByClass.map(s => s.id)));
+    } else {
+      setSelectedStudentIds(new Set());
+    }
+  };
+
+  const handleSelectStudent = (id: string, e?: ChangeEvent<HTMLInputElement>) => {
+    e?.stopPropagation();
+    const next = new Set(selectedStudentIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelectedStudentIds(next);
+  };
+
+  const handleBulkDeleteStudents = () => {
+    if (selectedStudentIds.size === 0) return;
+    if (window.confirm(`Anda yakin ingin menghapus ${selectedStudentIds.size} siswa terpilih dari database? Tindakan ini permanen.`)) {
+      onUpdateStudents(students.filter(s => !selectedStudentIds.has(s.id)));
+      addChangeLog('HAPUS_SISWA', `Menghapus massal ${selectedStudentIds.size} siswa dari database`);
+      setSelectedStudentIds(new Set());
+    }
+  };
+
+  const handleBatchNormalizeStudents = () => {
+    if (window.confirm(`Anda yakin ingin merapikan penulisan nama (huruf kapital) bagi seluruh siswa di kelas ${selectedClass}?`)) {
+      const normalizedData = normalizeAllData(students, teachers);
+      
+      const nextStudents = students.map(s => {
+        if (s.kelas === selectedClass) {
+          const found = normalizedData.students.find((n: any) => n.id === s.id);
+          return found ? found : s;
+        }
+        return s;
+      });
+      onUpdateStudents(nextStudents);
+      addChangeLog('EDIT_SISWA', `Normalisasi penulisan nama massal untuk kelas ${selectedClass}`);
+      alert('Penulisan nama seluruh siswa di kelas pemilih berhasil dirapikan!');
+    }
+  };
 
   const handleOpenAddSiswa = () => {
     // Generate realistic starting NIS
@@ -117,7 +211,7 @@ export default function DatabaseCrud({
       semester: 'Semester II (Genap)',
       kesimpulan: 'Siswa menunjukkan antusiasme yang luar biasa dan tekad kuat untuk terus berprestasi. Perkembangan moral dan akademik berjalan seimbang serta berkembang ideal.',
       catatanWali: 'Uraian motivasi bagimu agar tangkas belajar di semester berikutnya! Tingkatkan terus prestasimu!',
-      catatanOrangTua: 'Alhamdulillah, kami pantau terus perkembangan anak. Terima kasih bimbingan bapak/ibu Guru.',
+      catatanOrangTua: 'Alhamdulillah, kami pantau terus perkembangan anak. Terima kasih bimbingan bapak/ibu Guru.'
     });
     setIsSiswaFormOpen(true);
   };
@@ -135,13 +229,8 @@ export default function DatabaseCrud({
       return;
     }
 
-    // 🛡   Integritas Data: NIS harus unik (Tidak boleh ganda)
+    // 🛡   Integritas Data: NIS wajib diisi
     const normalizedNis = (newSiswa.nis || '').trim();
-    const isNisDuplicate = students.some(s => s.nis.trim() === normalizedNis && s.id !== editingSiswa?.id);
-    if (isNisDuplicate) {
-      alert(`VALIDASI GAGAL:\nNIS "${normalizedNis}" sudah terdaftar pada siswa lain di database!\n\nTiap siswa wajib memiliki Nomor Induk Siswa (NIS) unik agar korelasi rapor tidak tertukar.`);
-      return;
-    }
 
     if (editingSiswa) {
       // Update existing
@@ -149,24 +238,25 @@ export default function DatabaseCrud({
         if (s.id === editingSiswa.id) {
           return {
             ...s,
-            name: newSiswa.name!,
+            name: formatProperName(newSiswa.name!),
             nis: newSiswa.nis!,
             kelas: newSiswa.kelas!,
             gender: newSiswa.gender!,
             kesimpulan: newSiswa.kesimpulan || '',
             catatanWali: newSiswa.catatanWali || '',
-            catatanOrangTua: newSiswa.catatanOrangTua || '',
+            catatanOrangTua: newSiswa.catatanOrangTua || ''
           };
         }
         return s;
       });
       onUpdateStudents(updated);
+      addChangeLog('EDIT_SISWA', `Memperbarui profil/data siswa "${newSiswa.name}" (NIS: ${newSiswa.nis}, Kelas: ${newSiswa.kelas})`);
     } else {
       // Create new
       const nextId = `STUDENT_${String(students.length + 1).padStart(3, '0')}`;
       const fresh: Student = {
         id: nextId,
-        name: newSiswa.name!,
+        name: formatProperName(newSiswa.name!),
         nis: newSiswa.nis!,
         kelas: newSiswa.kelas!,
         gender: newSiswa.gender!,
@@ -178,6 +268,7 @@ export default function DatabaseCrud({
         completed: false
       };
       onUpdateStudents([...students, fresh]);
+      addChangeLog('TAMBAH_SISWA', `Menambahkan siswa baru "${newSiswa.name}" (NIS: ${newSiswa.nis}) ke kelas ${newSiswa.kelas}`);
     }
     setIsSiswaFormOpen(false);
     setEditingSiswa(null);
@@ -186,6 +277,7 @@ export default function DatabaseCrud({
   const handleDeleteSiswa = (id: string, name: string) => {
     if (window.confirm(`Apakah Anda yakin ingin menghapus siswa "${name}" dari database? Tindakan ini permanen.`)) {
       onUpdateStudents(students.filter(s => s.id !== id));
+      addChangeLog('HAPUS_SISWA', `Menghapus siswa "${name}" (ID: ${id}) dari database`);
     }
   };
 
@@ -230,6 +322,7 @@ export default function DatabaseCrud({
     }
     const updated = [...classes, trimmed];
     onUpdateClasses(updated);
+    addChangeLog('TAMBAH_KELAS', `Menambahkan kelas baru "${trimmed}"`);
     setIsAddClassModalOpen(false);
     setNewClassName('');
   };
@@ -260,8 +353,8 @@ export default function DatabaseCrud({
         if (t.id === editingGuru.id) {
           return {
             ...t,
-            name: newGuru.name!,
-            nip: newGuru.nip || '-',
+            name: formatProperName(newGuru.name!),
+            nip: newGuru.nip ? newGuru.nip.trim() : '',
             role: newGuru.role!,
             classAssigned: newGuru.classAssigned || undefined
           };
@@ -269,17 +362,19 @@ export default function DatabaseCrud({
         return t;
       });
       onUpdateTeachers(updated);
+      addChangeLog('EDIT_GURU', `Memperbarui data guru "${newGuru.name}" (${newGuru.role})`);
     } else {
       // Create
       const nextId = `TEACHER_${String(teachers.length + 1).padStart(3, '0')}`;
       const fresh: Teacher = {
         id: nextId,
-        name: newGuru.name!,
-        nip: newGuru.nip || '-',
+        name: formatProperName(newGuru.name!),
+        nip: newGuru.nip ? newGuru.nip.trim() : '',
         role: newGuru.role!,
         classAssigned: newGuru.classAssigned || undefined
       };
       onUpdateTeachers([...teachers, fresh]);
+      addChangeLog('TAMBAH_GURU', `Menambahkan guru baru "${newGuru.name}" (${newGuru.role})`);
     }
     setIsGuruFormOpen(false);
     setEditingGuru(null);
@@ -288,6 +383,7 @@ export default function DatabaseCrud({
   const handleDeleteGuru = (id: string, name: string) => {
     if (window.confirm(`Apakah Anda yakin ingin menghapus Guru "${name}" dari database?`)) {
       onUpdateTeachers(teachers.filter(t => t.id !== id));
+      addChangeLog('HAPUS_GURU', `Menghapus guru "${name}" (ID: ${id})`);
     }
   };
 
@@ -350,6 +446,12 @@ export default function DatabaseCrud({
     });
 
     onUpdateCategories(updatedCategories);
+    addChangeLog(
+      isNew ? 'TAMBAH_INDIKATOR' : 'EDIT_INDIKATOR', 
+      isNew 
+        ? `Menambahkan indikator perilaku baru "${newIndText}" ke kategori ${catId}` 
+        : `Mengubah indikator perilaku "${ind.id}" menjadi "${newIndText}"`
+    );
     setIsIndicatorFormOpen(false);
     setEditingIndicator(null);
   };
@@ -378,10 +480,19 @@ export default function DatabaseCrud({
         };
       });
       onUpdateStudents(cleanedStudents);
+      addChangeLog('HAPUS_INDIKATOR', `Menghapus indikator perilaku "${indId}" ("${text}") dari kategori ${catId}`);
     }
   };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const csvFileInputRef = useRef<HTMLInputElement>(null);
+
+  // States for CSV Parsing / Column Mapping Modal
+  const [isCsvMappingOpen, setIsCsvMappingOpen] = useState(false);
+  const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
+  const [csvRows, setCsvRows] = useState<string[][]>([]);
+  const [csvColumnMapping, setCsvColumnMapping] = useState({ nameIdx: -1, nisIdx: -1, classIdx: -1, genderIdx: -1 });
+  const [csvFileName, setCsvFileName] = useState('');
 
   const [needsAuth, setNeedsAuth] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
@@ -444,35 +555,29 @@ export default function DatabaseCrud({
     try {
       const data = await parseExcelDatabase(file);
       
+      // Normalize immediately upon import
+      const { students: normalizedStudents, teachers: normalizedTeachers } = normalizeAllData(data.students || [], data.teachers || []);
+      
       // 🛡️ Enforce NIS Duplicate & Format Integrity Checks during Impor
-      let validStudents = data.students || [];
-      let validTeachers = data.teachers || [];
+      let validStudents = normalizedStudents;
+      let validTeachers = normalizedTeachers;
 
       if (validStudents.length > 0) {
-        const nisSet = new Set<string>();
-        const duplicates: string[] = [];
         const missingNis: string[] = [];
         
-        validStudents = validStudents.filter(s => {
+        validStudents = validStudents.map((s, idx) => {
           const nis = (s.nis || '').trim();
-          if (!nis) {
+          if (!nis || nis === 'undefined' || nis === 'null') {
             missingNis.push(s.name);
-            return false;
+            // Auto generation of sequential NIS
+            const fallbackNis = `99${idx}${String(Math.floor(100 + Math.random() * 900))}`;
+            s.nis = fallbackNis;
           }
-          if (nisSet.has(nis)) {
-            duplicates.push(`${s.name} (NIS: ${nis})`);
-            return false;
-          }
-          nisSet.add(nis);
-          return true;
+          return s;
         });
 
         if (missingNis.length > 0) {
-          alert(`PERINGATAN IMPOR:\nAda ${missingNis.length} siswa yang tidak memiliki NIS dalam file Excel Anda dan otomatis dilewatkan demi integritas database.`);
-        }
-
-        if (duplicates.length > 0) {
-          alert(`INTEGRITAS DATA TERANCAM:\nDitemukan ${duplicates.length} siswa dengan NIS ganda di file Excel:\n\n${duplicates.slice(0, 5).join('\n')}${duplicates.length > 5 ? '\n...dan sisa lainnya' : ''}\n\nSiswa-siswa dengan NIS ganda tersebut secara otomatis dilewatkan untuk mencegah tabrakan data.`);
+          alert(`NOTIFIKASI IMPOR (NIS KOSONG):\n\nAda ${missingNis.length} siswa dengan NIS kosong di file Excel Anda:\n\n${missingNis.slice(0, 5).join('\n')}${missingNis.length > 5 ? `\n...dan ${missingNis.length - 5} lainnya` : ''}\n\nSesuai pengaturan sistem baru, data siswa ini TETAP DIIMPOR ke database sekolah dengan dilengkapkan nomor NIS otomatis sementara agar data tersimpan lengkap dan tidak hilang!`);
         }
       }
 
@@ -482,12 +587,12 @@ export default function DatabaseCrud({
           const cleanedNip = (t.nip || '').trim().replace(/\s+/g, '');
           if (cleanedNip && cleanedNip !== '-' && !/^\d{18}$/.test(cleanedNip)) {
             invalidNip.push(`${t.name} (NIP: ${t.nip})`);
-            t.nip = '-'; // Auto repair to secure fallback
+            t.nip = ''; // Auto repair to empty format
           }
         });
 
         if (invalidNip.length > 0) {
-          alert(`PERBAIKAN FORMAT OTOMATIS (NIP GURU):\nDitemukan ${invalidNip.length} guru dengan format NIP tidak valid (harus persis 18 digit angka):\n\n${invalidNip.slice(0, 5).join('\n')}${invalidNip.length > 5 ? '\n...dan sisa lainnya' : ''}\n\nSistem secara otomatis mengubah nilai tersebut ke default '-' agar dapat tersimpan dengan aman.`);
+          alert(`PERBAIKAN FORMAT OTOMATIS (NIP GURU):\nDitemukan ${invalidNip.length} guru dengan format NIP tidak valid (harus persis 18 digit angka):\n\n${invalidNip.slice(0, 5).join('\n')}${invalidNip.length > 5 ? '\n...dan sisa lainnya' : ''}\n\nSistem secara otomatis mengosongkan nilai tersebut agar dapat tersimpan dengan aman.`);
         }
       }
 
@@ -502,6 +607,7 @@ export default function DatabaseCrud({
       if (validTeachers.length > 0) {
         onUpdateTeachers(validTeachers);
       }
+      addChangeLog('IMPORT_EXCEL', `Mengimpor database dari file Excel "${file.name}" (${validStudents.length} siswa, ${validTeachers.length} guru)`);
       alert('Impor database berhasil diload dari Excel dan divalidasi dengan aman!');
     } catch (error) {
       console.error(error);
@@ -510,6 +616,218 @@ export default function DatabaseCrud({
     
     // reset input
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  // Helper to parse CSV text into string arrays
+  const parseCSVToRows = (text: string): string[][] => {
+    const lines: string[][] = [];
+    let row: string[] = [];
+    let inQuotes = false;
+    let currentValue = '';
+    
+    // Detect delimiter: comma or semicolon
+    let delimiter = ',';
+    const firstLine = text.split('\n')[0] || '';
+    if (firstLine.includes(';')) {
+      delimiter = ';';
+    } else if (firstLine.includes('\t')) {
+      delimiter = '\t';
+    }
+
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      const nextChar = text[i + 1];
+      if (char === '"') {
+        if (inQuotes && nextChar === '"') {
+          currentValue += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (char === delimiter && !inQuotes) {
+        row.push(currentValue.trim());
+        currentValue = '';
+      } else if ((char === '\r' || char === '\n') && !inQuotes) {
+        if (char === '\r' && nextChar === '\n') {
+          i++;
+        }
+        row.push(currentValue.trim());
+        if (row.length > 0 && !(row.length === 1 && row[0] === '')) {
+          lines.push(row);
+        }
+        row = [];
+        currentValue = '';
+      } else {
+        currentValue += char;
+      }
+    }
+    if (currentValue || row.length > 0) {
+      row.push(currentValue.trim());
+      lines.push(row);
+    }
+    return lines;
+  };
+
+  const handleImportCsvAction = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const text = event.target?.result as string;
+        if (!text) {
+          alert('File CSV kosong atau gagal dibaca.');
+          return;
+        }
+
+        const rows = parseCSVToRows(text);
+        if (rows.length < 2) {
+          alert('Format CSV tidak valid atau baris data terlalu sedikit (harus memiliki baris header dan minimal 1 data siswa).');
+          return;
+        }
+
+        const headers = rows[0];
+        setCsvHeaders(headers);
+        setCsvRows(rows.slice(1));
+        setCsvFileName(file.name);
+
+        // Auto guessing the columns mapping based on common keywords
+        let nameIdx = -1;
+        let nisIdx = -1;
+        let classIdx = -1;
+        let genderIdx = -1;
+
+        headers.forEach((h, idx) => {
+          const lowerH = h.toLowerCase();
+          if (nameIdx === -1 && (lowerH.includes('nama') || lowerH.includes('name') || lowerH.includes('lengkap') || lowerH.includes('siswa'))) {
+            nameIdx = idx;
+          }
+          if (nisIdx === -1 && (lowerH.includes('nis') || lowerH.includes('induk') || lowerH.includes('no_induk') || lowerH.includes('number'))) {
+            nisIdx = idx;
+          }
+          if (classIdx === -1 && (lowerH.includes('kelas') || lowerH.includes('class') || lowerH.includes('grade') || lowerH.includes('tingkat'))) {
+            classIdx = idx;
+          }
+          if (genderIdx === -1 && (lowerH.includes('gender') || lowerH.includes('kelamin') || lowerH.includes('l/p') || lowerH.includes('lp') || lowerH.includes('sex'))) {
+            genderIdx = idx;
+          }
+        });
+
+        // Set default mapping state
+        setCsvColumnMapping({
+          nameIdx: nameIdx !== -1 ? nameIdx : 0,
+          nisIdx: nisIdx !== -1 ? nisIdx : (headers.length > 1 ? 1 : 0),
+          classIdx: classIdx !== -1 ? classIdx : (headers.length > 2 ? 2 : 0),
+          genderIdx: genderIdx !== -1 ? genderIdx : (headers.length > 3 ? 3 : 0),
+        });
+
+        setIsCsvMappingOpen(true);
+      };
+      reader.readAsText(file, 'UTF-8');
+    } catch (err: any) {
+      alert(`Gagal memproses file CSV: ${err.message}`);
+    }
+  };
+
+  const handleConfirmImportCsv = () => {
+    const { nameIdx, nisIdx, classIdx, genderIdx } = csvColumnMapping;
+    if (nameIdx === -1) {
+      alert('Anda wajib memetakan kolom "Nama Siswa" agar data bisa diimpor.');
+      return;
+    }
+
+    try {
+      const importedStudents: Student[] = [];
+      const missingNisList: string[] = [];
+      let autoNisCount = 0;
+
+      csvRows.forEach((row, index) => {
+        // Skip empty row
+        if (row.length === 0 || (row.length === 1 && !row[0])) return;
+
+        const rawName = row[nameIdx] || '';
+        if (!rawName.trim()) return; // skip row with missing student name
+        
+        const normalizedName = formatProperName(rawName.trim());
+
+        let rawNis = nisIdx !== -1 ? (row[nisIdx] || '').trim() : '';
+        // If empty NIS, we still import! (izinkan dan tetap upload database apabila ada yang notifikasi NIS kosong)
+        if (!rawNis || rawNis === 'undefined' || rawNis === 'null') {
+          missingNisList.push(normalizedName);
+          // Auto generate sequential NIS
+          rawNis = `99${index}${String(Math.floor(100 + Math.random() * 900))}`;
+          autoNisCount++;
+        }
+
+        const rawClass = classIdx !== -1 ? (row[classIdx] || '').trim() : selectedClass;
+        
+        let rawGender = genderIdx !== -1 ? (row[genderIdx] || '').trim().toUpperCase() : 'L';
+        if (rawGender.includes('P') || rawGender.includes('FEMALE') || rawGender.includes('WANITA') || rawGender.includes('PEREMPUAN')) {
+          rawGender = 'P';
+        } else {
+          rawGender = 'L'; // default / male
+        }
+
+        importedStudents.push({
+          id: `STU_CSV_${Date.now()}_${index}`,
+          name: normalizedName,
+          nis: rawNis,
+          kelas: rawClass || selectedClass,
+          gender: rawGender as 'L' | 'P',
+          semester: 'Semester II (Genap)',
+          grades: {},
+          kesimpulan: 'Siswa menunjukkan antusiasme yang luar biasa dan tekad kuat untuk terus berprestasi. Perkembangan moral dan akademik berjalan seimbang serta berkembang ideal.',
+          catatanWali: 'Uraian motivasi bagimu agar tangkas belajar di semester berikutnya! Tingkatkan terus prestasimu!',
+          catatanOrangTua: 'Alhamdulillah, kami pantau terus perkembangan anak. Terima kasih bimbingan bapak/ibu Guru.',
+          completed: false
+        });
+      });
+
+      if (importedStudents.length === 0) {
+        alert('Tidak ada siswa yang diimpor. Periksa kembali struktur file CSV.');
+        return;
+      }
+
+      // Merge / overwrite or extend students database safely
+      const currentStudents = [...students];
+      let overwriteCount = 0;
+      let newCount = 0;
+
+      importedStudents.forEach(newStu => {
+        const existIdx = currentStudents.findIndex(s => s.nis === newStu.nis);
+        if (existIdx !== -1) {
+          // Keep grades of existing if possible, just update info
+          currentStudents[existIdx] = {
+            ...newStu,
+            grades: currentStudents[existIdx].grades, // preserve grades of existing student
+            completed: currentStudents[existIdx].completed
+          };
+          overwriteCount++;
+        } else {
+          currentStudents.push(newStu);
+          newCount++;
+        }
+      });
+
+      onUpdateStudents(currentStudents);
+      setIsCsvMappingOpen(false);
+
+      addChangeLog('IMPORT_CSV', `Mengimpor ${importedStudents.length} siswa baru dari file CSV "${csvFileName}"`);
+
+      // Notification
+      let notifMsg = `CSV BERHASIL DIIMPOR!\n\nBerhasil membaca ${importedStudents.length} baris siswa dari CSV.\n- Siswa Baru: ${newCount}\n- Diperbarui (NIS Cocok): ${overwriteCount}\n `;
+      if (missingNisList.length > 0) {
+        notifMsg += `\n\n⚠️ NOTIFIKASI NIS KOSONG:\nAda ${missingNisList.length} siswa diimpor dengan NIS kosong. NIS mereka di-generate otomatis demi integritas sistem:\n${missingNisList.slice(0, 5).join('\n')}${missingNisList.length > 5 ? `\n...dan ${missingNisList.length - 5} lainnya` : ''}`;
+      }
+
+      alert(notifMsg);
+
+      // Reset file input
+      if (csvFileInputRef.current) csvFileInputRef.current.value = '';
+    } catch (err: any) {
+      alert(`Gagal mengimpor data CSV: ${err.message}`);
+    }
   };
 
   const handleDirectEncryptedBackup = () => {
@@ -550,13 +868,26 @@ export default function DatabaseCrud({
   };
 
   return (
-    <div className="bg-white border border-slate-200 rounded-xl shadow-xs flex flex-col h-full overflow-hidden">
+    <motion.div 
+      initial={{ opacity: 0, x: 20 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: 20 }}
+      transition={{ duration: 0.3, ease: 'easeOut' }}
+      className="bg-white border border-slate-200 rounded-xl shadow-xs flex flex-col h-full overflow-hidden"
+    >
       <input 
         type="file" 
         accept=".xlsx, .xls" 
         className="hidden" 
         ref={fileInputRef} 
         onChange={handleImportDatabaseAction} 
+      />
+      <input 
+        type="file" 
+        accept=".csv" 
+        className="hidden" 
+        ref={csvFileInputRef} 
+        onChange={handleImportCsvAction} 
       />
       
       {/* Dynamic Sub Tab Toggle */}
@@ -580,7 +911,7 @@ export default function DatabaseCrud({
                 : 'text-slate-500 hover:bg-slate-200/50 border-transparent'
             }`}
           >
-            👩‍🏫 Roster Guru
+            👩‍🏫 Manajemen Data Guru & Wali Kelas
           </button>
           <button
             onClick={() => setActiveSubTab('indikator')}
@@ -612,6 +943,16 @@ export default function DatabaseCrud({
           >
             🛡️ Backup & Enkripsi
           </button>
+          <button
+            onClick={() => setActiveSubTab('riwayat')}
+            className={`px-3 py-1.5 text-xs font-bold rounded-lg flex items-center gap-1.5 cursor-pointer select-none border transition-colors ${
+              activeSubTab === 'riwayat' 
+                ? 'bg-white text-slate-800 border-slate-200 shadow-xs' 
+                : 'text-slate-500 hover:bg-slate-200/50 border-transparent'
+            }`}
+          >
+            ⏱️ Riwayat Perubahan
+          </button>
         </div>
         
         <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
@@ -633,17 +974,29 @@ export default function DatabaseCrud({
           )}
 
           <div className="hidden sm:block w-px h-4 bg-slate-300 mx-1"></div>
-
-          <span className="text-[10px] font-bold text-slate-400 mr-1 hidden sm:inline">EXCEL IO:</span>
+          
+          <span className="text-[10px] font-bold text-slate-400 mr-1 hidden sm:inline">IMPOR DATA:</span>
           
           <button 
             onClick={() => fileInputRef.current?.click()}
-            className="flex items-center gap-1 text-[11px] font-bold bg-white border border-slate-300 text-slate-700 px-2.5 py-1.5 rounded-lg hover:bg-slate-100 transition-colors shadow-xs cursor-pointer"
+            className="flex items-center gap-1 text-[11px] font-bold bg-white border border-slate-300 text-slate-700 px-2   py-1.5 rounded-lg hover:bg-slate-100 transition-colors shadow-xs cursor-pointer"
             title="Impor database massal dari Excel (.xlsx)"
           >
-            <Upload className="h-3 w-3" /> Impor
+            <Upload className="h-3 w-3" /> Impor Excel
+          </button>
+
+          <button 
+            onClick={() => csvFileInputRef.current?.click()}
+            className="flex items-center gap-1 text-[11px] font-bold bg-emerald-50 border border-emerald-200 text-emerald-800 px-2 py-1.5 rounded-lg hover:bg-emerald-100 transition-colors shadow-xs cursor-pointer"
+            title="Impor daftar siswa massal dari file CSV (.csv)"
+          >
+            <Upload className="h-3 w-3 text-emerald-600" /> Impor CSV
           </button>
           
+          <div className="hidden sm:block w-px h-4 bg-slate-300 mx-1"></div>
+
+          <span className="text-[10px] font-bold text-slate-400 mr-1 hidden sm:inline">BACKUP:</span>
+
           <button 
             onClick={handleExportDatabase}
             className="flex items-center gap-1 text-[11px] font-bold bg-indigo-50 border border-indigo-200 text-indigo-700 px-2.5 py-1.5 rounded-lg hover:bg-indigo-100 transition-colors shadow-xs cursor-pointer"
@@ -711,11 +1064,46 @@ export default function DatabaseCrud({
               </button>
             </div>
           </div>
+          
+          <div className="bg-slate-50 border-b border-slate-100 p-2 flex items-center gap-3 px-4 no-print text-xs justify-between">
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="select-all-students"
+                checked={selectedStudentIds.size === filteredStudentsByClass.length && filteredStudentsByClass.length > 0}
+                onChange={handleSelectAllStudentsInCurrentView}
+                className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 w-4 h-4 cursor-pointer"
+              />
+              <label htmlFor="select-all-students" className="font-semibold text-slate-600 cursor-pointer select-none">
+                Pilih Semua ({selectedStudentIds.size}/{filteredStudentsByClass.length})
+              </label>
+            </div>
+
+            <div className="flex items-center gap-2 opacity-100 transition-opacity">
+              <button
+                onClick={handleBatchNormalizeStudents}
+                className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold px-3 py-1 rounded-md text-[11px] flex items-center gap-1.5 cursor-pointer transition-colors"
+                title="Rapikan penulisan nama (huruf kapital) bagi semua siswa kelas ini"
+              >
+                <SpellCheck className="h-3.5 w-3.5" /> Batch Normalization
+              </button>
+
+              {selectedStudentIds.size > 0 && (
+                <button
+                  onClick={handleBulkDeleteStudents}
+                  className="bg-rose-100 hover:bg-rose-200 text-rose-700 font-bold px-3 py-1 rounded-md text-[11px] flex items-center gap-1.5 cursor-pointer transition-colors"
+                >
+                  <Trash2 className="h-3.5 w-3.5" /> Hapus Terpilih ({selectedStudentIds.size})
+                </button>
+              )}
+            </div>
+          </div>
 
           <div className="flex-1 overflow-auto max-h-[450px]">
             <table className="w-full text-left text-xs border-collapse">
               <thead className="sticky top-0 bg-slate-100 text-slate-600 font-bold border-b border-slate-200">
                 <tr>
+                  <th className="p-3 w-10 text-center"></th>
                   <th className="p-3 w-12 text-center">No</th>
                   <th className="p-3">NIS</th>
                   <th className="p-3">Nama Lengkap</th>
@@ -728,7 +1116,19 @@ export default function DatabaseCrud({
               <tbody className="divide-y divide-slate-100">
                 {filteredStudentsByClass.length > 0 ? (
                   filteredStudentsByClass.map((s, idx) => (
-                    <tr key={s.id} className="hover:bg-slate-50 transition-colors">
+                    <tr 
+                      key={s.id} 
+                      className={`transition-colors cursor-pointer ${selectedStudentIds.has(s.id) ? 'bg-indigo-50 hover:bg-indigo-100' : 'hover:bg-slate-50'}`}
+                      onClick={() => handleSelectStudent(s.id)}
+                    >
+                      <td className="p-3 text-center" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={selectedStudentIds.has(s.id)}
+                          onChange={(e) => handleSelectStudent(s.id, e)}
+                          className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 w-4 h-4 cursor-pointer"
+                        />
+                      </td>
                       <td className="p-3 text-center font-mono text-slate-400 font-medium">{idx + 1}</td>
                       <td className="p-3 font-mono font-bold text-slate-700">{s.nis}</td>
                       <td className="p-3">
@@ -772,7 +1172,7 @@ export default function DatabaseCrud({
                   ))
                 ) : (
                   <tr>
-                    <td colSpan={7} className="p-10 text-center text-slate-400 italic">
+                    <td colSpan={8} className="p-10 text-center text-slate-400 italic">
                       Tidak ada siswa terdaftar di database untuk kelas {selectedClass}. Klik "Tambah Siswa" untuk menambahkan murid baru.
                     </td>
                   </tr>
@@ -791,9 +1191,9 @@ export default function DatabaseCrud({
             <div>
               <h4 className="font-bold text-slate-800 text-sm flex items-center gap-2">
                 <Users className="h-4 w-4 text-emerald-600" />
-                Roster Guru & Wali Kelas Kartika
+                Manajemen Data Guru & Wali Kelas Rapor
               </h4>
-              <p className="text-[11px] text-slate-400">Manajemen staf pengajar, bimbingan konseling dan wali kelas pengisi rapor</p>
+              <p className="text-[11px] text-slate-400">Tambah, ubah, atau hapus data NIP, Nama Guru, jabatan, dan alokasi kelas secara langsung agar lebih terorganisir</p>
             </div>
 
             <div className="flex gap-2">
@@ -966,6 +1366,7 @@ export default function DatabaseCrud({
           <form onSubmit={(e) => {
             e.preventDefault();
             onUpdateKopSekolah(editKop);
+            addChangeLog('EDIT_KOP', `Mengubah profil sekolah / kop surat mendasar menjadi "${editKop.namaSekolah}"`);
             alert('Kop sekolah berhasil disimpan!');
           }} className="bg-slate-50 border border-slate-200 rounded-xl p-5 flex flex-col gap-4 max-w-2xl">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -988,7 +1389,7 @@ export default function DatabaseCrud({
                   required
                   value={editKop.koordinator || ''}
                   onChange={(e) => setEditKop({ ...editKop, koordinator: e.target.value })}
-                  placeholder="Contoh: JAKARTA"
+                  placeholder="Contoh: KOREM 084"
                   className="bg-white border border-slate-300 rounded-lg p-2.5 font-sans"
                 />
               </div>
@@ -1000,7 +1401,7 @@ export default function DatabaseCrud({
                   required
                   value={editKop.cabang || ''}
                   onChange={(e) => setEditKop({ ...editKop, cabang: e.target.value })}
-                  placeholder="Contoh: XVIII SMA/SMK"
+                  placeholder="Contoh: IV BRAWIJAYA"
                   className="bg-white border border-slate-300 rounded-lg p-2.5 font-sans"
                 />
               </div>
@@ -1012,7 +1413,7 @@ export default function DatabaseCrud({
                   required
                   value={editKop.namaSekolah || ''}
                   onChange={(e) => setEditKop({ ...editKop, namaSekolah: e.target.value })}
-                  placeholder="Contoh: SMA / SMK KARTIKA VIII-1"
+                  placeholder="Contoh: SMA KARTIKA IV-3 SURABAYA"
                   className="bg-white border border-slate-300 rounded-lg p-2.5 font-bold"
                 />
               </div>
@@ -1025,7 +1426,7 @@ export default function DatabaseCrud({
                 value={editKop.alamat || ''}
                 onChange={(e) => setEditKop({ ...editKop, alamat: e.target.value })}
                 rows={2}
-                placeholder="Contoh: Jl.Srengseng Sawah No.17, Jagakarsa..."
+                placeholder="Contoh: Jl. Brawijaya No.38, Karah, Kec. Jambangan, Kota Surabaya, Jawa Timur 60232"
                 className="bg-white border border-slate-300 rounded-lg p-2.5 font-sans"
               />
             </div>
@@ -1043,40 +1444,156 @@ export default function DatabaseCrud({
                 />
               </div>
 
-              <div className="flex flex-col gap-1.5 text-xs">
+              <div className="flex flex-col gap-1.5 text-xs sm:col-span-2">
                 <label className="font-bold text-slate-500 uppercase tracking-wider">Logo Sekolah (Opsional)</label>
-                <div className="flex items-center gap-3">
-                  {editKop.logoUrl && (
-                    <img src={editKop.logoUrl} alt="Logo" className="w-10 h-10 object-contain bg-white rounded border border-slate-200" />
-                  )}
-                  <input
-                    type="file"
-                    accept="image/png, image/jpeg, image/jpg"
-                    onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) {
-                        const reader = new FileReader();
-                        reader.onloadend = () => {
-                          setEditKop({ ...editKop, logoUrl: reader.result as string });
-                        };
-                        reader.readAsDataURL(file);
-                      } else {
-                        // Jika dihapus melalui dialog, bisa mengosongkan jika diinginkan.
-                      }
-                    }}
-                    className="flex-1 bg-white border border-slate-300 rounded-lg p-2 font-mono text-[11px] file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-[11px] file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100"
-                  />
-                  {editKop.logoUrl && (
-                    <button
-                      type="button"
-                      onClick={() => setEditKop({ ...editKop, logoUrl: '' })}
-                      className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                      title="Hapus Logo"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  )}
+                <div className="flex flex-col gap-3">
+                  <div className="flex items-center gap-3">
+                    {editKop.logoUrl && (
+                      <img src={editKop.logoUrl} alt="Logo" className="w-14 h-14 object-contain bg-white rounded border border-slate-200 shadow-sm" />
+                    )}
+                    <div className="flex-1 flex flex-col gap-2">
+                      <input
+                        type="url"
+                        placeholder="Tempelkan URL gambar logo di sini (https://...)"
+                        value={editKop.logoUrl?.startsWith('data:') ? '' : editKop.logoUrl || ''}
+                        onChange={(e) => setEditKop({ ...editKop, logoUrl: e.target.value })}
+                        className="bg-white border border-slate-300 rounded-lg p-2.5 font-sans"
+                      />
+                      <div className="flex items-center gap-2">
+                        <span className="text-slate-400 font-bold px-1 text-[10px] uppercase">ATAU UNGGAH FILE:</span>
+                        <input
+                          type="file"
+                          accept="image/png, image/jpeg, image/jpg"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) {
+                              const reader = new FileReader();
+                              reader.onloadend = () => {
+                                setEditKop({ ...editKop, logoUrl: reader.result as string });
+                              };
+                              reader.readAsDataURL(file);
+                            }
+                          }}
+                          className="flex-1 bg-white border border-slate-300 rounded-lg p-1.5 font-mono text-[11px] file:mr-3 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-[11px] file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100"
+                        />
+                      </div>
+                    </div>
+                    {editKop.logoUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setEditKop({ ...editKop, logoUrl: '' })}
+                        className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors flex-none"
+                        title="Hapus Logo"
+                      >
+                        <Trash2 className="h-5 w-5" />
+                      </button>
+                    )}
+                  </div>
                 </div>
+              </div>
+
+              {/* Tanda Tangan Digital Guru / Orang Tua */}
+              <div className="flex flex-col gap-1.5 text-xs sm:col-span-2 border-t border-slate-200 pt-4 mt-2">
+                <label className="font-bold text-slate-700 uppercase tracking-wider text-xs">Tanda Tangan Digital (Opsional)</label>
+                <p className="text-slate-400 text-[11px] mb-3">Unggah foto tanda tangan digital guru (wali kelas) dan orang tua untuk ditampilkan secara otomatis di format Cetak Rapor PDF.</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Tanda Tangan Guru */}
+                  <div className="bg-white p-4 border border-slate-200 rounded-lg flex flex-col gap-2">
+                    <span className="font-bold text-slate-600 block mb-1">Tanda Tangan Guru / Wali Kelas</span>
+                    <div className="flex items-center gap-3">
+                      {editKop.signatureTeacherUrl ? (
+                        <div className="relative">
+                          <img src={editKop.signatureTeacherUrl} alt="Tanda Tangan Guru" className="w-20 h-16 object-contain bg-slate-50 rounded border border-slate-200" />
+                          <button
+                            type="button"
+                            onClick={() => setEditKop({ ...editKop, signatureTeacherUrl: '' })}
+                            className="absolute -top-1.5 -right-1.5 bg-red-500 text-white rounded-full h-5 w-5 flex items-center justify-center shadow-md hover:scale-105 transition-transform font-bold text-[10px] cursor-pointer"
+                            title="Hapus"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="w-20 h-16 bg-slate-100 border border-dashed border-slate-300 rounded flex items-center justify-center text-slate-400 font-mono text-[9px] text-center px-1">KOSONG</div>
+                      )}
+                      <div className="flex-1 flex flex-col gap-1.5">
+                        <input
+                          type="file"
+                          accept="image/png, image/jpeg, image/jpg"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) {
+                              const reader = new FileReader();
+                              reader.onloadend = () => {
+                                setEditKop({ ...editKop, signatureTeacherUrl: reader.result as string });
+                              };
+                              reader.readAsDataURL(file);
+                            }
+                          }}
+                          className="w-full bg-slate-50 border border-slate-200 rounded p-1 text-[10px] file:py-0.5 file:px-2 file:bg-emerald-50 file:text-emerald-700 file:border-0 file:rounded file:text-[10px] file:font-semibold"
+                        />
+                        <span className="text-[10px] text-slate-400 block">PNG transparan direkomendasikan.</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Tanda Tangan Orang Tua */}
+                  <div className="bg-white p-4 border border-slate-200 rounded-lg flex flex-col gap-2">
+                    <span className="font-bold text-slate-600 block mb-1">Tanda Tangan Orang Tua / Wali</span>
+                    <div className="flex items-center gap-3">
+                      {editKop.signatureParentUrl ? (
+                        <div className="relative">
+                          <img src={editKop.signatureParentUrl} alt="Tanda Tangan Orang Tua" className="w-20 h-16 object-contain bg-slate-50 rounded border border-slate-200" />
+                          <button
+                            type="button"
+                            onClick={() => setEditKop({ ...editKop, signatureParentUrl: '' })}
+                            className="absolute -top-1.5 -right-1.5 bg-red-500 text-white rounded-full h-5 w-5 flex items-center justify-center shadow-md hover:scale-105 transition-transform font-bold text-[10px] cursor-pointer"
+                            title="Hapus"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="w-20 h-16 bg-slate-100 border border-dashed border-slate-300 rounded flex items-center justify-center text-slate-400 font-mono text-[9px] text-center px-1">KOSONG</div>
+                      )}
+                      <div className="flex-1 flex flex-col gap-1.5">
+                        <input
+                          type="file"
+                          accept="image/png, image/jpeg, image/jpg"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) {
+                              const reader = new FileReader();
+                              reader.onloadend = () => {
+                                setEditKop({ ...editKop, signatureParentUrl: reader.result as string });
+                              };
+                              reader.readAsDataURL(file);
+                            }
+                          }}
+                          className="w-full bg-slate-50 border border-slate-200 rounded p-1 text-[10px] file:py-0.5 file:px-2 file:bg-emerald-50 file:text-emerald-700 file:border-0 file:rounded file:text-[10px] file:font-semibold"
+                        />
+                        <span className="text-[10px] text-slate-400 block">PNG transparan direkomendasikan.</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6 p-4 bg-white border border-slate-200 rounded-xl">
+              <h5 className="font-bold text-slate-700 text-xs mb-3">Penyesuaian Margin Cetak (mm)</h5>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {['top', 'bottom', 'left', 'right'].map((margin) => (
+                  <div key={margin} className="flex flex-col gap-1 text-xs">
+                    <label className="font-bold text-slate-500 capitalize">{margin}</label>
+                    <input
+                      type="number"
+                      value={printMargins[margin as keyof typeof printMargins]}
+                      onChange={(e) => updatePrintMargins({ ...printMargins, [margin]: parseInt(e.target.value) || 0 })}
+                      className="bg-slate-50 border border-slate-300 rounded-lg p-2"
+                    />
+                  </div>
+                ))}
               </div>
             </div>
 
@@ -1085,7 +1602,7 @@ export default function DatabaseCrud({
                 type="submit"
                 className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-2 rounded-lg text-xs flex items-center gap-2 shadow-xs cursor-pointer inline-flex"
               >
-                <Save className="h-4 w-4" /> Simpan Profil Sekolah
+                <Save className="h-4 w-4" /> Simpan Profil Sekolah & Margin
               </button>
             </div>
           </form>
@@ -1183,6 +1700,20 @@ export default function DatabaseCrud({
                 >
                   <Lock className="h-3.5 w-3.5" /> Amankan & Unduh .json
                 </button>
+                <button
+                  onClick={() => {
+                    if (window.confirm("Apakah Anda yakin ingin melakukan normalisasi massal pada seluruh data nama guru dan siswa? Sisa spasi dan format gelar akan diperbaiki secara otomatis.")) {
+                      const { students: normalizedStudents, teachers: normalizedTeachers } = normalizeAllData(students, teachers);
+                      onUpdateStudents(normalizedStudents);
+                      onUpdateTeachers(normalizedTeachers);
+                      addChangeLog('NORMALISASI_MASSAL', 'Melakukan normalisasi massal pada seluruh nama guru dan siswa');
+                      alert('Data berhasil dinormalisasi!');
+                    }
+                  }}
+                  className="w-full py-2 mt-2 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors shadow-xs"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" /> Normalisasi Massal Data
+                </button>
               </div>
             </div>
 
@@ -1235,12 +1766,16 @@ export default function DatabaseCrud({
                         }
                         
                         // Succeeded! Restore
-                        onUpdateStudents(parsed.students);
-                        onUpdateTeachers(parsed.teachers);
+                        const normalizedStudents = parsed.students.map((s: any) => ({...s, name: formatProperName(s.name)}));
+                        const normalizedTeachers = parsed.teachers.map((t: any) => ({...t, name: formatProperName(t.name)}));
+                        
+                        onUpdateStudents(normalizedStudents);
+                        onUpdateTeachers(normalizedTeachers);
                         onUpdateCategories(parsed.categories);
                         if (parsed.kopSekolah) {
                           onUpdateKopSekolah(parsed.kopSekolah);
                         }
+                        addChangeLog('RESTORE_DATABASE', `Memulihkan database secara penuh dari file cadangan JSON`);
                         
                         alert('RESTORE BERHASIL:\nSeluruh data primer siswa, guru, kategori indikator, dan profil kop sekolah berhasil dipulihkan secara penuh.');
                         if (jsonFileInputRef.current) jsonFileInputRef.current.value = '';
@@ -1262,6 +1797,117 @@ export default function DatabaseCrud({
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* -------------------- SUBTAB 6: RIWAYAT PERUBAHAN -------------------- */}
+      {activeSubTab === 'riwayat' && (
+        <div className="flex-1 overflow-y-auto p-6 max-h-[500px]">
+          <div className="mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+            <div>
+              <h4 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+                <History className="h-4 w-4 text-emerald-600 animate-pulse" />
+                Riwayat Perubahan Data (Change History Logs)
+              </h4>
+              <p className="text-xs text-slate-400 mt-0.5">Sistem mencatat log waktu dan rincian perubahan data untuk pelacakan kesalahan input nilai secara tidak sengaja.</p>
+            </div>
+            {changeLogs.length > 0 && (
+              <button
+                onClick={() => {
+                  if (window.confirm('Apakah Anda yakin ingin menghapus seluruh log riwayat perubahan? Tindakan ini tidak dapat dibatalkan.')) {
+                    clearChangeLogs();
+                    alert('Asal log riwayat perubahan berhasil dikosongkan!');
+                  }
+                }}
+                className="bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 font-bold px-3 py-1.5 rounded-lg text-[11px] cursor-pointer flex items-center gap-1"
+              >
+                <Trash2 className="h-3.5 w-3.5" /> Hapus Semua Riwayat
+              </button>
+            )}
+          </div>
+
+          <div className="mb-4">
+            <div className="relative">
+              <input
+                type="text"
+                placeholder="Cari kata kunci riwayat atau jenis perubahan..."
+                value={logSearchQuery}
+                onChange={(e) => setLogSearchQuery(e.target.value)}
+                className="w-full pl-9 pr-4 py-3 text-xs border border-slate-300 rounded-lg bg-white placeholder-slate-400 focus:outline-hidden"
+              />
+              <Search className="absolute left-3 top-3.5 h-3.5 w-3.5 text-slate-400" />
+            </div>
+          </div>
+
+          {changeLogs.length === 0 ? (
+            <div className="text-center py-12 bg-slate-50 border border-dashed border-slate-200 rounded-xl">
+              <History className="h-10 w-10 text-slate-300 mx-auto mb-3" />
+              <p className="text-xs text-slate-500 font-semibold">Belum Ada Riwayat Perubahan Terdeteksi</p>
+              <p className="text-[10px] text-slate-400 mt-0.5">Semua entri tambahan siswa, hapus, profil, atau input nilai akan tercatat otomatis di sini.</p>
+            </div>
+          ) : (
+            <div className="border border-slate-200 rounded-xl overflow-hidden bg-white max-h-[350px] overflow-y-auto shadow-inner">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200 select-none">
+                  <tr>
+                    <th className="px-4 py-3">Waktu Transaksi (WIB)</th>
+                    <th className="px-4 py-3">Operator</th>
+                    <th className="px-4 py-3">Jenis Kegiatan</th>
+                    <th className="px-4 py-3">Rincian Perubahan Data</th>
+                    <th className="px-4 py-3 text-center">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {changeLogs
+                    .filter(log => {
+                      if (!logSearchQuery) return true;
+                      const query = logSearchQuery.toLowerCase();
+                      return (
+                        log.type.toLowerCase().includes(query) ||
+                        log.description.toLowerCase().includes(query) ||
+                        log.timestamp.toLowerCase().includes(query) ||
+                        (log.operator && log.operator.toLowerCase().includes(query))
+                      );
+                    })
+                    .map((log) => {
+                      let badgeColor = "bg-slate-100 text-slate-700 border-slate-200";
+                      if (log.type.includes('TAMBAH')) badgeColor = "bg-emerald-50 text-emerald-700 border-emerald-200";
+                      else if (log.type.includes('HAPUS')) badgeColor = "bg-rose-50 text-rose-700 border-rose-200";
+                      else if (log.type.includes('EDIT')) badgeColor = "bg-indigo-50 text-indigo-700 border-indigo-200";
+                      else if (log.type.includes('NILAI') || log.type.includes('KOSONGKAN') || log.type.includes('BULK')) badgeColor = "bg-amber-50 text-amber-700 border-amber-200";
+                      else if (log.type.includes('RESTORE') || log.type.includes('RESET')) badgeColor = "bg-purple-50 text-purple-700 border-purple-200";
+
+                      return (
+                        <tr key={log.id} className="hover:bg-slate-50/55 transition-colors">
+                          <td className="px-4 py-3 font-mono text-[11px] text-slate-500 whitespace-nowrap">{log.timestamp}</td>
+                          <td className="px-4 py-3 text-slate-700 font-bold whitespace-nowrap">{log.operator || 'Pengguna Lokal (Offline)'}</td>
+                          <td className="px-4 py-3 whitespace-nowrap">
+                            <span className={`px-2 py-0.5 rounded-md border text-[10px] font-bold ${badgeColor}`}>
+                              {log.type}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-slate-600 break-words font-medium">{log.description}</td>
+                          <td className="px-4 py-3 text-center whitespace-nowrap">
+                            <button
+                              onClick={() => {
+                                if (confirm('Apakah Anda yakin ingin menghapus log perubahan ini?')) {
+                                  deleteChangeLog(log.id);
+                                  setChangeLogs(getChangeLogs());
+                                }
+                              }}
+                              className="text-slate-400 hover:text-rose-600 p-1 rounded hover:bg-slate-100 transition-colors cursor-pointer inline-flex items-center justify-center"
+                              title="Hapus riwayat ini"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
@@ -1336,6 +1982,9 @@ export default function DatabaseCrud({
                   placeholder="Contoh: Muhammad Syafii"
                   className="bg-slate-50 border border-slate-200 rounded-lg p-2 font-medium"
                 />
+                <span className="text-[10px] text-emerald-600 block flex items-center gap-1">
+                   <Check className="h-3 w-3" /> Penyesuaian huruf besar/kecil otomatis
+                </span>
               </div>
 
               <div className="flex flex-col gap-1">
@@ -1423,7 +2072,9 @@ export default function DatabaseCrud({
 
             <div className="flex flex-col gap-4 text-xs">
               <div className="flex flex-col gap-1">
-                <label className="font-bold text-slate-500">Nama Guru Lengkap beserta Gelar</label>
+                <label className="font-bold text-slate-500">
+                  Nama Guru Lengkap beserta Gelar {!hasValidAcademicTitle(newGuru.name || '') && <span className="text-amber-600 ml-1 text-[10px]">(Perlu gelar?)</span>}
+                </label>
                 <input
                   type="text"
                   required
@@ -1432,6 +2083,14 @@ export default function DatabaseCrud({
                   placeholder="Contoh: Drs. H. Bambang Susilo, M.Pd."
                   className="bg-slate-50 border border-slate-200 rounded-lg p-2 font-medium"
                 />
+                {!hasValidAcademicTitle(newGuru.name || '') && (
+                  <p className="text-[10px] text-amber-600 bg-amber-50 rounded p-1">
+                    ⚠️ Nama mungkin kurang gelar akademik (Contoh: S.Pd, M.Pd, Dr.)
+                  </p>
+                )}
+                <span className="text-[10px] text-emerald-600 block flex items-center gap-1">
+                   <Check className="h-3 w-3" /> Gelar (S.Pd., M.Pd. dsb) disesuaikan otomatis
+                </span>
               </div>
 
               <div className="flex flex-col gap-1">
@@ -1552,6 +2211,113 @@ export default function DatabaseCrud({
         </div>
       )}
 
-    </div>
+      {/* ----------------- POPUP MODAL CSV MAPPING ----------------- */}
+      {isCsvMappingOpen && (
+        <div className="fixed inset-0 bg-black/55 flex items-center justify-center z-50 p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-xl border border-slate-300 shadow-2xl p-6 max-w-md w-full flex flex-col gap-4 animate-in slide-in-from-bottom duration-200">
+            <div>
+              <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
+                <span className="text-lg">📋</span> Pemetaan Kolom File CSV Siswa
+              </h3>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                File: {csvFileName} ({csvRows.length} baris data terdeteksi)
+              </p>
+            </div>
+
+            <div className="text-[11px] text-slate-600 bg-amber-50 border border-amber-200 rounded-lg p-2.5 leading-relaxed font-sans">
+              <strong className="text-amber-800">Petunjuk Pemetaan:</strong> Cocokkan kolom dari file CSV Anda dengan atribut data siswa. Siswa dengan NIS kosong akan tetap diimpor dengan diisi NIS otomatis oleh sistem.
+            </div>
+
+            <div className="flex flex-col gap-3 text-xs font-sans">
+              
+              {/* Nama mapping */}
+              <div className="flex flex-col gap-1">
+                <label className="font-bold text-slate-600 flex justify-between">
+                  <span>Nama Siswa <span className="text-red-500">*</span></span>
+                  <span className="text-[10px] text-slate-400 font-normal">Wajib diisi</span>
+                </label>
+                <select
+                  value={csvColumnMapping.nameIdx}
+                  onChange={(e) => setCsvColumnMapping({ ...csvColumnMapping, nameIdx: Number(e.target.value) })}
+                  className="bg-slate-50 border border-slate-200 rounded-lg p-2 font-medium focus:ring-1 focus:ring-emerald-500"
+                >
+                  <option value={-1}>-- Pilih Kolom Nama --</option>
+                  {csvHeaders.map((h, i) => (
+                    <option key={i} value={i}>Kolom {i+1}: {h}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* NIS mapping */}
+              <div className="flex flex-col gap-1">
+                <label className="font-bold text-slate-600">Nomor Induk Siswa (NIS)</label>
+                <select
+                  value={csvColumnMapping.nisIdx}
+                  onChange={(e) => setCsvColumnMapping({ ...csvColumnMapping, nisIdx: Number(e.target.value) })}
+                  className="bg-slate-50 border border-slate-200 rounded-lg p-2 font-medium focus:ring-1 focus:ring-emerald-500"
+                >
+                  <option value={-1}>-- Pilih Kolom NIS (Bisa Kosong) --</option>
+                  {csvHeaders.map((h, i) => (
+                    <option key={i} value={i}>Kolom {i+1}: {h}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Kelas mapping */}
+              <div className="flex flex-col gap-1">
+                <label className="font-bold text-slate-600">Kelas</label>
+                <select
+                  value={csvColumnMapping.classIdx}
+                  onChange={(e) => setCsvColumnMapping({ ...csvColumnMapping, classIdx: Number(e.target.value) })}
+                  className="bg-slate-50 border border-slate-200 rounded-lg p-2 font-medium focus:ring-1 focus:ring-emerald-500"
+                >
+                  <option value={-1}>-- Gunakan {selectedClass} (Default) --</option>
+                  {csvHeaders.map((h, i) => (
+                    <option key={i} value={i}>Kolom {i+1}: {h}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Gender mapping */}
+              <div className="flex flex-col gap-1">
+                <label className="font-bold text-slate-600">Jenis Kelamin / Gender</label>
+                <select
+                  value={csvColumnMapping.genderIdx}
+                  onChange={(e) => setCsvColumnMapping({ ...csvColumnMapping, genderIdx: Number(e.target.value) })}
+                  className="bg-slate-50 border border-slate-200 rounded-lg p-2 font-medium focus:ring-1 focus:ring-emerald-500"
+                >
+                  <option value={-1}>-- Default Laki-Laki (L) --</option>
+                  {csvHeaders.map((h, i) => (
+                    <option key={i} value={i}>Kolom {i+1}: {h}</option>
+                  ))}
+                </select>
+              </div>
+
+            </div>
+
+            <div className="flex justify-end gap-2 mt-4 pt-4 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsCsvMappingOpen(false);
+                  if (csvFileInputRef.current) csvFileInputRef.current.value = '';
+                }}
+                className="py-1.5 px-3 border border-slate-200 text-slate-600 rounded-lg text-xs font-semibold hover:bg-slate-50 cursor-pointer"
+              >
+                Batalkan
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmImportCsv}
+                className="py-1.5 px-4 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 cursor-pointer flex items-center gap-1"
+              >
+                <Check className="h-4 w-4" /> Mulai Impor Siswa
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+    </motion.div>
   );
 }

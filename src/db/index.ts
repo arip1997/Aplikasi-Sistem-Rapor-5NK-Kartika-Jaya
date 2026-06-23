@@ -7,10 +7,14 @@ const { Pool } = pg;
 export const createPool = () => {
   return new Pool({
     host: process.env.SQL_HOST,
-    user: process.env.SQL_USER,
-    password: process.env.SQL_PASSWORD,
+    port: process.env.SQL_PORT ? parseInt(process.env.SQL_PORT) : 5432,
+    user: process.env.SQL_ADMIN_USER || process.env.SQL_USER,
+    password: process.env.SQL_ADMIN_PASSWORD || process.env.SQL_PASSWORD,
     database: process.env.SQL_DB_NAME,
+    ssl: process.env.SQL_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
     connectionTimeoutMillis: 15000,
+    idleTimeoutMillis: 10000,
+    max: 10,
   });
 };
 
