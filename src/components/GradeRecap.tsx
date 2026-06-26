@@ -1,7 +1,9 @@
 import { useState, useMemo } from 'react';
+import { flushSync } from 'react-dom';
 import { Student, Category, ScoreKey, scoreOptions, KopSekolah } from '../types';
 import { exportClassToExcel } from '../utils';
-import html2pdf from 'html2pdf.js';
+import html2canvas from 'html2canvas-pro';
+import { jsPDF } from 'jspdf';
 import D3CriteriaDistributionChart from './D3CriteriaDistributionChart';
 import { 
   BarChart4, 
@@ -131,11 +133,13 @@ export default function GradeRecap({
   };
 
   const handleDownloadCompletionReportPDF = async () => {
-    setIsGeneratingRecapPdf(true);
-    setIsPrintingRecap(true);
+    flushSync(() => {
+      setIsGeneratingRecapPdf(true);
+      setIsPrintingRecap(true);
+    });
     
     // Give time to render the hidden DOM element
-    await new Promise(resolve => setTimeout(resolve, 400));
+    await new Promise(resolve => setTimeout(resolve, 800));
     
     const element = document.getElementById('completion-status-report-pdf-content');
     if (!element) {
@@ -146,21 +150,53 @@ export default function GradeRecap({
     }
 
     try {
-      const opt = {
-        margin: [8, 10, 8, 10], // top, left, bottom, right in mm
-        filename: `Ringkasan_Laporan_5NK_Kelas_${selectedClass}.pdf`,
-        image: { type: 'jpeg', quality: 1.0 },
-        html2canvas: {
-          scale: 2.2,
-          useCORS: true,
-          letterRendering: true,
-          logging: false,
-          backgroundColor: '#ffffff'
-        },
-        jsPDF: { unit: 'mm', format: 'a4', orientation: 'landscape' }
-      };
+      let canvas;
+      try {
+        canvas = await html2canvas(element, { scale: 2.5, useCORS: true, logging: false, windowWidth: document.documentElement.offsetWidth, windowHeight: document.documentElement.offsetHeight });
+      } catch(e) {
+        console.error('html2canvas error in GradeRecap:', e);
+        alert('Gagal membuat PDF karena kesalahan rendering (html2canvas).');
+        setIsGeneratingRecapPdf(false);
+        setIsPrintingRecap(false);
+        return;
+      }
+      const imgData = canvas.toDataURL('image/jpeg', 0.95);
+      const pdf = new jsPDF({
+        orientation: 'landscape',
+        unit: 'mm',
+        format: 'a4'
+      });
+      
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
+      
+      // Calculate margins (e.g. 10mm margins)
+      const margin = 10;
+      const contentWidth = pdfWidth - (margin * 2);
+      
+      const imgProps = pdf.getImageProperties(imgData);
+      const imgRatio = imgProps.width / imgProps.height;
+      
+      let finalWidth = contentWidth;
+      let finalHeight = contentWidth / imgRatio;
+      
+      if (finalHeight > (pdfHeight - margin * 2)) {
+          finalHeight = pdfHeight - margin * 2;
+          finalWidth = finalHeight * imgRatio;
+      }
+      
+      // Center the image
+      const xOffset = margin + (contentWidth - finalWidth) / 2;
+      const yOffset = margin;
 
-      await html2pdf().set(opt as any).from(element).save();
+      pdf.addImage(imgData, 'JPEG', xOffset, yOffset, finalWidth, finalHeight);
+      pdf.save(`Ringkasan_Laporan_5NK_Kelas_${selectedClass}.pdf`);
+      
+      // Cleanup memory
+      canvas.width = 0;
+      canvas.height = 0;
+      if (canvas && canvas.parentNode) canvas.parentNode.removeChild(canvas);
+      
     } catch (err) {
       console.error("Gagal mengekspor Ringkasan Rapor Yayasan:", err);
       alert("Terjadi kesalahan teknis saat mengekspor PDF.");
@@ -1451,14 +1487,14 @@ export default function GradeRecap({
 
       {/* 4. HIDDEN CONTAINER SPECIFICALLY FORMATTED FOR THE LANDSCAPE RECAP PDF YAYASAN */}
       {isPrintingRecap && (
-        <div style={{ position: 'fixed', left: '-9999px', top: '-9999px', width: '297mm' }}>
+        <div style={{ position: 'absolute', left: '-9999px', top: '-9999px', width: '297mm' }}>
           <div id="completion-status-report-pdf-content" className="p-8 bg-white text-black font-sans box-border" style={{ width: '297mm', minHeight: '210mm' }}>
             {/* Kop Surat Sekolah */}
             {kopSekolah ? (
               <div className="flex items-center justify-between border-b-4 border-double border-slate-800 pb-3 mb-4">
                 <div className="flex items-center gap-4">
                   {kopSekolah.logoUrl ? (
-                    <img src={kopSekolah.logoUrl} className="h-14 w-14 object-contain" referrerPolicy="no-referrer" alt="Logo" />
+                    <img src={kopSekolah.logoUrl} className="h-14 w-14 object-contain" referrerPolicy="no-referrer" crossOrigin="anonymous" alt="Logo" />
                   ) : (
                     <div className="h-14 w-14 rounded bg-slate-100 border border-slate-300 flex items-center justify-center font-bold text-[9px] text-slate-400">LOGO</div>
                   )}

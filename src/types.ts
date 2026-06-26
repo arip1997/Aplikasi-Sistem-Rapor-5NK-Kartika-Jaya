@@ -10,6 +10,11 @@ export interface KopSekolah {
   logoUrl: string;
   signatureTeacherUrl?: string;
   signatureParentUrl?: string;
+  signatureHeadmasterUrl?: string;
+  enableSignatureHeadmaster?: boolean;
+  signatureWaliKelasUrl?: string;
+  namaKepalaSekolah?: string;
+  nipKepalaSekolah?: string;
 }
 
 export interface ScoreOption {

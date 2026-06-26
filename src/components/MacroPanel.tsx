@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import { motion } from 'framer-motion';
 import { Student, Category, ScoreKey, scoreOptions } from '../types';
-import { Sparkles, CheckSquare, RefreshCw, BarChart4, Cpu, Play, Check, AlertTriangle, HelpCircle, Users, StopCircle, Loader2, Trash2, RotateCcw } from 'lucide-react';
+import { Sparkles, CheckSquare, RefreshCw, BarChart4, Cpu, Play, Check, AlertTriangle, HelpCircle, Users, StopCircle, Loader2, Trash2, RotateCcw, Printer } from 'lucide-react';
 
 interface MacroPanelProps {
   selectedStudent: Student | null;
@@ -16,6 +16,7 @@ interface MacroPanelProps {
   waliKelasName: string;
   onClearStudentGrades: (studentId: string) => void;
   onClearClassGrades: () => void;
+  onResetPrintStatus: () => void;
 }
 
 export default function MacroPanel({
@@ -31,6 +32,7 @@ export default function MacroPanel({
   waliKelasName,
   onClearStudentGrades,
   onClearClassGrades,
+  onResetPrintStatus,
 }: MacroPanelProps) {
   const [runningMacro, setRunningMacro] = useState<string | null>(null);
   const [integrityReport, setIntegrityReport] = useState<{

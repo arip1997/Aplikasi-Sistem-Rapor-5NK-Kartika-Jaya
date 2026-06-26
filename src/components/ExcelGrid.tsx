@@ -10,6 +10,7 @@ interface ExcelGridProps {
   onUpdateStudentGrades: (studentId: string, grades: Record<string, ScoreKey>) => void;
   onUpdateComments: (studentId: string, kesimpulan: string, Notes: string) => void;
   onSelectStudent: (student: Student) => void;
+  onBatchPrint?: (studentIds: string[]) => void;
   selectedStudent: Student | null;
   dirtyCells?: Record<string, boolean>;
   aiModifiedStudentIds?: string[];
@@ -22,6 +23,7 @@ export default function ExcelGrid({
   onUpdateStudentGrades,
   onUpdateComments,
   onSelectStudent,
+  onBatchPrint,
   selectedStudent,
   dirtyCells = {},
   aiModifiedStudentIds = [],
