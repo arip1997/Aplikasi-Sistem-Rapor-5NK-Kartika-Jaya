@@ -1556,9 +1556,9 @@ export default function App() {
             ) : (
               <motion.div
                 key="spreadsheet"
-                initial={{ opacity: 0, y: 20, filter: "blur(4px)" }}
-                animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-                exit={{ opacity: 0, y: -20, filter: "blur(4px)" }}
+                initial={{ opacity: 0, x: 30, filter: "blur(4px)" }}
+                animate={{ opacity: 1, x: 0, filter: "blur(0px)" }}
+                exit={{ opacity: 0, x: -30, filter: "blur(4px)" }}
                 transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
                 className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6 flex-1 h-auto md:h-full overflow-visible md:overflow-hidden print:overflow-visible no-print"
               >
@@ -1795,9 +1795,9 @@ export default function App() {
         {viewMode === 'form_penilaian' && (
           <motion.div
             key="form_penilaian"
-            initial={{ opacity: 0, y: 20, filter: "blur(4px)" }}
-            animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-            exit={{ opacity: 0, y: -20, filter: "blur(4px)" }}
+            initial={{ opacity: 0, x: 30, filter: "blur(4px)" }}
+            animate={{ opacity: 1, x: 0, filter: "blur(0px)" }}
+            exit={{ opacity: 0, x: -30, filter: "blur(4px)" }}
             transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
             className="flex-1 h-auto md:h-full overflow-visible md:overflow-hidden no-print"
           >
@@ -1819,9 +1819,9 @@ export default function App() {
         {viewMode === 'rekap_nilai' && (
           <motion.div
             key="rekap_nilai"
-            initial={{ opacity: 0, y: 20, filter: "blur(4px)" }}
-            animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-            exit={{ opacity: 0, y: -20, filter: "blur(4px)" }}
+            initial={{ opacity: 0, x: 30, filter: "blur(4px)" }}
+            animate={{ opacity: 1, x: 0, filter: "blur(0px)" }}
+            exit={{ opacity: 0, x: -30, filter: "blur(4px)" }}
             transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
             className="flex-1 h-auto md:h-full overflow-visible md:overflow-hidden no-print"
           >
@@ -1855,9 +1855,9 @@ export default function App() {
         {viewMode === 'crud_manager' && (
           <motion.div
             key="crud_manager"
-            initial={{ opacity: 0, y: 20, filter: "blur(4px)" }}
-            animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-            exit={{ opacity: 0, y: -20, filter: "blur(4px)" }}
+            initial={{ opacity: 0, x: 30, filter: "blur(4px)" }}
+            animate={{ opacity: 1, x: 0, filter: "blur(0px)" }}
+            exit={{ opacity: 0, x: -30, filter: "blur(4px)" }}
             transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
             className="flex-1 h-auto md:h-full overflow-visible md:overflow-hidden no-print"
           >
@@ -1881,9 +1881,9 @@ export default function App() {
         {viewMode === 'print' && selectedStudent && (
           <motion.div
             key="print"
-            initial={{ opacity: 0, y: 20, filter: "blur(4px)" }}
-            animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-            exit={{ opacity: 0, y: -20, filter: "blur(4px)" }}
+            initial={{ opacity: 0, x: 30, filter: "blur(4px)" }}
+            animate={{ opacity: 1, x: 0, filter: "blur(0px)" }}
+            exit={{ opacity: 0, x: -30, filter: "blur(4px)" }}
             transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
             className="flex-1 overflow-y-auto print:overflow-visible"
           >

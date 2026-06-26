@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { flushSync, createPortal } from 'react-dom';
 import JSZip from 'jszip';
 import { Student, Category, KopSekolah, scoreOptions } from '../types';
@@ -16,6 +17,13 @@ interface RaporCetakProps {
   waliKelasNip?: string;
   onBack: () => void;
   onDownloadExcel: () => void;
+  initialBatchNisList?: string[];
+  onAddExportLog?: (type: string, action: string, file: string, count: number) => void;
+  teachers?: any[];
+  onMarkAsPrinted?: (studentIds: any[]) => void;
+  autoTriggerBatchPdf?: boolean;
+  autoPrintImmediately?: boolean;
+  onResetAutoTrigger?: () => void;
 }
 
 export default function RaporCetak({
@@ -36,6 +44,7 @@ export default function RaporCetak({
   const [showSandboxNotice, setShowSandboxNotice] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [renderTrigger, setRenderTrigger] = useState(0);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
 
   useEffect(() => {
     const unsub = initAuth();
@@ -131,7 +140,7 @@ export default function RaporCetak({
       filename:     `Rapor_5NK_${targetStudent.name.replace(/\s+/g, '_')}_${targetStudent.nis}.pdf`,
       image:        { type: 'jpeg', quality: 1.0 },
       html2canvas:  { 
-        scale: 2, 
+        scale: 3, 
         useCORS: true, 
         letterRendering: true, 
         logging: false,
@@ -635,12 +644,23 @@ export default function RaporCetak({
     <div id="rapor-cetak-wrapper" className="flex flex-col gap-6">
       {/* Action panel & toolbar */}
       <div className="bg-slate-50 border border-slate-200 p-4 rounded-xl flex flex-wrap gap-3 items-center justify-between no-print">
-        <button
-          onClick={onBack}
-          className="px-4 py-2 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 flex items-center gap-2 cursor-pointer transition-colors shadow-xs"
-        >
-          <ArrowLeft className="h-4 w-4" /> Kembali ke Grid Excel
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={onBack}
+            className="px-4 py-2 text-xs font-semibold text-slate-600 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 flex items-center gap-2 cursor-pointer transition-colors shadow-xs"
+          >
+            <ArrowLeft className="h-4 w-4" /> Kembali ke Grid Excel
+          </button>
+
+          <button
+            onClick={() => setIsSidebarOpen(prev => !prev)}
+            className="px-4 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 flex items-center gap-2 cursor-pointer transition-colors shadow-xs"
+            title={isSidebarOpen ? "Sembunyikan Daftar Siswa" : "Tampilkan Daftar Siswa"}
+          >
+            <Sliders className={`h-4 w-4 ${isSidebarOpen ? 'text-indigo-600' : 'text-slate-400'}`} />
+            <span>{isSidebarOpen ? 'Tutup Daftar Siswa' : 'Daftar Siswa'}</span>
+          </button>
+        </div>
 
         <div className="flex gap-2">
           <button
@@ -744,8 +764,17 @@ export default function RaporCetak({
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start no-print">
         {/* STUDENT SELECTION SIDEBAR */}
-        <div className="lg:col-span-1 bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-col gap-4 h-fit lg:sticky lg:top-6 selection:bg-transparent">
-          <div className="flex flex-col gap-1 pb-3 border-b border-slate-100">
+        <AnimatePresence initial={false}>
+          {isSidebarOpen && (
+            <motion.div
+              initial={{ opacity: 0, x: -35, width: 0 }}
+              animate={{ opacity: 1, x: 0, width: "100%" }}
+              exit={{ opacity: 0, x: -35, width: 0 }}
+              transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+              className="lg:col-span-1 overflow-hidden"
+            >
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex flex-col gap-4 h-fit lg:sticky lg:top-6 selection:bg-transparent min-w-[240px]">
+                <div className="flex flex-col gap-1 pb-3 border-b border-slate-100">
             <h3 className="font-bold text-slate-800 text-xs tracking-tight flex items-center gap-2">
               <Award className="h-4 w-4 text-indigo-600 flex-none" />
               Daftar Siswa Kelas {selectedClass}
@@ -847,10 +876,13 @@ export default function RaporCetak({
               })
             )}
           </div>
-        </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* PREVIEW CONTAINER */}
-        <div className="lg:col-span-3 flex flex-col gap-6 w-full">
+        <div className={`flex flex-col gap-6 w-full ${isSidebarOpen ? 'lg:col-span-3' : 'lg:col-span-4'}`}>
           {isDiagnosticMode ? (
             <div className="flex flex-col gap-6 w-full">
               {/* DIAGNOSTIC PANEL HEADER */}
@@ -971,7 +1003,7 @@ export default function RaporCetak({
                       </div>
 
                       {/* Table */}
-                      <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
+                      <table className="w-full table-fixed text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
                         <colgroup>
                           <col style={{ width: '15%' }} />
                           <col style={{ width: '41%' }} />
@@ -981,33 +1013,33 @@ export default function RaporCetak({
                           <col style={{ width: '11%' }} />
                         </colgroup>
                         <thead>
-                          <tr className="bg-slate-100">
-                            <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center w-16 text-[9.5pt]">
+                          <tr style={{ backgroundColor: '#f1f5f9' }}>
+                            <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center text-[9.5pt] text-black">
                               5 Nilai Kartika
                             </th>
-                            <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center text-[9.5pt]">
+                            <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center text-[9.5pt] text-black">
                               Indikator
                             </th>
-                            <th colSpan={4} className="border border-black p-1 text-center font-bold text-[9.5pt]">
+                            <th colSpan={4} className="border border-black p-1 text-center font-bold text-[9.5pt] text-black">
                               Hasil Penilaian
                             </th>
                           </tr>
-                          <tr className="bg-slate-50 text-[8px] font-medium leading-tight text-slate-600">
-                            <th className="border border-black p-1 text-center font-bold text-black w-24">
+                          <tr style={{ backgroundColor: '#f8fafc' }} className="text-[8px] font-medium leading-tight text-black">
+                            <th className="border border-black p-1 text-center font-bold text-black">
                               Berkembang Sangat Baik
-                              <span className="block font-normal text-[7px] mt-0.5 leading-tight">Konsisten menunjukkan perilaku sesuai indikator tanpa perlu diingatkan.</span>
+                              <span className="block font-normal text-[7px] mt-0.5 leading-tight text-slate-700">Konsisten menunjukkan perilaku sesuai indikator tanpa perlu diingatkan.</span>
                             </th>
-                            <th className="border border-black p-1 text-center font-bold text-black w-24">
+                            <th className="border border-black p-1 text-center font-bold text-black">
                               Berkembang
-                              <span className="block font-normal text-[7px] mt-0.5 leading-tight">Menunjukkan perilaku sesuai indikator dengan sedikit arahan.</span>
+                              <span className="block font-normal text-[7px] mt-0.5 leading-tight text-slate-700">Menunjukkan perilaku sesuai indikator dengan sedikit arahan.</span>
                             </th>
-                            <th className="border border-black p-1 text-center font-bold text-black w-24">
+                            <th className="border border-black p-1 text-center font-bold text-black">
                               Mulai Berkembang
-                              <span className="block font-normal text-[7px] mt-0.5 leading-tight">Perlu sering diingatkan untuk menunjukkan perilaku sesuai indikator.</span>
+                              <span className="block font-normal text-[7px] mt-0.5 leading-tight text-slate-700">Perlu sering diingatkan untuk menunjukkan perilaku sesuai indikator.</span>
                             </th>
-                            <th className="border border-black p-1 text-center font-bold text-black w-24">
+                            <th className="border border-black p-1 text-center font-bold text-black">
                               Belum Berkembang
-                              <span className="block font-normal text-[7px] mt-0.5 leading-tight">Memerlukan bimbingan intensif untuk menunjukkan perilaku sesuai indikator.</span>
+                              <span className="block font-normal text-[7px] mt-0.5 leading-tight text-slate-700">Memerlukan bimbingan intensif untuk menunjukkan perilaku sesuai indikator.</span>
                             </th>
                           </tr>
                         </thead>
@@ -1148,7 +1180,7 @@ export default function RaporCetak({
                   <div className="print-page relative">
                     <div className="flex flex-col gap-4">
                       {/* Table continuation on Page 2 */}
-                      <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
+                      <table className="w-full table-fixed text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
                         <colgroup>
                           <col style={{ width: '15%' }} />
                           <col style={{ width: '41%' }} />
@@ -1289,7 +1321,7 @@ export default function RaporCetak({
                             </div>
 
                             {/* Kepala Sekolah (Middle, shifted down) */}
-                            <div className="flex flex-col items-center justify-between h-32 relative mt-8">
+                            <div className="flex flex-col items-center justify-between h-32 relative mt-[4cm]">
                               <p className="text-[10.5pt] text-black font-bold">Kepala Sekolah</p>
                               <div className="h-16 flex items-center justify-center relative w-full">
                                 {kopSekolah.signatureHeadmasterUrl ? (
@@ -1304,7 +1336,7 @@ export default function RaporCetak({
                                 )}
                               </div>
                               <div className="flex flex-col items-center min-w-[160px]">
-                                <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px] truncate max-w-[180px]">
+                                <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px] whitespace-nowrap">
                                   {kopSekolah.namaKepalaSekolah || '____________________'}
                                 </p>
                                 {kopSekolah.nipKepalaSekolah ? (
@@ -1333,7 +1365,7 @@ export default function RaporCetak({
                                 )}
                               </div>
                               <div className="flex flex-col items-center w-full font-sans">
-                                <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px] truncate max-w-[180px]">
+                                <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px] whitespace-nowrap">
                                   {waliKelasName || '____________________'}
                                 </p>
                                 {waliKelasNip ? (
@@ -1377,7 +1409,7 @@ export default function RaporCetak({
                                   <img
                                     src={kopSekolah.signatureTeacherUrl}
                                     alt="Tanda Tangan Guru"
-                                    className="max-h-16 max-w-[180px] object-contain"
+                                    className="max-h-16 max-w-[140px] object-contain"
                                     referrerPolicy="no-referrer" crossOrigin="anonymous"
                                   />
                                 ) : (
@@ -1385,7 +1417,7 @@ export default function RaporCetak({
                                 )}
                               </div>
                               <div className="flex flex-col items-center w-full font-sans">
-                                <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px]">
+                                <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px] whitespace-nowrap">
                                   {waliKelasName || '____________________'}
                                 </p>
                                 {waliKelasNip ? (
@@ -1473,7 +1505,7 @@ export default function RaporCetak({
             </div>
 
             {/* The core 5NK indicators evaluation table */}
-            <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug">
+            <table className="w-full table-fixed text-left text-[9pt] border border-black border-collapse font-sans leading-snug">
               <colgroup>
                 <col style={{ width: '15%' }} />
                 <col style={{ width: '41%' }} />
@@ -1483,33 +1515,33 @@ export default function RaporCetak({
                 <col style={{ width: '11%' }} />
               </colgroup>
               <thead>
-                <tr className="bg-slate-100">
-                  <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center w-16 text-[9.5pt]">
+                <tr style={{ backgroundColor: '#f1f5f9' }}>
+                  <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center text-[9.5pt] text-black">
                     5 Nilai Kartika
                   </th>
-                  <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center text-[9.5pt]">
+                  <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center text-[9.5pt] text-black">
                     Indikator
                   </th>
-                  <th colSpan={4} className="border border-black p-1 text-center font-bold text-[9.5pt]">
+                  <th colSpan={4} className="border border-black p-1 text-center font-bold text-[9.5pt] text-black">
                     Hasil Penilaian
                   </th>
                 </tr>
-                <tr className="bg-slate-50 text-[8px] font-medium leading-tight text-slate-600">
-                  <th className="border border-black p-1 text-center font-bold text-black w-24">
+                <tr style={{ backgroundColor: '#f8fafc' }} className="text-[8px] font-medium leading-tight text-black">
+                  <th className="border border-black p-1 text-center font-bold text-black">
                     Berkembang Sangat Baik
-                    <span className="block font-normal text-[7px] mt-0.5 leading-tight">Konsisten menunjukkan perilaku sesuai indikator tanpa perlu diingatkan.</span>
+                    <span className="block font-normal text-[7px] mt-0.5 leading-tight text-slate-700">Konsisten menunjukkan perilaku sesuai indikator tanpa perlu diingatkan.</span>
                   </th>
-                  <th className="border border-black p-1 text-center font-bold text-black w-24">
+                  <th className="border border-black p-1 text-center font-bold text-black">
                     Berkembang
-                    <span className="block font-normal text-[7px] mt-0.5 leading-tight">Menunjukkan perilaku sesuai indikator dengan sedikit arahan.</span>
+                    <span className="block font-normal text-[7px] mt-0.5 leading-tight text-slate-700">Menunjukkan perilaku sesuai indikator dengan sedikit arahan.</span>
                   </th>
-                  <th className="border border-black p-1 text-center font-bold text-black w-24">
+                  <th className="border border-black p-1 text-center font-bold text-black">
                     Mulai Berkembang
-                    <span className="block font-normal text-[7px] mt-0.5 leading-tight">Perlu sering diingatkan untuk menunjukkan perilaku sesuai indikator.</span>
+                    <span className="block font-normal text-[7px] mt-0.5 leading-tight text-slate-700">Perlu sering diingatkan untuk menunjukkan perilaku sesuai indikator.</span>
                   </th>
-                  <th className="border border-black p-1 text-center font-bold text-black w-24">
+                  <th className="border border-black p-1 text-center font-bold text-black">
                     Belum Berkembang
-                    <span className="block font-normal text-[7px] mt-0.5 leading-tight">Memerlukan bimbingan intensif untuk menunjukkan perilaku sesuai indikator.</span>
+                    <span className="block font-normal text-[7px] mt-0.5 leading-tight text-slate-700">Memerlukan bimbingan intensif untuk menunjukkan perilaku sesuai indikator.</span>
                   </th>
                 </tr>
               </thead>
@@ -1652,7 +1684,7 @@ export default function RaporCetak({
         <div className="bg-white border border-slate-300 shadow-2xl p-[12mm_15mm] w-[210mm] min-h-[297mm] h-[297mm] max-h-[297mm] overflow-hidden box-border text-[11pt] text-black font-sans leading-relaxed flex flex-col justify-between">
           <div className="flex flex-col gap-4">
             {/* Table continuation on screen Page 2 */}
-            <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug">
+            <table className="w-full table-fixed text-left text-[9pt] border border-black border-collapse font-sans leading-snug">
               <colgroup>
                 <col style={{ width: '15%' }} />
                 <col style={{ width: '41%' }} />
@@ -1799,7 +1831,7 @@ export default function RaporCetak({
                   </div>
 
                   {/* Kepala Sekolah (Middle, shifted down) */}
-                  <div className="flex flex-col items-center justify-between h-32 relative mt-8">
+                  <div className="flex flex-col items-center justify-between h-32 relative mt-[4cm]">
                     <p className="text-[10.5pt] text-black font-bold">Kepala Sekolah</p>
                     <div className="h-16 flex items-center justify-center relative w-full">
                       {kopSekolah.signatureHeadmasterUrl ? (
@@ -1814,7 +1846,7 @@ export default function RaporCetak({
                       )}
                     </div>
                     <div className="flex flex-col items-center min-w-[160px]">
-                      <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px] truncate max-w-[180px]">
+                      <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px] whitespace-nowrap">
                         {kopSekolah.namaKepalaSekolah || '____________________'}
                       </p>
                       {kopSekolah.nipKepalaSekolah ? (
@@ -1843,7 +1875,7 @@ export default function RaporCetak({
                       )}
                     </div>
                     <div className="flex flex-col items-center w-full font-sans">
-                      <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px] truncate max-w-[180px]">
+                      <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px] whitespace-nowrap">
                         {waliKelasName || '____________________'}
                       </p>
                       {waliKelasNip ? (
@@ -1887,7 +1919,7 @@ export default function RaporCetak({
                         <img
                           src={kopSekolah.signatureTeacherUrl}
                           alt="Tanda Tangan Guru"
-                          className="max-h-16 max-w-[180px] object-contain"
+                          className="max-h-16 max-w-[140px] object-contain"
                           referrerPolicy="no-referrer" crossOrigin="anonymous"
                         />
                       ) : (
@@ -1895,7 +1927,7 @@ export default function RaporCetak({
                       )}
                     </div>
                     <div className="flex flex-col items-center w-full font-sans">
-                      <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px]">
+                      <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px] whitespace-nowrap">
                         {waliKelasName || '____________________'}
                       </p>
                       {waliKelasNip ? (
@@ -1996,7 +2028,7 @@ export default function RaporCetak({
                     </div>
 
                     {/* Table */}
-                    <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
+                    <table className="w-full table-fixed text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
                       <colgroup>
                         <col style={{ width: '15%' }} />
                         <col style={{ width: '41%' }} />
@@ -2006,33 +2038,33 @@ export default function RaporCetak({
                         <col style={{ width: '11%' }} />
                       </colgroup>
                       <thead>
-                        <tr className="bg-slate-100">
-                          <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center w-16 text-[9.5pt]">
+                        <tr style={{ backgroundColor: '#f1f5f9' }}>
+                          <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center text-[9.5pt] text-black">
                             5 Nilai Kartika
                           </th>
-                          <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center text-[9.5pt]">
+                          <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center text-[9.5pt] text-black">
                             Indikator
                           </th>
-                          <th colSpan={4} className="border border-black p-1 text-center font-bold text-[9.5pt]">
+                          <th colSpan={4} className="border border-black p-1 text-center font-bold text-[9.5pt] text-black">
                             Hasil Penilaian
                           </th>
                         </tr>
-                        <tr className="bg-slate-50 text-[8px] font-medium leading-tight text-slate-600">
-                          <th className="border border-black p-1 text-center font-bold text-black w-24">
+                        <tr style={{ backgroundColor: '#f8fafc' }} className="text-[8px] font-medium leading-tight text-black">
+                          <th className="border border-black p-1 text-center font-bold text-black">
                             Berkembang Sangat Baik
-                            <span className="block font-normal text-[7px] mt-0.5 leading-tight">Konsisten menunjukkan perilaku sesuai indikator tanpa perlu diingatkan.</span>
+                            <span className="block font-normal text-[7px] mt-0.5 leading-tight text-slate-700">Konsisten menunjukkan perilaku sesuai indikator tanpa perlu diingatkan.</span>
                           </th>
-                          <th className="border border-black p-1 text-center font-bold text-black w-24">
+                          <th className="border border-black p-1 text-center font-bold text-black">
                             Berkembang
-                            <span className="block font-normal text-[7px] mt-0.5 leading-tight">Menunjukkan perilaku sesuai indikator dengan sedikit arahan.</span>
+                            <span className="block font-normal text-[7px] mt-0.5 leading-tight text-slate-700">Menunjukkan perilaku sesuai indikator dengan sedikit arahan.</span>
                           </th>
-                          <th className="border border-black p-1 text-center font-bold text-black w-24">
+                          <th className="border border-black p-1 text-center font-bold text-black">
                             Mulai Berkembang
-                            <span className="block font-normal text-[7px] mt-0.5 leading-tight">Perlu sering diingatkan untuk menunjukkan perilaku sesuai indikator.</span>
+                            <span className="block font-normal text-[7px] mt-0.5 leading-tight text-slate-700">Perlu sering diingatkan untuk menunjukkan perilaku sesuai indikator.</span>
                           </th>
-                          <th className="border border-black p-1 text-center font-bold text-black w-24">
+                          <th className="border border-black p-1 text-center font-bold text-black">
                             Belum Berkembang
-                            <span className="block font-normal text-[7px] mt-0.5 leading-tight">Memerlukan bimbingan intensif untuk menunjukkan perilaku sesuai indikator.</span>
+                            <span className="block font-normal text-[7px] mt-0.5 leading-tight text-slate-700">Memerlukan bimbingan intensif untuk menunjukkan perilaku sesuai indikator.</span>
                           </th>
                         </tr>
                       </thead>
@@ -2173,7 +2205,7 @@ export default function RaporCetak({
                 <div className="print-page w-[210mm] h-[297mm] max-h-[297mm] overflow-visible p-[12mm_15mm] box-border text-[11pt] leading-relaxed flex flex-col justify-between">
                   <div className="flex flex-col gap-4">
                     {/* Table continuation on Page 2 */}
-                    <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
+                    <table className="w-full table-fixed text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
                       <colgroup>
                         <col style={{ width: '15%' }} />
                         <col style={{ width: '41%' }} />
@@ -2320,7 +2352,7 @@ export default function RaporCetak({
                           </div>
 
                           {/* Kepala Sekolah (Middle, shifted down) */}
-                          <div className="flex flex-col items-center justify-between h-32 relative mt-8">
+                          <div className="flex flex-col items-center justify-between h-32 relative mt-[4cm]">
                             <p className="text-[10.5pt] text-black font-bold">Kepala Sekolah</p>
                             <div className="h-16 flex items-center justify-center relative w-full">
                               {kopSekolah.signatureHeadmasterUrl ? (
@@ -2335,7 +2367,7 @@ export default function RaporCetak({
                               )}
                             </div>
                             <div className="flex flex-col items-center min-w-[160px]">
-                              <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px] truncate max-w-[180px]">
+                              <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px] whitespace-nowrap">
                                 {kopSekolah.namaKepalaSekolah || '____________________'}
                               </p>
                               {kopSekolah.nipKepalaSekolah ? (
@@ -2364,7 +2396,7 @@ export default function RaporCetak({
                               )}
                             </div>
                             <div className="flex flex-col items-center w-full font-sans">
-                              <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px] truncate max-w-[180px]">
+                              <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px] whitespace-nowrap">
                                 {waliKelasName || '____________________'}
                               </p>
                               {waliKelasNip ? (
@@ -2408,7 +2440,7 @@ export default function RaporCetak({
                                 <img
                                   src={kopSekolah.signatureTeacherUrl}
                                   alt="Tanda Tangan Guru"
-                                  className="max-h-16 max-w-[180px] object-contain"
+                                  className="max-h-16 max-w-[140px] object-contain"
                                   referrerPolicy="no-referrer" crossOrigin="anonymous"
                                 />
                               ) : (
@@ -2416,7 +2448,7 @@ export default function RaporCetak({
                               )}
                             </div>
                             <div className="flex flex-col items-center w-full font-sans">
-                              <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px]">
+                              <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px] whitespace-nowrap">
                                 {waliKelasName || '____________________'}
                               </p>
                               {waliKelasNip ? (
