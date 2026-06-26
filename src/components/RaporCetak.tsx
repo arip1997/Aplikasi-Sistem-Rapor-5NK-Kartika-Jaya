@@ -35,6 +35,13 @@ export default function RaporCetak({
   waliKelasNip,
   onBack,
   onDownloadExcel,
+  initialBatchNisList = [],
+  onAddExportLog,
+  teachers = [],
+  onMarkAsPrinted,
+  autoTriggerBatchPdf = false,
+  autoPrintImmediately = false,
+  onResetAutoTrigger,
 }: RaporCetakProps) {
   
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
@@ -64,6 +71,38 @@ export default function RaporCetak({
   const [selectedNisList, setSelectedNisList] = useState<string[]>([student.nis]);
   // Currently displayed student in on-screen Mock Preview
   const [previewNis, setPreviewNis] = useState<string>(student.nis);
+
+  // Sync the selected list and preview when initialBatchNisList or autoTriggerBatchPdf changes
+  useEffect(() => {
+    if (initialBatchNisList && initialBatchNisList.length > 0) {
+      setSelectedNisList(initialBatchNisList);
+      setPreviewNis(initialBatchNisList[0]);
+    } else if (autoTriggerBatchPdf) {
+      const allNis = classStudents.map(s => s.nis);
+      setSelectedNisList(allNis);
+      if (allNis.length > 0) {
+        setPreviewNis(allNis[0]);
+      }
+    } else {
+      setSelectedNisList([student.nis]);
+      setPreviewNis(student.nis);
+    }
+  }, [initialBatchNisList, autoTriggerBatchPdf, student.nis]);
+
+  // Automatically trigger PDF download or Print when autoTriggerBatchPdf is active
+  useEffect(() => {
+    if (autoTriggerBatchPdf) {
+      const timer = setTimeout(() => {
+        if (autoPrintImmediately) {
+          handlePrint();
+        } else {
+          handleDownloadAllPDFs();
+        }
+        onResetAutoTrigger?.();
+      }, 800);
+      return () => clearTimeout(timer);
+    }
+  }, [autoTriggerBatchPdf, autoPrintImmediately]);
 
   // Computed state
   const activeStudent = classStudents.find(s => s.nis === previewNis) || student;
@@ -1315,7 +1354,7 @@ export default function RaporCetak({
                                 )}
                               </div>
                               <div className="flex flex-col items-center w-full">
-                                <div className="w-36 border-b-[1.5px] border-black pb-0.5"></div>
+                                <div className="w-36 border-b-2 border-black pb-0.5"></div>
                                 <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none">Tanda Tangan & Nama Terang</p>
                               </div>
                             </div>
@@ -1396,7 +1435,7 @@ export default function RaporCetak({
                                 )}
                               </div>
                               <div className="flex flex-col items-center w-full">
-                                <div className="w-48 border-b-[1.5px] border-black pb-0.5"></div>
+                                <div className="w-48 border-b-2 border-black pb-0.5"></div>
                                 <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none">Tanda Tangan & Nama Terang</p>
                               </div>
                             </div>
@@ -1825,7 +1864,7 @@ export default function RaporCetak({
                       )}
                     </div>
                     <div className="flex flex-col items-center w-full">
-                      <div className="w-36 border-b-[1.5px] border-black pb-0.5"></div>
+                      <div className="w-36 border-b-2 border-black pb-0.5"></div>
                       <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none">Tanda Tangan & Nama Terang</p>
                     </div>
                   </div>
@@ -1906,7 +1945,7 @@ export default function RaporCetak({
                       )}
                     </div>
                     <div className="flex flex-col items-center w-full">
-                      <div className="w-48 border-b-[1.5px] border-black pb-0.5"></div>
+                      <div className="w-48 border-b-2 border-black pb-0.5"></div>
                       <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none">Tanda Tangan & Nama Terang</p>
                     </div>
                   </div>
@@ -2346,7 +2385,7 @@ export default function RaporCetak({
                               )}
                             </div>
                             <div className="flex flex-col items-center w-full">
-                              <div className="w-36 border-b-[1.5px] border-black pb-0.5"></div>
+                              <div className="w-36 border-b-2 border-black pb-0.5"></div>
                               <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none">Tanda Tangan & Nama Terang</p>
                             </div>
                           </div>
@@ -2427,7 +2466,7 @@ export default function RaporCetak({
                               )}
                             </div>
                             <div className="flex flex-col items-center w-full">
-                              <div className="w-48 border-b-[1.5px] border-black pb-0.5"></div>
+                              <div className="w-48 border-b-2 border-black pb-0.5"></div>
                               <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none">Tanda Tangan & Nama Terang</p>
                             </div>
                           </div>

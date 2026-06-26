@@ -1083,6 +1083,7 @@ export default function App() {
     let needsReload = false;
 
     if (resetOptions.wipeEmpty) {
+      localStorage.setItem('rapor_5nk_database_wiped', 'true');
       // Complete wipeout for selected items, without restoring defaults
       if (resetOptions.students) {
         localStorage.setItem('rapor_5nk_students', JSON.stringify([]));
@@ -1116,6 +1117,7 @@ export default function App() {
       // If nothing selected but someone clicked Reset with wipeEmpty, just clear all
       if (!resetOptions.students && !resetOptions.teachers && !resetOptions.classes && !resetOptions.kop && !resetOptions.evaluations) {
          localStorage.clear();
+         localStorage.setItem('rapor_5nk_database_wiped', 'true');
          // Still write empty arrays for core ones so they don't load defaults
          localStorage.setItem('rapor_5nk_students', JSON.stringify([]));
          localStorage.setItem('rapor_5nk_teachers', JSON.stringify([]));
@@ -1125,6 +1127,7 @@ export default function App() {
       addChangeLog('RESET_DATABASE', 'Melakukan operasi kosongkan (wipeout) item database terpilih secara total.');
       needsReload = true;
     } else {
+      localStorage.removeItem('rapor_5nk_database_wiped');
       // Normal reset: restore to default
       if (resetOptions.students) {
         localStorage.removeItem('rapor_5nk_students');

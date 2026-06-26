@@ -77,10 +77,14 @@ export function sortClasses(classList: string[]): string[] {
 export function getSavedClasses(): string[] {
   if (typeof window === 'undefined') return sortClasses(SCHOOL_CLASSES);
   const stored = localStorage.getItem('rapor_5nk_classes');
+  const isWiped = localStorage.getItem('rapor_5nk_database_wiped') === 'true';
   if (stored) {
     try {
       const parsed = JSON.parse(stored);
       if (Array.isArray(parsed)) {
+        if (isWiped) {
+          return sortClasses(parsed);
+        }
         let updated = [...parsed];
         let hasChanges = false;
         SCHOOL_CLASSES.forEach(c => {
@@ -99,6 +103,9 @@ export function getSavedClasses(): string[] {
     } catch (e) {
       console.error('Error parsing stored classes:', e);
     }
+  }
+  if (isWiped) {
+    return [];
   }
   const sortedDefault = sortClasses(SCHOOL_CLASSES);
   localStorage.setItem('rapor_5nk_classes', JSON.stringify(sortedDefault));
@@ -576,7 +583,8 @@ export function getSavedStudents(): Student[] {
       const parsed: Student[] = JSON.parse(stored);
 
       // Auto-detect if user has the old/mock database and migrate them to the real 291 student database!
-      if (parsed.length === 0 || (parsed.length > 0 && parsed[0].id === 'STUDENT_001' && parsed[0].name !== 'ABRILIAN MAULANA MAXCELO') || parsed.length > 300) {
+      const isWiped = localStorage.getItem('rapor_5nk_database_wiped') === 'true';
+      if (!isWiped && (parsed.length === 0 || (parsed.length > 0 && parsed[0].id === 'STUDENT_001' && parsed[0].name !== 'ABRILIAN MAULANA MAXCELO') || parsed.length > 300)) {
         const fresh = generate291Students();
         localStorage.setItem('rapor_5nk_students', JSON.stringify(fresh));
         localStorage.setItem('rapor_5nk_teachers', JSON.stringify(TEACHERS_LIST));
@@ -590,6 +598,8 @@ export function getSavedStudents(): Student[] {
       console.error('Error parsing stored data, resetting:', e);
     }
   }
+  const isWiped = localStorage.getItem('rapor_5nk_database_wiped') === 'true';
+  if (isWiped) return [];
   const fresh = reconcileStudentsList(generate291Students());
   localStorage.setItem('rapor_5nk_students', JSON.stringify(fresh));
   return fresh;
@@ -610,7 +620,8 @@ export function getSavedTeachers(): Teacher[] {
       const parsed: Teacher[] = JSON.parse(stored);
 
       // Auto-detect if user has the old/mock teacher list and migrate them to the real 33 teacher list!
-      if (parsed.length < 33) {
+      const isWiped = localStorage.getItem('rapor_5nk_database_wiped') === 'true';
+      if (!isWiped && parsed.length < 33) {
         localStorage.setItem('rapor_5nk_teachers', JSON.stringify(TEACHERS_LIST));
         return TEACHERS_LIST;
       }
@@ -622,6 +633,8 @@ export function getSavedTeachers(): Teacher[] {
     }
   }
   // Fallback to static TEACHERS_LIST
+  const isWiped = localStorage.getItem('rapor_5nk_database_wiped') === 'true';
+  if (isWiped) return [];
   localStorage.setItem('rapor_5nk_teachers', JSON.stringify(TEACHERS_LIST));
   return TEACHERS_LIST;
 }

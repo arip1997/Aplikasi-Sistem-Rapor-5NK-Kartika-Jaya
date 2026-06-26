@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react';
 import { flushSync } from 'react-dom';
 import { Student, Category, ScoreKey, scoreOptions, KopSekolah } from '../types';
 import { exportClassToExcel } from '../utils';
-import html2canvas from 'html2canvas-pro';
+import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import D3CriteriaDistributionChart from './D3CriteriaDistributionChart';
 import { 
@@ -152,7 +152,87 @@ export default function GradeRecap({
     try {
       let canvas;
       try {
-        canvas = await html2canvas(element, { scale: 2.5, useCORS: true, logging: false, windowWidth: document.documentElement.offsetWidth, windowHeight: document.documentElement.offsetHeight });
+        canvas = await html2canvas(element, { 
+          scale: 2.2, 
+          useCORS: true, 
+          logging: false, 
+          backgroundColor: '#ffffff',
+          width: 1122, // landscape A4 A4 width in pixels at 96 dpi
+          height: 794, // landscape A4 height in pixels at 96 dpi
+          onclone: (clonedDoc) => {
+            const originalElement = document.getElementById('completion-status-report-pdf-content');
+            const clonedTarget = clonedDoc.getElementById('completion-status-report-pdf-content');
+            if (originalElement && clonedTarget) {
+              clonedTarget.style.opacity = '1';
+              
+              const colorCache = new Map<string, string>();
+              let ctx: CanvasRenderingContext2D | null = null;
+              
+              const toSafeRgb = (val: string, fallback: string = 'transparent') => {
+                if (!val || typeof val !== 'string') return val;
+                if (colorCache.has(val)) return colorCache.get(val)!;
+                
+                if (!val.includes('oklch') && !val.includes('oklab') && !val.includes('color-mix')) {
+                  return val;
+                }
+                
+                try {
+                  if (!ctx) {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = 1;
+                    canvas.height = 1;
+                    ctx = canvas.getContext('2d', { willReadFrequently: true });
+                  }
+                  
+                  if (ctx) {
+                    ctx.clearRect(0, 0, 1, 1);
+                    ctx.fillStyle = val;
+                    ctx.fillRect(0, 0, 1, 1);
+                    const data = ctx.getImageData(0, 0, 1, 1).data;
+                    if (data[3] === 0) {
+                      colorCache.set(val, 'transparent');
+                      return 'transparent';
+                    }
+                    
+                    const rgbStr = `rgba(${data[0]}, ${data[1]}, ${data[2]}, ${data[3] / 255})`;
+                    colorCache.set(val, rgbStr);
+                    return rgbStr;
+                  }
+                } catch (e) {}
+                return fallback;
+              };
+
+              const origNodes = Array.from(originalElement.querySelectorAll('*')) as HTMLElement[];
+              const cloneNodes = Array.from(clonedTarget.querySelectorAll('*')) as HTMLElement[];
+              
+              origNodes.forEach((orig, idx) => {
+                try {
+                  const cloneEl = cloneNodes[idx];
+                  if (!cloneEl) return;
+                  const computed = window.getComputedStyle(orig);
+                  
+                  cloneEl.style.color = toSafeRgb(computed.color, 'rgb(0, 0, 0)');
+                  cloneEl.style.backgroundColor = toSafeRgb(computed.backgroundColor, 'transparent');
+                  
+                  ['top', 'right', 'bottom', 'left'].forEach(pos => {
+                    try {
+                      const bc = computed.getPropertyValue(`border-${pos}-color`);
+                      if (bc) {
+                        cloneEl.style.setProperty(`border-${pos}-color`, toSafeRgb(bc, 'rgb(0, 0, 0)'));
+                      }
+                    } catch (e) {}
+                  });
+                } catch (err) {}
+              });
+
+              try {
+                const rootComputed = window.getComputedStyle(originalElement);
+                clonedTarget.style.color = toSafeRgb(rootComputed.color, 'rgb(0,0,0)');
+                clonedTarget.style.backgroundColor = toSafeRgb(rootComputed.backgroundColor, 'rgb(255,255,255)');
+              } catch (err) {}
+            }
+          }
+        });
       } catch(e) {
         console.error('html2canvas error in GradeRecap:', e);
         alert('Gagal membuat PDF karena kesalahan rendering (html2canvas).');
