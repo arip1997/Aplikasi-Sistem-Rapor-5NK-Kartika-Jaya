@@ -92,13 +92,18 @@ export default function RaporCetak({
   // Automatically trigger PDF download or Print when autoTriggerBatchPdf is active
   useEffect(() => {
     if (autoTriggerBatchPdf) {
-      const timer = setTimeout(() => {
-        if (autoPrintImmediately) {
-          handlePrint();
-        } else {
-          handleDownloadAllPDFs();
+      const timer = setTimeout(async () => {
+        try {
+          if (autoPrintImmediately) {
+            await handlePrint();
+          } else {
+            await handleDownloadAllPDFs();
+          }
+        } catch (err) {
+          console.error("Auto batch action failed:", err);
+        } finally {
+          onResetAutoTrigger?.();
         }
-        onResetAutoTrigger?.();
       }, 800);
       return () => clearTimeout(timer);
     }
@@ -177,14 +182,16 @@ export default function RaporCetak({
     return {
       margin:       0,
       filename:     `Rapor_5NK_${targetStudent.name.replace(/\s+/g, '_')}_${targetStudent.nis}.pdf`,
-      image:        { type: 'jpeg', quality: 0.98 },
+      image:        { type: 'jpeg', quality: 0.95 },
       html2canvas:  { 
-        scale: 2, 
+        scale: 1.5, 
         useCORS: true, 
+        imageTimeout: 15000,
         letterRendering: true, 
         logging: false,
         scrollX: 0,
         scrollY: 0,
+        windowWidth: 1200,
         backgroundColor: '#ffffff',
         onclone: (clonedDoc: Document) => {
           const clonedPrintSection = clonedDoc.getElementById('rapor-print-section');
@@ -292,30 +299,53 @@ export default function RaporCetak({
               return fallback;
             };
 
-            const origNodes = Array.from(originalElement.querySelectorAll('[class*="bg-"], [class*="text-"], [class*="border-"], svg, path')) as HTMLElement[];
-            const cloneNodes = Array.from(clonedTarget.querySelectorAll('[class*="bg-"], [class*="text-"], [class*="border-"], svg, path')) as HTMLElement[];
-            
-            origNodes.forEach((orig, idx) => {
-              try {
-                const cloneEl = cloneNodes[idx];
-                if (!cloneEl) return;
-                const computed = window.getComputedStyle(orig);
-                
-                // Copy ONLY color properties to keep html2canvas oklch-safe,
-                // while leaving layout parameters (width, height, flex, margins, padding, line heights)
-                // to be governed perfectly by our template CSS rules!
-                cloneEl.style.color = toSafeRgb(computed.color, 'rgb(0, 0, 0)');
-                cloneEl.style.backgroundColor = toSafeRgb(computed.backgroundColor, 'transparent');
-                
-                ['top', 'right', 'bottom', 'left'].forEach(pos => {
+            // Build map of original elements by data-layout-id
+            const origMap = new Map<string, HTMLElement>();
+            if (originalElement) {
+              const rootId = originalElement.getAttribute('data-layout-id');
+              if (rootId) origMap.set(rootId, originalElement);
+              originalElement.querySelectorAll('[data-layout-id]').forEach(el => {
+                const id = el.getAttribute('data-layout-id');
+                if (id) origMap.set(id, el as HTMLElement);
+              });
+            }
+
+            // Sync color styles for the target and all its descendants that have data-layout-id
+            const syncElementColors = (cloneEl: HTMLElement) => {
+              const id = cloneEl.getAttribute('data-layout-id');
+              if (id) {
+                const origEl = origMap.get(id);
+                if (origEl) {
                   try {
-                    const bc = computed.getPropertyValue(`border-${pos}-color`);
-                    if (bc) {
-                      cloneEl.style.setProperty(`border-${pos}-color`, toSafeRgb(bc, 'rgb(0, 0, 0)'));
+                    const computed = window.getComputedStyle(origEl);
+                    cloneEl.style.color = toSafeRgb(computed.color, 'rgb(0, 0, 0)');
+                    cloneEl.style.backgroundColor = toSafeRgb(computed.backgroundColor, 'transparent');
+                    
+                    ['Top', 'Right', 'Bottom', 'Left'].forEach(pos => {
+                      const bc = computed.getPropertyValue(`border-${pos.toLowerCase()}-color`);
+                      if (bc) {
+                        cloneEl.style.setProperty(`border-${pos.toLowerCase()}-color`, toSafeRgb(bc, 'rgb(0, 0, 0)'));
+                      }
+                    });
+
+                    // Copy SVG fill and stroke
+                    const fill = computed.getPropertyValue('fill');
+                    if (fill && fill !== 'none') {
+                      cloneEl.style.setProperty('fill', toSafeRgb(fill, 'currentColor'));
+                    }
+                    const stroke = computed.getPropertyValue('stroke');
+                    if (stroke && stroke !== 'none') {
+                      cloneEl.style.setProperty('stroke', toSafeRgb(stroke, 'currentColor'));
                     }
                   } catch (e) {}
-                });
-              } catch (err) {}
+                }
+              }
+            };
+
+            // Process clonedTarget and all its matching descendants
+            syncElementColors(clonedTarget);
+            clonedTarget.querySelectorAll('[data-layout-id]').forEach(el => {
+              syncElementColors(el as HTMLElement);
             });
 
             try {
@@ -453,35 +483,52 @@ export default function RaporCetak({
         return;
       }
 
-      // Force immediate layout reflow
-      void originalElement.offsetHeight;
-      
-      // Let the browser paint
-      await new Promise(resolve => setTimeout(resolve, 150));
+      // Tag original elements with data-layout-id for reliable onclone mapping
+      let idCounter = 1;
+      originalElement.setAttribute('data-layout-id', String(idCounter++));
+      const origDescendants = originalElement.querySelectorAll('*');
+      origDescendants.forEach(el => {
+        el.setAttribute('data-layout-id', String(idCounter++));
+      });
 
-      // Run live dry-run DOM verification check with deep audits
-      const dryRunPassed = runDryRunAuditAndVerifyDom(selectedStudents.length);
-      if (!dryRunPassed) {
-        console.warn("[Dry-Run Warning] Detasemen validasi DOM menemukan ketidakcocokan visual; melanjutkan regenerasi paksa.");
+      try {
+        // Force immediate layout reflow
+        void originalElement.offsetHeight;
+        
+        // Let the browser paint
+        await new Promise(resolve => setTimeout(resolve, 150));
+
+        // Run live dry-run DOM verification check with deep audits
+        const dryRunPassed = runDryRunAuditAndVerifyDom(selectedStudents.length);
+        if (!dryRunPassed) {
+          console.warn("[Dry-Run Warning] Detasemen validasi DOM menemukan ketidakcocokan visual; melanjutkan regenerasi paksa.");
+        }
+
+        let filename = `Rapor_5NK_Batch_${selectedClass}.pdf`;
+        if (selectedStudents.length === 1) {
+          const s = selectedStudents[0];
+          filename = `Rapor_5NK_${s.name.replace(/\s+/g, '_')}_${s.nis}.pdf`;
+        }
+
+        const baseOpt = getHtml2PdfOpt(selectedStudents[0] || student, originalElement);
+        const opt = {
+          ...baseOpt,
+          filename: filename
+        };
+
+        console.log(`[PDF Generator] Starting html2pdf with filename: "${filename}"`);
+        await html2pdfFn().set(opt).from(originalElement).save();
+        console.log("[PDF Generator] File generated and download triggered successfully.");
+      } finally {
+        // Clean up data-layout-id
+        originalElement.removeAttribute('data-layout-id');
+        origDescendants.forEach(el => {
+          el.removeAttribute('data-layout-id');
+        });
       }
-
-      let filename = `Rapor_5NK_Batch_${selectedClass}.pdf`;
-      if (selectedStudents.length === 1) {
-        const s = selectedStudents[0];
-        filename = `Rapor_5NK_${s.name.replace(/\s+/g, '_')}_${s.nis}.pdf`;
-      }
-
-      const baseOpt = getHtml2PdfOpt(selectedStudents[0] || student, originalElement);
-      const opt = {
-        ...baseOpt,
-        filename: filename
-      };
-
-      console.log(`[PDF Generator] Starting html2pdf with filename: "${filename}"`);
-      await html2pdfFn().set(opt).from(originalElement).save();
-      console.log("[PDF Generator] File generated and download triggered successfully.");
     } catch (err) {
       console.error("Kesalahan Unduh PDF:", err);
+      alert(`Terjadi kesalahan saat mengunduh PDF: ${err instanceof Error ? err.message : 'Silakan coba lagi.'}`);
     } finally {
       setIsGeneratingPdf(false);
     }
@@ -535,24 +582,40 @@ export default function RaporCetak({
           continue;
         }
 
-        void originalElement.offsetHeight;
-        await new Promise(resolve => setTimeout(resolve, 100));
+        // Tag original elements with data-layout-id for reliable onclone mapping
+        let idCounter = 1;
+        originalElement.setAttribute('data-layout-id', String(idCounter++));
+        const origDescendants = originalElement.querySelectorAll('*');
+        origDescendants.forEach(el => {
+          el.setAttribute('data-layout-id', String(idCounter++));
+        });
 
-        runDryRunAuditAndVerifyDom(1);
+        try {
+          void originalElement.offsetHeight;
+          await new Promise(resolve => setTimeout(resolve, 100));
 
-        const baseOpt = getHtml2PdfOpt(curStudent, originalElement);
-        let filename = `Rapor_5NK_${curStudent.name.replace(/\s+/g, '_')}_${curStudent.nis}.pdf`;
-        
-        const opt = {
-          ...baseOpt,
-          filename
-        };
+          runDryRunAuditAndVerifyDom(1);
 
-        const pdfBlob = await html2pdfFn().set(opt).from(originalElement).output('blob');
-        
-        if (pdfBlob && pdfBlob.size > 0) {
-          await uploadFileToDrive(token, pdfBlob, filename);
-          uploadedCount++;
+          const baseOpt = getHtml2PdfOpt(curStudent, originalElement);
+          let filename = `Rapor_5NK_${curStudent.name.replace(/\s+/g, '_')}_${curStudent.nis}.pdf`;
+          
+          const opt = {
+            ...baseOpt,
+            filename
+          };
+
+          const pdfBlob = await html2pdfFn().set(opt).from(originalElement).output('blob');
+          
+          if (pdfBlob && pdfBlob.size > 0) {
+            await uploadFileToDrive(token, pdfBlob, filename);
+            uploadedCount++;
+          }
+        } finally {
+          // Clean up data-layout-id
+          originalElement.removeAttribute('data-layout-id');
+          origDescendants.forEach(el => {
+            el.removeAttribute('data-layout-id');
+          });
         }
       }
 
@@ -606,30 +669,46 @@ export default function RaporCetak({
           continue;
         }
 
-        // Force synchronous layout reflow
-        void originalElement.offsetHeight;
-        
-        // Allow the browser to calculate complete styles
-        await new Promise(resolve => setTimeout(resolve, 100));
+        // Tag original elements with data-layout-id for reliable onclone mapping
+        let idCounter = 1;
+        originalElement.setAttribute('data-layout-id', String(idCounter++));
+        const origDescendants = originalElement.querySelectorAll('*');
+        origDescendants.forEach(el => {
+          el.setAttribute('data-layout-id', String(idCounter++));
+        });
 
-        // Run live dry-run DOM verification check for 1 expected student group in batch focus mode
-        const dryRunPassed = runDryRunAuditAndVerifyDom(1);
-        if (!dryRunPassed) {
-          console.warn(`[Batch Dry-Run Warning] Student "${curStudent.name}" failed complete pristine DOM audit verification.`);
-        }
+        try {
+          // Force synchronous layout reflow
+          void originalElement.offsetHeight;
+          
+          // Allow the browser to calculate complete styles
+          await new Promise(resolve => setTimeout(resolve, 100));
 
-        const opt = getHtml2PdfOpt(curStudent, originalElement);
-        
-        // Generate Blob directly from the fully stable element
-        console.log(` - Generating html2pdf blob for ${curStudent.name}...`);
-        const pdfBlob = await html2pdfFn().set(opt).from(originalElement).output('blob');
-        
-        if (pdfBlob && pdfBlob.size > 0) {
-          console.log(` ✅ Blob generated successfully: ${pdfBlob.size} bytes. MIME: ${pdfBlob.type}`);
-          folder.file(opt.filename, pdfBlob);
-        } else {
-          console.error(` ❌ ERROR: Generated blob for "${curStudent.name}" is empty or failed!`);
-          throw new Error(`Empty blob generated for student: ${curStudent.name}`);
+          // Run live dry-run DOM verification check for 1 expected student group in batch focus mode
+          const dryRunPassed = runDryRunAuditAndVerifyDom(1);
+          if (!dryRunPassed) {
+            console.warn(`[Batch Dry-Run Warning] Student "${curStudent.name}" failed complete pristine DOM audit verification.`);
+          }
+
+          const opt = getHtml2PdfOpt(curStudent, originalElement);
+          
+          // Generate Blob directly from the fully stable element
+          console.log(` - Generating html2pdf blob for ${curStudent.name}...`);
+          const pdfBlob = await html2pdfFn().set(opt).from(originalElement).output('blob');
+          
+          if (pdfBlob && pdfBlob.size > 0) {
+            console.log(` ✅ Blob generated successfully: ${pdfBlob.size} bytes. MIME: ${pdfBlob.type}`);
+            folder.file(opt.filename, pdfBlob);
+          } else {
+            console.error(` ❌ ERROR: Generated blob for "${curStudent.name}" is empty or failed!`);
+            throw new Error(`Empty blob generated for student: ${curStudent.name}`);
+          }
+        } finally {
+          // Clean up data-layout-id
+          originalElement.removeAttribute('data-layout-id');
+          origDescendants.forEach(el => {
+            el.removeAttribute('data-layout-id');
+          });
         }
       }
 
@@ -652,6 +731,7 @@ export default function RaporCetak({
 
     } catch (err) {
       console.error("Kesalahan Unduh Semua PDF:", err);
+      alert(`Terjadi kesalahan saat menyusun ZIP: ${err instanceof Error ? err.message : 'Silakan coba lagi.'}`);
     } finally {
       setBatchStudent(null);
       setIsGeneratingAll(false);
@@ -984,7 +1064,7 @@ export default function RaporCetak({
                         <div className="flex items-start gap-4 mb-0.5">
                           <div className="h-20 w-20 flex flex-col justify-center items-center flex-none">
                             {kopSekolah.logoUrl ? (
-                              <img src={kopSekolah.logoUrl} alt="Logo Sekolah" className="max-h-20 max-w-20 object-contain" referrerPolicy="no-referrer" />
+                              <img src={kopSekolah.logoUrl} alt="Logo Sekolah" className="max-h-20 max-w-20 object-contain" referrerPolicy="no-referrer" crossOrigin="anonymous" />
                             ) : (
                               <div className="h-20 w-20 bg-neutral-100 flex items-center justify-center font-sans font-bold text-xs">LOGO</div>
                             )}
@@ -1486,7 +1566,7 @@ export default function RaporCetak({
             <div className="flex items-start gap-4 mb-1">
               <div className="h-24 w-24 flex flex-col justify-center items-center flex-none">
                 {kopSekolah.logoUrl ? (
-                  <img src={kopSekolah.logoUrl} alt="Logo Sekolah" className="max-h-24 max-w-24 object-contain" referrerPolicy="no-referrer" />
+                  <img src={kopSekolah.logoUrl} alt="Logo Sekolah" className="max-h-24 max-w-24 object-contain" referrerPolicy="no-referrer" crossOrigin="anonymous" />
                 ) : (
                   <KartikaLogo />
                 )}
@@ -2008,7 +2088,7 @@ export default function RaporCetak({
                       <div className="flex items-start gap-4 mb-0.5">
                         <div className="h-20 w-20 flex flex-col justify-center items-center flex-none">
                           {kopSekolah.logoUrl ? (
-                            <img src={kopSekolah.logoUrl} alt="Logo Sekolah" className="max-h-20 max-w-20 object-contain" referrerPolicy="no-referrer" />
+                            <img src={kopSekolah.logoUrl} alt="Logo Sekolah" className="max-h-20 max-w-20 object-contain" referrerPolicy="no-referrer" crossOrigin="anonymous" />
                           ) : (
                             <KartikaLogo />
                           )}

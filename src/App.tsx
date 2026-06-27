@@ -1478,14 +1478,14 @@ export default function App() {
                   let missingCount = 0;
                   const missingNames: string[] = [];
                   filteredStudents.forEach(s => {
-                    if (!s.name || !s.nis || !s.kesimpulan) {
+                    if (!s.name || !s.nis) {
                       missingCount++;
                       if (missingNames.length < 3) missingNames.push(s.name || s.nis || 'Siswa tanpa nama');
                     }
                   });
 
                   if (missingCount > 0) {
-                    triggerAlert('error', `Validasi Gagal: ${missingCount} siswa tidak memiliki data lengkap (Sikap/Kesimpulan kosong). Contoh: ${missingNames.join(', ')}. Harap lengkapi terlebih dahulu!`);
+                    triggerAlert('error', `Validasi Gagal: ${missingCount} siswa tidak memiliki Nama atau NIS. Contoh: ${missingNames.join(', ')}. Harap lengkapi terlebih dahulu!`);
                     return;
                   }
 

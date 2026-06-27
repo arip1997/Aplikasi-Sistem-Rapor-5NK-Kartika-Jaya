@@ -149,16 +149,27 @@ export default function GradeRecap({
       return;
     }
 
+    // Tag elements for accurate cloning styles mapping
+    let idCounter = 1;
+    element.setAttribute('data-layout-id', String(idCounter++));
+    const origDescendants = element.querySelectorAll('*');
+    origDescendants.forEach(el => {
+      el.setAttribute('data-layout-id', String(idCounter++));
+    });
+
     try {
       let canvas;
       try {
         canvas = await html2canvas(element, { 
           scale: 2.2, 
           useCORS: true, 
+          imageTimeout: 15000,
           logging: false, 
           backgroundColor: '#ffffff',
-          width: 1122, // landscape A4 A4 width in pixels at 96 dpi
-          height: 794, // landscape A4 height in pixels at 96 dpi
+          width: 1122, 
+          windowWidth: 1122,
+          height: Math.max(794, element.offsetHeight + 40),
+          windowHeight: Math.max(794, element.offsetHeight + 40),
           onclone: (clonedDoc) => {
             const originalElement = document.getElementById('completion-status-report-pdf-content');
             const clonedTarget = clonedDoc.getElementById('completion-status-report-pdf-content');
@@ -202,27 +213,53 @@ export default function GradeRecap({
                 return fallback;
               };
 
-              const origNodes = Array.from(originalElement.querySelectorAll('[class*="bg-"], [class*="text-"], [class*="border-"], svg, path')) as HTMLElement[];
-              const cloneNodes = Array.from(clonedTarget.querySelectorAll('[class*="bg-"], [class*="text-"], [class*="border-"], svg, path')) as HTMLElement[];
-              
-              origNodes.forEach((orig, idx) => {
-                try {
-                  const cloneEl = cloneNodes[idx];
-                  if (!cloneEl) return;
-                  const computed = window.getComputedStyle(orig);
-                  
-                  cloneEl.style.color = toSafeRgb(computed.color, 'rgb(0, 0, 0)');
-                  cloneEl.style.backgroundColor = toSafeRgb(computed.backgroundColor, 'transparent');
-                  
-                  ['top', 'right', 'bottom', 'left'].forEach(pos => {
+              // Build map of original elements by data-layout-id
+              const origMap = new Map<string, HTMLElement>();
+              if (originalElement) {
+                const rootId = originalElement.getAttribute('data-layout-id');
+                if (rootId) origMap.set(rootId, originalElement);
+                originalElement.querySelectorAll('[data-layout-id]').forEach(el => {
+                  const id = el.getAttribute('data-layout-id');
+                  if (id) origMap.set(id, el as HTMLElement);
+                });
+              }
+
+              // Sync color styles for the target and all its descendants that have data-layout-id
+              const syncElementColors = (cloneEl: HTMLElement) => {
+                const id = cloneEl.getAttribute('data-layout-id');
+                if (id) {
+                  const origEl = origMap.get(id);
+                  if (origEl) {
                     try {
-                      const bc = computed.getPropertyValue(`border-${pos}-color`);
-                      if (bc) {
-                        cloneEl.style.setProperty(`border-${pos}-color`, toSafeRgb(bc, 'rgb(0, 0, 0)'));
+                      const computed = window.getComputedStyle(origEl);
+                      cloneEl.style.color = toSafeRgb(computed.color, 'rgb(0, 0, 0)');
+                      cloneEl.style.backgroundColor = toSafeRgb(computed.backgroundColor, 'transparent');
+                      
+                      ['Top', 'Right', 'Bottom', 'Left'].forEach(pos => {
+                        const bc = computed.getPropertyValue(`border-${pos.toLowerCase()}-color`);
+                        if (bc) {
+                          cloneEl.style.setProperty(`border-${pos.toLowerCase()}-color`, toSafeRgb(bc, 'rgb(0, 0, 0)'));
+                        }
+                      });
+
+                      // Copy SVG fill and stroke
+                      const fill = computed.getPropertyValue('fill');
+                      if (fill && fill !== 'none') {
+                        cloneEl.style.setProperty('fill', toSafeRgb(fill, 'currentColor'));
+                      }
+                      const stroke = computed.getPropertyValue('stroke');
+                      if (stroke && stroke !== 'none') {
+                        cloneEl.style.setProperty('stroke', toSafeRgb(stroke, 'currentColor'));
                       }
                     } catch (e) {}
-                  });
-                } catch (err) {}
+                  }
+                }
+              };
+
+              // Process clonedTarget and all its matching descendants
+              syncElementColors(clonedTarget);
+              clonedTarget.querySelectorAll('[data-layout-id]').forEach(el => {
+                syncElementColors(el as HTMLElement);
               });
 
               try {
@@ -240,6 +277,7 @@ export default function GradeRecap({
         setIsPrintingRecap(false);
         return;
       }
+
       const imgData = canvas.toDataURL('image/jpeg', 0.95);
       const pdf = new jsPDF({
         orientation: 'landscape',
@@ -281,6 +319,11 @@ export default function GradeRecap({
       console.error("Gagal mengekspor Ringkasan Rapor Yayasan:", err);
       alert("Terjadi kesalahan teknis saat mengekspor PDF.");
     } finally {
+      // Clean up data-layout-id
+      element.removeAttribute('data-layout-id');
+      origDescendants.forEach(el => {
+        el.removeAttribute('data-layout-id');
+      });
       setIsGeneratingRecapPdf(false);
       setIsPrintingRecap(false);
     }

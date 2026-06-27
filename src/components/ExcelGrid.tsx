@@ -528,7 +528,7 @@ export default function ExcelGrid({
 
       {/* 3. Grid Table Container */}
       <div ref={scrollContainerRef} className="flex-1 overflow-auto relative">
-        <table className="w-full border-separate border-spacing-0 text-left">
+        <table className="w-full min-w-max border-separate border-spacing-0 text-left">
           {/* Header Rows */}
           <thead className="sticky top-0 bg-slate-100 z-10 text-xs text-slate-700 selection:bg-transparent shadow-xs">
             {/* Category row */}
@@ -546,7 +546,7 @@ export default function ExcelGrid({
                   'No'
                 )}
               </th>
-              <th className="bg-slate-200 border-r border-b border-slate-300 p-2 sticky top-0 left-[55px] z-30 min-w-[140px]">NIS / Siswa</th>
+              <th className="bg-slate-200 border-r border-b border-slate-300 p-2 sticky top-0 left-[55px] z-30 min-w-[200px]">NIS / Siswa</th>
               
               {categories.map((cat, idx) => {
                 const colors = ['bg-emerald-50', 'bg-blue-50', 'bg-purple-50', 'bg-amber-50', 'bg-rose-50'];
@@ -561,7 +561,7 @@ export default function ExcelGrid({
             {/* Indicator row */}
             <tr className="text-[10px] text-slate-500 font-mono bg-slate-50 h-[32px]">
               <th className="border-r border-b border-slate-300 text-center sticky top-[38px] left-0 bg-slate-50 z-30 min-w-[55px]">-</th>
-              <th className="border-r border-b border-slate-300 px-2 py-1 sticky top-[38px] left-[55px] bg-slate-50 z-30">NIS & Nama</th>
+              <th className="border-r border-b border-slate-300 px-2 py-1 sticky top-[38px] left-[55px] bg-slate-50 z-30 min-w-[200px]">NIS & Nama</th>
               
               {categories.map((cat, idx) => {
                 const textColors = ['text-emerald-700', 'text-blue-700', 'text-purple-700', 'text-amber-700', 'text-rose-700'];
@@ -570,7 +570,7 @@ export default function ExcelGrid({
                 const hClass = hoverColors[idx % hoverColors.length];
                 
                 return cat.indicators.map((ind) => (
-                  <th key={ind.id} title={ind.text} className={`border-r border-b border-slate-300 px-1 text-center font-bold ${tClass} cursor-help ${hClass} sticky top-[38px] z-10`}>
+                  <th key={ind.id} title={ind.text} className={`border-r border-b border-slate-300 px-1 text-center font-bold ${tClass} cursor-help ${hClass} sticky top-[38px] z-10 min-w-[45px]`}>
                     {ind.id}
                   </th>
                 ));
@@ -673,7 +673,7 @@ export default function ExcelGrid({
                           <td 
                             key={ind.id} 
                             onClick={() => handleCellClick(stud.id, ind.id)}
-                            className={`border-r border-b border-slate-200 p-1 text-center font-mono cursor-pointer relative transition-all ${
+                            className={`border-r border-b border-slate-200 p-1 text-center font-mono cursor-pointer relative transition-all min-w-[45px] ${
                               isCellSelected ? 'ring-2 ring-emerald-500 z-10 bg-emerald-50' : ''
                             }`}
                           >
