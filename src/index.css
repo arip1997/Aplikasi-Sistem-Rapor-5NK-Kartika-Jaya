@@ -104,7 +104,6 @@
 .avoid-break {
   page-break-inside: avoid !important;
   break-inside: avoid !important;
-  display: block !important;
 }
 
 /* Crisp and sharp table design for official institutional reports */

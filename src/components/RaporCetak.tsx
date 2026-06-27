@@ -177,9 +177,9 @@ export default function RaporCetak({
     return {
       margin:       0,
       filename:     `Rapor_5NK_${targetStudent.name.replace(/\s+/g, '_')}_${targetStudent.nis}.pdf`,
-      image:        { type: 'jpeg', quality: 1.0 },
+      image:        { type: 'jpeg', quality: 0.98 },
       html2canvas:  { 
-        scale: 3, 
+        scale: 2, 
         useCORS: true, 
         letterRendering: true, 
         logging: false,
@@ -292,8 +292,8 @@ export default function RaporCetak({
               return fallback;
             };
 
-            const origNodes = Array.from(originalElement.querySelectorAll('*')) as HTMLElement[];
-            const cloneNodes = Array.from(clonedTarget.querySelectorAll('*')) as HTMLElement[];
+            const origNodes = Array.from(originalElement.querySelectorAll('[class*="bg-"], [class*="text-"], [class*="border-"], svg, path')) as HTMLElement[];
+            const cloneNodes = Array.from(clonedTarget.querySelectorAll('[class*="bg-"], [class*="text-"], [class*="border-"], svg, path')) as HTMLElement[];
             
             origNodes.forEach((orig, idx) => {
               try {
@@ -345,7 +345,7 @@ export default function RaporCetak({
         }
       },
       jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' },
-      pagebreak:    { mode: ['avoid-all', 'css', 'legacy'] }
+      pagebreak:    { mode: ['css', 'legacy'] }
     };
   };
 
@@ -994,7 +994,7 @@ export default function RaporCetak({
                               {kopSekolah.yayasan}
                             </h1>
                             <p className="font-bold text-black mt-0.5 leading-tight uppercase text-[11pt] text-left">
-                              KOORDINATOR <span className="underline mr-1">{kopSekolah.koordinator}</span> CABANG <span className="underline">{kopSekolah.cabang}</span>
+                              KOORDINATOR <span className="mr-1">{kopSekolah.koordinator}</span> CABANG <span>{kopSekolah.cabang}</span>
                             </p>
                             <h2 className="font-bold text-[15pt] text-black mt-0.5 leading-tight uppercase text-left">
                               {kopSekolah.namaSekolah}
@@ -1313,7 +1313,7 @@ export default function RaporCetak({
                         {/* Wali Kelas Side */}
                         <div className="flex flex-col font-sans">
                           <div className="bg-neutral-100 border-b border-black p-1.5">
-                            <p className="font-bold text-[9pt] text-black text-left">Catatan Wali Kelas:</p>
+                            <p className="font-bold text-[9pt] text-black text-left">Catatan Wali Kelas :</p>
                           </div>
                           <div className="p-2.5 min-h-[85px] text-justify text-[9pt] text-slate-800 leading-relaxed font-sans">
                             {activeStudent.catatanWali || 'Teruskan perilaku budi luhur ini dan tingkatkan konsistensi waktu belajarnya.'}
@@ -1323,10 +1323,10 @@ export default function RaporCetak({
                         {/* Orang Tua Side */}
                         <div className="flex flex-col font-sans">
                           <div className="bg-neutral-100 border-b border-black p-1.5">
-                            <p className="font-bold text-[9pt] text-black text-left">Catatan Orang Tua/Wali:</p>
+                            <p className="font-bold text-[9pt] text-black text-left">Catatan Orang Tua/Wali :</p>
                           </div>
                           <div className="p-2.5 min-h-[85px] text-justify text-[9pt] text-slate-500 italic leading-relaxed font-sans">
-                            {activeStudent.catatanOrangTua || 'Kami berkomitmen untuk terus membimbing anak di rumah sesuai arahan sekolah.'}
+                            {activeStudent.catatanOrangTua}
                           </div>
                         </div>
                       </div>
@@ -1496,7 +1496,7 @@ export default function RaporCetak({
                   {kopSekolah.yayasan}
                 </h1>
                 <p className="font-bold text-black mt-0.5 leading-tight uppercase text-[11pt]">
-                  KOORDINATOR <span className="underline mr-1">{kopSekolah.koordinator}</span> CABANG <span className="underline">{kopSekolah.cabang}</span>
+                  KOORDINATOR <span className="mr-1">{kopSekolah.koordinator}</span> CABANG <span>{kopSekolah.cabang}</span>
                 </p>
                 <h2 className="font-bold text-[15pt] text-black mt-0.5 leading-tight uppercase">
                   {kopSekolah.namaSekolah}
@@ -1823,7 +1823,7 @@ export default function RaporCetak({
               {/* Wali Kelas Side */}
               <div className="flex flex-col">
                 <div className="bg-white border-b border-black p-1.5">
-                  <p className="font-bold text-[9pt] text-black text-left">Catatan Wali Kelas:</p>
+                  <p className="font-bold text-[9pt] text-black text-left">Catatan Wali Kelas :</p>
                 </div>
                 <div className="p-2.5 min-h-[85px] text-justify text-[9pt] text-slate-800 leading-relaxed font-sans">
                   {activeStudent.catatanWali || 'Teruskan perilaku budi luhur ini dan tingkatkan konsistensi waktu belajarnya.'}
@@ -1833,10 +1833,10 @@ export default function RaporCetak({
               {/* Orang Tua Side */}
               <div className="flex flex-col">
                 <div className="bg-white border-b border-black p-1.5">
-                  <p className="font-bold text-[9pt] text-black text-left">Catatan Orang Tua/Wali:</p>
+                  <p className="font-bold text-[9pt] text-black text-left">Catatan Orang Tua/Wali :</p>
                 </div>
                 <div className="p-2.5 min-h-[85px] text-justify text-[9pt] text-slate-500 italic leading-relaxed font-sans">
-                  {activeStudent.catatanOrangTua || 'Kami berkomitmen untuk terus membimbing anak di rumah sesuai arahan sekolah.'}
+                  {activeStudent.catatanOrangTua}
                 </div>
               </div>
             </div>
@@ -2018,7 +2018,7 @@ export default function RaporCetak({
                             {kopSekolah.yayasan}
                           </h1>
                           <p className="font-bold text-black mt-0.5 leading-tight uppercase text-[11pt]">
-                            KOORDINATOR <span className="underline mr-1">{kopSekolah.koordinator}</span> CABANG <span className="underline">{kopSekolah.cabang}</span>
+                            KOORDINATOR <span className="mr-1">{kopSekolah.koordinator}</span> CABANG <span>{kopSekolah.cabang}</span>
                           </p>
                           <h2 className="font-bold text-[15pt] text-black mt-0.5 leading-tight uppercase">
                             {kopSekolah.namaSekolah}
@@ -2344,7 +2344,7 @@ export default function RaporCetak({
                       {/* Wali Kelas Side */}
                       <div className="flex flex-col">
                         <div className="bg-white border-b border-black p-1.5">
-                          <p className="font-bold text-[9pt] text-black text-left">Catatan Wali Kelas:</p>
+                          <p className="font-bold text-[9pt] text-black text-left">Catatan Wali Kelas :</p>
                         </div>
                         <div className="p-2.5 min-h-[85px] text-justify text-[9pt] text-slate-800 leading-relaxed font-sans">
                           {selSt.catatanWali || 'Teruskan perilaku budi luhur ini dan tingkatkan konsistensi waktu belajarnya.'}
@@ -2354,10 +2354,10 @@ export default function RaporCetak({
                       {/* Orang Tua Side */}
                       <div className="flex flex-col">
                         <div className="bg-white border-b border-black p-1.5">
-                          <p className="font-bold text-[9pt] text-black text-left">Catatan Orang Tua/Wali:</p>
+                          <p className="font-bold text-[9pt] text-black text-left">Catatan Orang Tua/Wali :</p>
                         </div>
                         <div className="p-2.5 min-h-[85px] text-justify text-[9pt] text-slate-500 italic leading-relaxed font-sans">
-                          {selSt.catatanOrangTua || 'Kami berkomitmen untuk terus membimbing anak di rumah sesuai arahan sekolah.'}
+                          {selSt.catatanOrangTua}
                         </div>
                       </div>
                     </div>

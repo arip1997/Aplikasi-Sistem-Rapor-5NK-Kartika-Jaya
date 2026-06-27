@@ -202,8 +202,8 @@ export default function GradeRecap({
                 return fallback;
               };
 
-              const origNodes = Array.from(originalElement.querySelectorAll('*')) as HTMLElement[];
-              const cloneNodes = Array.from(clonedTarget.querySelectorAll('*')) as HTMLElement[];
+              const origNodes = Array.from(originalElement.querySelectorAll('[class*="bg-"], [class*="text-"], [class*="border-"], svg, path')) as HTMLElement[];
+              const cloneNodes = Array.from(clonedTarget.querySelectorAll('[class*="bg-"], [class*="text-"], [class*="border-"], svg, path')) as HTMLElement[];
               
               origNodes.forEach((orig, idx) => {
                 try {
