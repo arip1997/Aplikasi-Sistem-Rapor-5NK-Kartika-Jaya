@@ -200,6 +200,51 @@ export default function RaporCetak({
         windowWidth: 1200,
         backgroundColor: '#ffffff',
         onclone: (clonedDoc: Document) => {
+          if (clonedDoc.defaultView) {
+            const origClonedGcs = clonedDoc.defaultView.getComputedStyle;
+            clonedDoc.defaultView.getComputedStyle = function(el, pseudo) {
+              let style;
+              try {
+                style = origClonedGcs.call(clonedDoc.defaultView, el, pseudo);
+              } catch (e) {
+                try {
+                  style = window.getComputedStyle(el, pseudo);
+                } catch (e2) {
+                  return {} as CSSStyleDeclaration;
+                }
+              }
+              return new Proxy(style, {
+                get(target, prop) {
+                  let val;
+                  try {
+                    val = Reflect.get(target, prop);
+                  } catch (e) {
+                    return undefined;
+                  }
+                  if (prop === 'getPropertyValue') {
+                    return function(key: string) {
+                      try {
+                        const v = target.getPropertyValue(key);
+                        if (v && typeof v === 'string' && (v.includes('oklch') || v.includes('oklab') || v.includes('color-mix'))) {
+                          return toSafeRgb(v);
+                        }
+                        return v;
+                      } catch (e) {
+                        return '';
+                      }
+                    };
+                  }
+                  if (typeof val === 'function') {
+                    return val.bind(target);
+                  }
+                  if (typeof val === 'string' && (val.includes('oklch') || val.includes('oklab') || val.includes('color-mix'))) {
+                    return toSafeRgb(val);
+                  }
+                  return val;
+                }
+              });
+            };
+          }
           const clonedPrintSection = clonedDoc.getElementById('rapor-print-section');
           if (clonedPrintSection) {
             clonedPrintSection.style.setProperty('position', 'static', 'important');
@@ -340,9 +385,7 @@ export default function RaporCetak({
             const styleElements = Array.from(clonedDoc.querySelectorAll('style'));
             styleElements.forEach(styleTag => {
               try {
-                styleTag.innerHTML = convertOklchCss(styleTag.innerHTML)
-                  .replace(/oklab\([^)]+\)/gi, 'rgba(0,0,0,0.1)')
-                  .replace(/color-mix\([^)]+\)/gi, 'rgba(0,0,0,0.1)');
+                styleTag.innerHTML = convertOklabCss(convertOklchCss(styleTag.innerHTML));
               } catch (e) {}
             });
 
@@ -354,8 +397,7 @@ export default function RaporCetak({
           }
         }
       },
-      jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' },
-      pagebreak:    { mode: ['css', 'legacy'] }
+      jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
     };
   };
 
@@ -479,6 +521,7 @@ export default function RaporCetak({
   };
 
   const handleDownloadPDF = async () => {
+    applyGlobalStyleOverrides();
     const html2pdfFn = typeof html2pdf === 'function' ? html2pdf : (html2pdf as any).default;
     if (!html2pdfFn) {
       console.error("[Cetak PDF Error] html2pdf library function is not loaded in window scope.");
@@ -543,11 +586,13 @@ export default function RaporCetak({
       console.error("Kesalahan Unduh PDF:", err);
       alert(`Terjadi kesalahan saat mengunduh PDF: ${err instanceof Error ? err.message : 'Silakan coba lagi.'}`);
     } finally {
+      restoreGlobalStyleOverrides();
       setIsGeneratingPdf(false);
     }
   };
 
   const handleSaveToDrive = async () => {
+    applyGlobalStyleOverrides();
     if (selectedStudents.length === 0) return;
 
     let token = await getAccessToken();
@@ -645,12 +690,17 @@ export default function RaporCetak({
       alert("Gagal menyimpan dokumen ke Google Drive. Mohon periksa kembali koneksi internet dan perizinan akun Anda.");
     } finally {
       setBatchStudent(null);
+      restoreGlobalStyleOverrides();
       setIsUploadingToDrive(false);
     }
   };
 
   const handleDownloadAllPDFs = async () => {
-    if (selectedStudents.length === 0) return;
+    if (!selectedStudents || selectedStudents.length === 0) {
+      alert("Peringatan: Tidak ada siswa yang dipilih untuk diunduh. Pastikan panjang array siswa tidak kosong sebelum memulai proses kompresi ZIP.");
+      return;
+    }
+    applyGlobalStyleOverrides();
     
     const html2pdfFn = typeof html2pdf === 'function' ? html2pdf : (html2pdf as any).default;
     if (!html2pdfFn) {
@@ -733,6 +783,10 @@ export default function RaporCetak({
       setBatchStudent(null);
 
       console.log("[Batch PDF Engine] Compiling ZIP archive...");
+      const fileCount = Object.keys(folder.files).length;
+      if (fileCount === 0) {
+        throw new Error("Tidak ada berkas PDF yang berhasil dibuat. Tidak dapat mengompres ZIP yang kosong.");
+      }
       const zipBlob = await zip.generateAsync({ type: 'blob' });
       const url = URL.createObjectURL(zipBlob);
       const a = document.createElement('a');
@@ -749,6 +803,7 @@ export default function RaporCetak({
       alert(`Terjadi kesalahan saat menyusun ZIP: ${err instanceof Error ? err.message : 'Silakan coba lagi.'}`);
     } finally {
       setBatchStudent(null);
+      restoreGlobalStyleOverrides();
       setIsGeneratingAll(false);
     }
   };
@@ -1144,43 +1199,43 @@ export default function RaporCetak({
                       </div>
 
                       {/* Table */}
-                      <table className="w-full table-fixed text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
+                      <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
                         <colgroup>
-                          <col style={{ width: '20%' }} />
-                          <col style={{ width: '44%' }} />
-                          <col style={{ width: '9%' }} />
-                          <col style={{ width: '9%' }} />
-                          <col style={{ width: '9%' }} />
-                          <col style={{ width: '9%' }} />
+                          <col style={{ width: '15%' }} />
+                          <col style={{ width: '41%' }} />
+                          <col style={{ width: '11%' }} />
+                          <col style={{ width: '11%' }} />
+                          <col style={{ width: '11%' }} />
+                          <col style={{ width: '11%' }} />
                         </colgroup>
                         <thead>
-                          <tr style={{ backgroundColor: '#f1f5f9' }}>
-                            <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center text-[9.5pt] text-black">
+                          <tr className="bg-slate-100">
+                            <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center w-16 text-[9.5pt]">
                               5 Nilai Kartika
                             </th>
-                            <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center text-[9.5pt] text-black">
+                            <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center text-[9.5pt]">
                               Indikator
                             </th>
-                            <th colSpan={4} className="border border-black p-1 text-center font-bold text-[9.5pt] text-black">
+                            <th colSpan={4} className="border border-black p-1 text-center font-bold text-[9.5pt]">
                               Hasil Penilaian
                             </th>
                           </tr>
-                          <tr style={{ backgroundColor: '#f8fafc' }} className="text-[8px] font-medium leading-tight text-black">
-                            <th className="border border-black p-1 text-center font-bold text-black">
+                          <tr className="bg-slate-50 text-[8px] font-medium leading-tight text-slate-600">
+                            <th className="border border-black p-1 text-center font-bold text-black w-24">
                               Berkembang Sangat Baik
-                              <span className="block font-normal text-[7px] mt-0.5 leading-tight text-slate-700">Konsisten menunjukkan perilaku sesuai indikator tanpa perlu diingatkan.</span>
+                              <span className="block font-normal text-[7px] mt-0.5 leading-tight">Konsisten menunjukkan perilaku sesuai indikator tanpa perlu diingatkan.</span>
                             </th>
-                            <th className="border border-black p-1 text-center font-bold text-black">
+                            <th className="border border-black p-1 text-center font-bold text-black w-24">
                               Berkembang
-                              <span className="block font-normal text-[7px] mt-0.5 leading-tight text-slate-700">Menunjukkan perilaku sesuai indikator dengan sedikit arahan.</span>
+                              <span className="block font-normal text-[7px] mt-0.5 leading-tight">Menunjukkan perilaku sesuai indikator dengan sedikit arahan.</span>
                             </th>
-                            <th className="border border-black p-1 text-center font-bold text-black">
+                            <th className="border border-black p-1 text-center font-bold text-black w-24">
                               Mulai Berkembang
-                              <span className="block font-normal text-[7px] mt-0.5 leading-tight text-slate-700">Perlu sering diingatkan untuk menunjukkan perilaku sesuai indikator.</span>
+                              <span className="block font-normal text-[7px] mt-0.5 leading-tight">Perlu sering diingatkan untuk menunjukkan perilaku sesuai indikator.</span>
                             </th>
-                            <th className="border border-black p-1 text-center font-bold text-black">
+                            <th className="border border-black p-1 text-center font-bold text-black w-24">
                               Belum Berkembang
-                              <span className="block font-normal text-[7px] mt-0.5 leading-tight text-slate-700">Memerlukan bimbingan intensif untuk menunjukkan perilaku sesuai indikator.</span>
+                              <span className="block font-normal text-[7px] mt-0.5 leading-tight">Memerlukan bimbingan intensif untuk menunjukkan perilaku sesuai indikator.</span>
                             </th>
                           </tr>
                         </thead>
@@ -1192,13 +1247,12 @@ export default function RaporCetak({
                               <tr key={ind.id}>
                                 {i === 0 && (
                                   <td 
-                                    rowSpan={3} 
-                                    className="border border-black py-0.5 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[9.5px] leading-tight font-sans text-black"
+                                    rowSpan={3} className="border border-black py-0.5 px-1.5 text-center font-bold bg-[#f9fafb] align-middle text-[9.5px] leading-tight font-sans text-black" style={{ wordBreak: 'break-word' }}
                                   >
                                     Cinta Tanah Air
                                   </td>
                                 )}
-                                <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px] text-left">
+                                <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px] text-left" style={{ wordBreak: 'break-word' }}>
                                   {ind.text}
                                 </td>
                                 <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-emerald-700">
@@ -1224,13 +1278,12 @@ export default function RaporCetak({
                               <tr key={ind.id}>
                                 {i === 0 && (
                                   <td 
-                                    rowSpan={3} 
-                                    className="border border-black py-0.5 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[9.5px] leading-tight font-sans text-black"
+                                    rowSpan={3} className="border border-black py-0.5 px-1.5 text-center font-bold bg-[#f9fafb] align-middle text-[9.5px] leading-tight font-sans text-black" style={{ wordBreak: 'break-word' }}
                                   >
                                     Disiplin
                                   </td>
                                 )}
-                                <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px] text-left">
+                                <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px] text-left" style={{ wordBreak: 'break-word' }}>
                                   {ind.text}
                                 </td>
                                 <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-emerald-700">
@@ -1256,13 +1309,12 @@ export default function RaporCetak({
                               <tr key={ind.id}>
                                 {i === 0 && (
                                   <td 
-                                    rowSpan={3} 
-                                    className="border border-black py-0.5 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[9.5px] leading-tight font-sans text-black"
+                                    rowSpan={3} className="border border-black py-0.5 px-1.5 text-center font-bold bg-[#f9fafb] align-middle text-[9.5px] leading-tight font-sans text-black" style={{ wordBreak: 'break-word' }}
                                   >
                                     Berbudi Luhur
                                   </td>
                                 )}
-                                <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px] text-left">
+                                <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px] text-left" style={{ wordBreak: 'break-word' }}>
                                   {ind.text}
                                 </td>
                                 <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-emerald-700">
@@ -1290,11 +1342,11 @@ export default function RaporCetak({
                             return (
                               <tr key={ind.id}>
                                 <td 
-                                  className="border border-black py-0.5 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[9.5px] leading-tight font-sans text-black"
+                                  className="border border-black py-0.5 px-1.5 text-center font-bold bg-[#f9fafb] align-middle text-[9.5px] leading-tight font-sans text-black"
                                 >
                                   Cerdas
                                 </td>
-                                <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px] text-left">
+                                <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px] text-left" style={{ wordBreak: 'break-word' }}>
                                   {ind.text}
                                 </td>
                                 <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-emerald-700">
@@ -1327,14 +1379,14 @@ export default function RaporCetak({
                   <div className="print-page relative">
                     <div className="flex flex-col h-full w-full justify-between gap-4">
                       {/* Table continuation on Page 2 */}
-                      <table className="w-full table-fixed text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
+                      <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
                         <colgroup>
-                          <col style={{ width: '20%' }} />
-                          <col style={{ width: '44%' }} />
-                          <col style={{ width: '9%' }} />
-                          <col style={{ width: '9%' }} />
-                          <col style={{ width: '9%' }} />
-                          <col style={{ width: '9%' }} />
+                          <col style={{ width: '15%' }} />
+                          <col style={{ width: '41%' }} />
+                          <col style={{ width: '11%' }} />
+                          <col style={{ width: '11%' }} />
+                          <col style={{ width: '11%' }} />
+                          <col style={{ width: '11%' }} />
                         </colgroup>
                         <tbody>
                           {/* Cerdas (2nd and 3rd indicators) */}
@@ -1348,11 +1400,10 @@ export default function RaporCetak({
                                 <tr key={ind.id}>
                                   {idx === 0 && (
                                     <td 
-                                      rowSpan={2} 
-                                      className="border border-black py-0.5 px-1.5 bg-neutral-50/50 align-middle"
+                                      rowSpan={2} className="border border-black py-0.5 px-1.5 bg-[#f9fafb] align-middle" style={{ wordBreak: 'break-word' }}
                                     ></td>
                                   )}
-                                  <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px] text-left">
+                                  <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px] text-left" style={{ wordBreak: 'break-word' }}>
                                     {ind.text}
                                   </td>
                                   <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-emerald-700">
@@ -1379,13 +1430,12 @@ export default function RaporCetak({
                               <tr key={ind.id}>
                                 {i === 0 && (
                                   <td 
-                                    rowSpan={3} 
-                                    className="border border-black py-0.5 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[9.5px] leading-tight font-sans text-black"
+                                    rowSpan={3} className="border border-black py-0.5 px-1.5 text-center font-bold bg-[#f9fafb] align-middle text-[9.5px] leading-tight font-sans text-black" style={{ wordBreak: 'break-word' }}
                                   >
                                     Terampil
                                   </td>
                                 )}
-                                <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px] text-left">
+                                <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px] text-left" style={{ wordBreak: 'break-word' }}>
                                   {ind.text}
                                 </td>
                                 <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-emerald-700">
@@ -1461,11 +1511,11 @@ export default function RaporCetak({
                                   <div className="h-4"></div>
                                 )}
                               </div>
-                              <div className="flex flex-col items-center w-full font-sans">
-                                <p id="tanda-tangan-wali-murid" className="font-bold text-black text-[10.5pt] text-center leading-tight select-none border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
-{EMPTY_SIGNATURE_PARENT}
-</p>
-                                <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none">Tanda Tangan & Nama Terang</p>
+                              <div className="flex flex-col items-center w-full font-sans h-[1.2cm] justify-start">
+                                <p id="tanda-tangan-wali-murid" className="font-bold text-black text-[10.5pt] text-center leading-tight select-none border-b-[1px] border-black pb-0.5 inline-block min-w-[5.0cm] whitespace-nowrap">
+                                  {EMPTY_SIGNATURE_PARENT}
+                                </p>
+                                <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none whitespace-nowrap">Tanda Tangan & Nama Terang</p>
                               </div>
                             </div>
 
@@ -1484,16 +1534,16 @@ export default function RaporCetak({
                                   <div className="h-4"></div>
                                 )}
                               </div>
-                              <div className="flex flex-col items-center min-w-[160px]">
-                                <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
-{kopSekolah.namaKepalaSekolah || EMPTY_SIGNATURE}
-</p>
+                              <div className="flex flex-col items-center w-full font-sans h-[1.2cm] justify-start">
+                                <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.5cm] whitespace-nowrap">
+                                  {kopSekolah.namaKepalaSekolah || EMPTY_SIGNATURE}
+                                </p>
                                 {kopSekolah.nipKepalaSekolah ? (
-                                  <p className="text-[8.5pt] text-slate-700 font-mono mt-1 select-all">
+                                  <p className="text-[8.5pt] text-slate-700 font-mono mt-0.5 select-all whitespace-nowrap">
                                     NIP. {kopSekolah.nipKepalaSekolah}
                                   </p>
                                 ) : (
-                                  <p className="text-[8pt] text-slate-500 font-sans mt-0.5 italic select-none">Tanda Tangan & Nama Terang</p>
+                                  <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none whitespace-nowrap">Tanda Tangan & Nama Terang</p>
                                 )}
                               </div>
                             </div>
@@ -1513,16 +1563,16 @@ export default function RaporCetak({
                                   <div className="h-4"></div>
                                 )}
                               </div>
-                              <div className="flex flex-col items-center w-full font-sans">
-                                <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
-{waliKelasName || EMPTY_SIGNATURE}
-</p>
+                              <div className="flex flex-col items-center w-full font-sans h-[1.2cm] justify-start">
+                                <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.5cm] whitespace-nowrap">
+                                  {waliKelasName || EMPTY_SIGNATURE}
+                                </p>
                                 {waliKelasNip ? (
-                                  <p className="text-[8.5pt] text-slate-700 font-mono mt-1 select-all">
+                                  <p className="text-[8.5pt] text-slate-700 font-mono mt-0.5 select-all whitespace-nowrap">
                                     NIP. {waliKelasNip}
                                   </p>
                                 ) : (
-                                  <p className="text-[8pt] text-slate-500 font-sans mt-0.5 italic select-none">Tanda Tangan & Nama Terang</p>
+                                  <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none whitespace-nowrap">Tanda Tangan & Nama Terang</p>
                                 )}
                               </div>
                             </div>
@@ -1544,11 +1594,11 @@ export default function RaporCetak({
                                   <div className="h-4"></div>
                                 )}
                               </div>
-                              <div className="flex flex-col items-center w-full font-sans">
-                                <p id="tanda-tangan-wali-murid" className="font-bold text-black text-[10.5pt] text-center leading-tight select-none border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
-{EMPTY_SIGNATURE_PARENT}
-</p>
-                                <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none">Tanda Tangan & Nama Terang</p>
+                              <div className="flex flex-col items-center w-full font-sans h-[1.2cm] justify-start">
+                                <p id="tanda-tangan-wali-murid" className="font-bold text-black text-[10.5pt] text-center leading-tight select-none border-b-[1px] border-black pb-0.5 inline-block min-w-[5.0cm] whitespace-nowrap">
+                                  {EMPTY_SIGNATURE_PARENT}
+                                </p>
+                                <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none whitespace-nowrap">Tanda Tangan & Nama Terang</p>
                               </div>
                             </div>
 
@@ -1567,16 +1617,16 @@ export default function RaporCetak({
                                   <div className="h-4"></div>
                                 )}
                               </div>
-                              <div className="flex flex-col items-center w-full font-sans">
-                                <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
-{waliKelasName || EMPTY_SIGNATURE}
-</p>
+                              <div className="flex flex-col items-center w-full font-sans h-[1.2cm] justify-start">
+                                <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.5cm] whitespace-nowrap">
+                                  {waliKelasName || EMPTY_SIGNATURE}
+                                </p>
                                 {waliKelasNip ? (
-                                  <p className="text-[8.5pt] text-slate-700 font-mono mt-1 select-all">
+                                  <p className="text-[8.5pt] text-slate-700 font-mono mt-0.5 select-all whitespace-nowrap">
                                     NIP. {waliKelasNip}
                                   </p>
                                 ) : (
-                                  <p className="text-[8pt] text-slate-500 font-sans mt-0.5 italic select-none">Tanda Tangan & Nama Terang</p>
+                                  <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none whitespace-nowrap">Tanda Tangan & Nama Terang</p>
                                 )}
                               </div>
                             </div>
@@ -1659,43 +1709,43 @@ export default function RaporCetak({
             </div>
 
             {/* The core 5NK indicators evaluation table */}
-            <table className="w-full table-fixed text-left text-[9pt] border border-black border-collapse font-sans leading-snug">
+            <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug">
               <colgroup>
-                <col style={{ width: '20%' }} />
-                <col style={{ width: '44%' }} />
-                <col style={{ width: '9%' }} />
-                <col style={{ width: '9%' }} />
-                <col style={{ width: '9%' }} />
-                <col style={{ width: '9%' }} />
+                <col style={{ width: '15%' }} />
+                <col style={{ width: '41%' }} />
+                <col style={{ width: '11%' }} />
+                <col style={{ width: '11%' }} />
+                <col style={{ width: '11%' }} />
+                <col style={{ width: '11%' }} />
               </colgroup>
               <thead>
-                <tr style={{ backgroundColor: '#f1f5f9' }}>
-                  <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center text-[9.5pt] text-black">
+                <tr className="bg-slate-100">
+                  <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center w-16 text-[9.5pt]">
                     5 Nilai Kartika
                   </th>
-                  <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center text-[9.5pt] text-black">
+                  <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center text-[9.5pt]">
                     Indikator
                   </th>
-                  <th colSpan={4} className="border border-black p-1 text-center font-bold text-[9.5pt] text-black">
+                  <th colSpan={4} className="border border-black p-1 text-center font-bold text-[9.5pt]">
                     Hasil Penilaian
                   </th>
                 </tr>
-                <tr style={{ backgroundColor: '#f8fafc' }} className="text-[8px] font-medium leading-tight text-black">
-                  <th className="border border-black p-1 text-center font-bold text-black">
+                <tr className="bg-slate-50 text-[8px] font-medium leading-tight text-slate-600">
+                  <th className="border border-black p-1 text-center font-bold text-black w-24">
                     Berkembang Sangat Baik
-                    <span className="block font-normal text-[7px] mt-0.5 leading-tight text-slate-700">Konsisten menunjukkan perilaku sesuai indikator tanpa perlu diingatkan.</span>
+                    <span className="block font-normal text-[7px] mt-0.5 leading-tight">Konsisten menunjukkan perilaku sesuai indikator tanpa perlu diingatkan.</span>
                   </th>
-                  <th className="border border-black p-1 text-center font-bold text-black">
+                  <th className="border border-black p-1 text-center font-bold text-black w-24">
                     Berkembang
-                    <span className="block font-normal text-[7px] mt-0.5 leading-tight text-slate-700">Menunjukkan perilaku sesuai indikator dengan sedikit arahan.</span>
+                    <span className="block font-normal text-[7px] mt-0.5 leading-tight">Menunjukkan perilaku sesuai indikator dengan sedikit arahan.</span>
                   </th>
-                  <th className="border border-black p-1 text-center font-bold text-black">
+                  <th className="border border-black p-1 text-center font-bold text-black w-24">
                     Mulai Berkembang
-                    <span className="block font-normal text-[7px] mt-0.5 leading-tight text-slate-700">Perlu sering diingatkan untuk menunjukkan perilaku sesuai indikator.</span>
+                    <span className="block font-normal text-[7px] mt-0.5 leading-tight">Perlu sering diingatkan untuk menunjukkan perilaku sesuai indikator.</span>
                   </th>
-                  <th className="border border-black p-1 text-center font-bold text-black">
+                  <th className="border border-black p-1 text-center font-bold text-black w-24">
                     Belum Berkembang
-                    <span className="block font-normal text-[7px] mt-0.5 leading-tight text-slate-700">Memerlukan bimbingan intensif untuk menunjukkan perilaku sesuai indikator.</span>
+                    <span className="block font-normal text-[7px] mt-0.5 leading-tight">Memerlukan bimbingan intensif untuk menunjukkan perilaku sesuai indikator.</span>
                   </th>
                 </tr>
               </thead>
@@ -1708,7 +1758,7 @@ export default function RaporCetak({
                       {i === 0 && (
                         <td 
                           rowSpan={3} 
-                          className="border border-black py-1 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[10.5px] leading-tight font-sans text-black"
+                          className="border border-black py-1 px-1.5 text-center font-bold bg-[#f9fafb] align-middle text-[10.5px] leading-tight font-sans text-black"
                         >
                           Cinta Tanah Air
                         </td>
@@ -1740,7 +1790,7 @@ export default function RaporCetak({
                       {i === 0 && (
                         <td 
                           rowSpan={3} 
-                          className="border border-black py-1 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[10.5px] leading-tight font-sans text-black"
+                          className="border border-black py-1 px-1.5 text-center font-bold bg-[#f9fafb] align-middle text-[10.5px] leading-tight font-sans text-black"
                         >
                           Disiplin
                         </td>
@@ -1772,7 +1822,7 @@ export default function RaporCetak({
                       {i === 0 && (
                         <td 
                           rowSpan={3} 
-                          className="border border-black py-1 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[10.5px] leading-tight font-sans text-black"
+                          className="border border-black py-1 px-1.5 text-center font-bold bg-[#f9fafb] align-middle text-[10.5px] leading-tight font-sans text-black"
                         >
                           Berbudi Luhur
                         </td>
@@ -1805,7 +1855,7 @@ export default function RaporCetak({
                   return (
                     <tr key={ind.id} className="hover:bg-slate-50/40">
                       <td 
-                        className="border border-black py-1 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[10.5px] leading-tight font-sans text-black"
+                        className="border border-black py-1 px-1.5 text-center font-bold bg-[#f9fafb] align-middle text-[10.5px] leading-tight font-sans text-black"
                       >
                         Cerdas
                       </td>
@@ -1838,14 +1888,14 @@ export default function RaporCetak({
         <div className="bg-white border border-slate-300 shadow-2xl p-[12mm_15mm] w-[210mm] min-h-[297mm] h-[297mm] max-h-[297mm] overflow-hidden box-border text-[11pt] text-black font-sans leading-relaxed flex flex-col justify-between">
           <div className="flex flex-col gap-4">
             {/* Table continuation on screen Page 2 */}
-            <table className="w-full table-fixed text-left text-[9pt] border border-black border-collapse font-sans leading-snug">
+            <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug">
               <colgroup>
-                <col style={{ width: '20%' }} />
-                <col style={{ width: '44%' }} />
-                <col style={{ width: '9%' }} />
-                <col style={{ width: '9%' }} />
-                <col style={{ width: '9%' }} />
-                <col style={{ width: '9%' }} />
+                <col style={{ width: '15%' }} />
+                <col style={{ width: '41%' }} />
+                <col style={{ width: '11%' }} />
+                <col style={{ width: '11%' }} />
+                <col style={{ width: '11%' }} />
+                <col style={{ width: '11%' }} />
               </colgroup>
               <tbody>
                 {/* Cerdas (2nd and 3rd indicators) */}
@@ -1860,7 +1910,7 @@ export default function RaporCetak({
                         {idx === 0 && (
                           <td 
                             rowSpan={2} 
-                            className="border border-black py-1 px-1.5 bg-neutral-50/50 align-middle"
+                            className="border border-black py-1 px-1.5 bg-[#f9fafb] align-middle"
                           ></td>
                         )}
                         <td className="border border-black py-1 px-2 text-black leading-tight font-sans font-medium text-[10.5px]">
@@ -1891,7 +1941,7 @@ export default function RaporCetak({
                       {i === 0 && (
                         <td 
                           rowSpan={3} 
-                          className="border border-black py-1 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[10.5px] leading-tight font-sans text-black"
+                          className="border border-black py-1 px-1.5 text-center font-bold bg-[#f9fafb] align-middle text-[10.5px] leading-tight font-sans text-black"
                         >
                           Terampil
                         </td>
@@ -1978,12 +2028,12 @@ export default function RaporCetak({
                         <div className="h-4"></div>
                       )}
                     </div>
-                    <div className="flex flex-col items-center w-full font-sans">
-                      <p id="tanda-tangan-wali-murid" className="font-bold text-black text-[10.5pt] text-center leading-tight select-none border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
-{EMPTY_SIGNATURE_PARENT}
-</p>
-                      <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none">Tanda Tangan & Nama Terang</p>
-                    </div>
+                    <div className="flex flex-col items-center w-full font-sans h-[1.2cm] justify-start">
+                                <p id="tanda-tangan-wali-murid" className="font-bold text-black text-[10.5pt] text-center leading-tight select-none border-b-[1px] border-black pb-0.5 inline-block min-w-[5.0cm] whitespace-nowrap">
+                                  {EMPTY_SIGNATURE_PARENT}
+                                </p>
+                                <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none whitespace-nowrap">Tanda Tangan & Nama Terang</p>
+                              </div>
                   </div>
 
                   {/* Kepala Sekolah (Middle, shifted down) */}
@@ -2001,18 +2051,18 @@ export default function RaporCetak({
                         <div className="h-4"></div>
                       )}
                     </div>
-                    <div className="flex flex-col items-center min-w-[160px]">
-                      <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
-{kopSekolah.namaKepalaSekolah || EMPTY_SIGNATURE}
-</p>
-                      {kopSekolah.nipKepalaSekolah ? (
-                        <p className="text-[8.5pt] text-slate-700 font-mono mt-1 select-all">
-                          NIP. {kopSekolah.nipKepalaSekolah}
-                        </p>
-                      ) : (
-                        <p className="text-[8pt] text-slate-500 font-sans mt-0.5 italic select-none">Tanda Tangan & Nama Terang</p>
-                      )}
-                    </div>
+                    <div className="flex flex-col items-center w-full font-sans h-[1.2cm] justify-start">
+                                <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.5cm] whitespace-nowrap">
+                                  {kopSekolah.namaKepalaSekolah || EMPTY_SIGNATURE}
+                                </p>
+                                {kopSekolah.nipKepalaSekolah ? (
+                                  <p className="text-[8.5pt] text-slate-700 font-mono mt-0.5 select-all whitespace-nowrap">
+                                    NIP. {kopSekolah.nipKepalaSekolah}
+                                  </p>
+                                ) : (
+                                  <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none whitespace-nowrap">Tanda Tangan & Nama Terang</p>
+                                )}
+                              </div>
                   </div>
 
                   {/* Guru Kelas */}
@@ -2030,18 +2080,18 @@ export default function RaporCetak({
                         <div className="h-4"></div>
                       )}
                     </div>
-                    <div className="flex flex-col items-center w-full font-sans">
-                      <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
-{waliKelasName || EMPTY_SIGNATURE}
-</p>
-                      {waliKelasNip ? (
-                        <p className="text-[8.5pt] text-slate-700 font-mono mt-1 select-all">
-                          NIP. {waliKelasNip}
-                        </p>
-                      ) : (
-                        <p className="text-[8pt] text-slate-500 font-sans mt-0.5 italic select-none">Tanda Tangan & Nama Terang</p>
-                      )}
-                    </div>
+                    <div className="flex flex-col items-center w-full font-sans h-[1.2cm] justify-start">
+                                <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.5cm] whitespace-nowrap">
+                                  {waliKelasName || EMPTY_SIGNATURE}
+                                </p>
+                                {waliKelasNip ? (
+                                  <p className="text-[8.5pt] text-slate-700 font-mono mt-0.5 select-all whitespace-nowrap">
+                                    NIP. {waliKelasNip}
+                                  </p>
+                                ) : (
+                                  <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none whitespace-nowrap">Tanda Tangan & Nama Terang</p>
+                                )}
+                              </div>
                   </div>
                 </div>
               ) : (
@@ -2061,12 +2111,12 @@ export default function RaporCetak({
                         <div className="h-4"></div>
                       )}
                     </div>
-                    <div className="flex flex-col items-center w-full font-sans">
-                      <p id="tanda-tangan-wali-murid" className="font-bold text-black text-[10.5pt] text-center leading-tight select-none border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
-{EMPTY_SIGNATURE_PARENT}
-</p>
-                      <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none">Tanda Tangan & Nama Terang</p>
-                    </div>
+                    <div className="flex flex-col items-center w-full font-sans h-[1.2cm] justify-start">
+                                <p id="tanda-tangan-wali-murid" className="font-bold text-black text-[10.5pt] text-center leading-tight select-none border-b-[1px] border-black pb-0.5 inline-block min-w-[5.0cm] whitespace-nowrap">
+                                  {EMPTY_SIGNATURE_PARENT}
+                                </p>
+                                <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none whitespace-nowrap">Tanda Tangan & Nama Terang</p>
+                              </div>
                   </div>
 
                   {/* Guru Kelas */}
@@ -2084,18 +2134,18 @@ export default function RaporCetak({
                         <div className="h-4"></div>
                       )}
                     </div>
-                    <div className="flex flex-col items-center w-full font-sans">
-                      <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
-{waliKelasName || EMPTY_SIGNATURE}
-</p>
-                      {waliKelasNip ? (
-                        <p className="text-[8.5pt] text-slate-700 font-mono mt-1 select-all">
-                          NIP. {waliKelasNip}
-                        </p>
-                      ) : (
-                        <p className="text-[8pt] text-slate-500 font-sans mt-0.5 italic select-none">Tanda Tangan & Nama Terang</p>
-                      )}
-                    </div>
+                    <div className="flex flex-col items-center w-full font-sans h-[1.2cm] justify-start">
+                                <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.5cm] whitespace-nowrap">
+                                  {waliKelasName || EMPTY_SIGNATURE}
+                                </p>
+                                {waliKelasNip ? (
+                                  <p className="text-[8.5pt] text-slate-700 font-mono mt-0.5 select-all whitespace-nowrap">
+                                    NIP. {waliKelasNip}
+                                  </p>
+                                ) : (
+                                  <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none whitespace-nowrap">Tanda Tangan & Nama Terang</p>
+                                )}
+                              </div>
                   </div>
                 </div>
               )}
@@ -2182,43 +2232,43 @@ export default function RaporCetak({
                     </div>
 
                     {/* Table */}
-                    <table className="w-full table-fixed text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
+                    <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
                       <colgroup>
-                        <col style={{ width: '20%' }} />
-                        <col style={{ width: '44%' }} />
-                        <col style={{ width: '9%' }} />
-                        <col style={{ width: '9%' }} />
-                        <col style={{ width: '9%' }} />
-                        <col style={{ width: '9%' }} />
+                        <col style={{ width: '15%' }} />
+                        <col style={{ width: '41%' }} />
+                        <col style={{ width: '11%' }} />
+                        <col style={{ width: '11%' }} />
+                        <col style={{ width: '11%' }} />
+                        <col style={{ width: '11%' }} />
                       </colgroup>
                       <thead>
-                        <tr style={{ backgroundColor: '#f1f5f9' }}>
-                          <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center text-[9.5pt] text-black">
+                        <tr className="bg-slate-100">
+                          <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center w-16 text-[9.5pt]">
                             5 Nilai Kartika
                           </th>
-                          <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center text-[9.5pt] text-black">
+                          <th rowSpan={2} colSpan={1} className="border border-black p-1.5 font-bold text-center text-[9.5pt]">
                             Indikator
                           </th>
-                          <th colSpan={4} className="border border-black p-1 text-center font-bold text-[9.5pt] text-black">
+                          <th colSpan={4} className="border border-black p-1 text-center font-bold text-[9.5pt]">
                             Hasil Penilaian
                           </th>
                         </tr>
-                        <tr style={{ backgroundColor: '#f8fafc' }} className="text-[8px] font-medium leading-tight text-black">
-                          <th className="border border-black p-1 text-center font-bold text-black">
+                        <tr className="bg-slate-50 text-[8px] font-medium leading-tight text-slate-600">
+                          <th className="border border-black p-1 text-center font-bold text-black w-24">
                             Berkembang Sangat Baik
-                            <span className="block font-normal text-[7px] mt-0.5 leading-tight text-slate-700">Konsisten menunjukkan perilaku sesuai indikator tanpa perlu diingatkan.</span>
+                            <span className="block font-normal text-[7px] mt-0.5 leading-tight">Konsisten menunjukkan perilaku sesuai indikator tanpa perlu diingatkan.</span>
                           </th>
-                          <th className="border border-black p-1 text-center font-bold text-black">
+                          <th className="border border-black p-1 text-center font-bold text-black w-24">
                             Berkembang
-                            <span className="block font-normal text-[7px] mt-0.5 leading-tight text-slate-700">Menunjukkan perilaku sesuai indikator dengan sedikit arahan.</span>
+                            <span className="block font-normal text-[7px] mt-0.5 leading-tight">Menunjukkan perilaku sesuai indikator dengan sedikit arahan.</span>
                           </th>
-                          <th className="border border-black p-1 text-center font-bold text-black">
+                          <th className="border border-black p-1 text-center font-bold text-black w-24">
                             Mulai Berkembang
-                            <span className="block font-normal text-[7px] mt-0.5 leading-tight text-slate-700">Perlu sering diingatkan untuk menunjukkan perilaku sesuai indikator.</span>
+                            <span className="block font-normal text-[7px] mt-0.5 leading-tight">Perlu sering diingatkan untuk menunjukkan perilaku sesuai indikator.</span>
                           </th>
-                          <th className="border border-black p-1 text-center font-bold text-black">
+                          <th className="border border-black p-1 text-center font-bold text-black w-24">
                             Belum Berkembang
-                            <span className="block font-normal text-[7px] mt-0.5 leading-tight text-slate-700">Memerlukan bimbingan intensif untuk menunjukkan perilaku sesuai indikator.</span>
+                            <span className="block font-normal text-[7px] mt-0.5 leading-tight">Memerlukan bimbingan intensif untuk menunjukkan perilaku sesuai indikator.</span>
                           </th>
                         </tr>
                       </thead>
@@ -2230,13 +2280,12 @@ export default function RaporCetak({
                             <tr key={ind.id}>
                               {i === 0 && (
                                 <td 
-                                  rowSpan={3} 
-                                  className="border border-black py-0.5 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[9.5px] leading-tight font-sans text-black"
+                                  rowSpan={3} className="border border-black py-0.5 px-1.5 text-center font-bold bg-[#f9fafb] align-middle text-[9.5px] leading-tight font-sans text-black" style={{ wordBreak: 'break-word' }}
                                 >
                                   Cinta Tanah Air
                                 </td>
                               )}
-                              <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px]">
+                              <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px]" style={{ wordBreak: 'break-word' }}>
                                 {ind.text}
                               </td>
                               <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-emerald-700">
@@ -2262,13 +2311,12 @@ export default function RaporCetak({
                             <tr key={ind.id}>
                               {i === 0 && (
                                 <td 
-                                  rowSpan={3} 
-                                  className="border border-black py-0.5 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[9.5px] leading-tight font-sans text-black"
+                                  rowSpan={3} className="border border-black py-0.5 px-1.5 text-center font-bold bg-[#f9fafb] align-middle text-[9.5px] leading-tight font-sans text-black" style={{ wordBreak: 'break-word' }}
                                 >
                                   Disiplin
                                 </td>
                               )}
-                              <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px]">
+                              <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px]" style={{ wordBreak: 'break-word' }}>
                                 {ind.text}
                               </td>
                               <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-emerald-700">
@@ -2294,13 +2342,12 @@ export default function RaporCetak({
                             <tr key={ind.id}>
                               {i === 0 && (
                                 <td 
-                                  rowSpan={3} 
-                                  className="border border-black py-0.5 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[9.5px] leading-tight font-sans text-black"
+                                  rowSpan={3} className="border border-black py-0.5 px-1.5 text-center font-bold bg-[#f9fafb] align-middle text-[9.5px] leading-tight font-sans text-black" style={{ wordBreak: 'break-word' }}
                                 >
                                   Berbudi Luhur
                                 </td>
                               )}
-                              <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px]">
+                              <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px]" style={{ wordBreak: 'break-word' }}>
                                 {ind.text}
                               </td>
                               <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-emerald-700">
@@ -2328,11 +2375,11 @@ export default function RaporCetak({
                           return (
                             <tr key={ind.id}>
                               <td 
-                                className="border border-black py-0.5 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[9.5px] leading-tight font-sans text-black"
+                                className="border border-black py-0.5 px-1.5 text-center font-bold bg-[#f9fafb] align-middle text-[9.5px] leading-tight font-sans text-black"
                               >
                                 Cerdas
                               </td>
-                              <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px]">
+                              <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px]" style={{ wordBreak: 'break-word' }}>
                                 {ind.text}
                               </td>
                               <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-emerald-700">
@@ -2365,14 +2412,14 @@ export default function RaporCetak({
                 <div className="print-page relative w-[210mm] h-[297mm] max-h-[297mm] overflow-visible p-[12mm_15mm] box-border text-[11pt] leading-relaxed flex flex-col justify-between">
                   <div className="flex flex-col h-full w-full justify-between gap-4">
                     {/* Table continuation on Page 2 */}
-                    <table className="w-full table-fixed text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
+                    <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
                       <colgroup>
-                        <col style={{ width: '20%' }} />
-                        <col style={{ width: '44%' }} />
-                        <col style={{ width: '9%' }} />
-                        <col style={{ width: '9%' }} />
-                        <col style={{ width: '9%' }} />
-                        <col style={{ width: '9%' }} />
+                        <col style={{ width: '15%' }} />
+                        <col style={{ width: '41%' }} />
+                        <col style={{ width: '11%' }} />
+                        <col style={{ width: '11%' }} />
+                        <col style={{ width: '11%' }} />
+                        <col style={{ width: '11%' }} />
                       </colgroup>
                       <tbody>
                         {/* Cerdas (2nd and 3rd indicators) */}
@@ -2386,11 +2433,10 @@ export default function RaporCetak({
                               <tr key={ind.id}>
                                 {idx === 0 && (
                                   <td 
-                                    rowSpan={2} 
-                                    className="border border-black py-0.5 px-1.5 bg-neutral-50/50 align-middle"
+                                    rowSpan={2} className="border border-black py-0.5 px-1.5 bg-[#f9fafb] align-middle" style={{ wordBreak: 'break-word' }}
                                   ></td>
                                 )}
-                                <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px]">
+                                <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px]" style={{ wordBreak: 'break-word' }}>
                                   {ind.text}
                                 </td>
                                 <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-emerald-700">
@@ -2417,13 +2463,12 @@ export default function RaporCetak({
                             <tr key={ind.id}>
                               {i === 0 && (
                                 <td 
-                                  rowSpan={3} 
-                                  className="border border-black py-0.5 px-1.5 text-center font-bold bg-neutral-50/50 align-middle text-[9.5px] leading-tight font-sans text-black"
+                                  rowSpan={3} className="border border-black py-0.5 px-1.5 text-center font-bold bg-[#f9fafb] align-middle text-[9.5px] leading-tight font-sans text-black" style={{ wordBreak: 'break-word' }}
                                 >
                                   Terampil
                                 </td>
                               )}
-                              <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px]">
+                              <td className="border border-black py-0.5 px-1.5 text-black leading-normal font-sans font-medium text-[9.5px]" style={{ wordBreak: 'break-word' }}>
                                 {ind.text}
                               </td>
                               <td className="border border-black text-center align-middle font-bold text-[11pt] p-0 text-emerald-700">
@@ -2505,12 +2550,12 @@ export default function RaporCetak({
                                 <div className="h-4"></div>
                               )}
                             </div>
-                            <div className="flex flex-col items-center w-full font-sans">
-                              <p id="tanda-tangan-wali-murid" className="font-bold text-black text-[10.5pt] text-center leading-tight select-none border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
-{EMPTY_SIGNATURE_PARENT}
-</p>
-                              <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none">Tanda Tangan & Nama Terang</p>
-                            </div>
+                            <div className="flex flex-col items-center w-full font-sans h-[1.2cm] justify-start">
+                                <p id="tanda-tangan-wali-murid" className="font-bold text-black text-[10.5pt] text-center leading-tight select-none border-b-[1px] border-black pb-0.5 inline-block min-w-[5.0cm] whitespace-nowrap">
+                                  {EMPTY_SIGNATURE_PARENT}
+                                </p>
+                                <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none whitespace-nowrap">Tanda Tangan & Nama Terang</p>
+                              </div>
                           </div>
 
                           {/* Kepala Sekolah (Middle, shifted down) */}
@@ -2528,18 +2573,18 @@ export default function RaporCetak({
                                 <div className="h-4"></div>
                               )}
                             </div>
-                            <div className="flex flex-col items-center min-w-[160px]">
-                              <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
-{kopSekolah.namaKepalaSekolah || EMPTY_SIGNATURE}
-</p>
-                              {kopSekolah.nipKepalaSekolah ? (
-                                <p className="text-[8.5pt] text-slate-700 font-mono mt-1 select-all">
-                                  NIP. {kopSekolah.nipKepalaSekolah}
+                            <div className="flex flex-col items-center w-full font-sans h-[1.2cm] justify-start">
+                                <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.5cm] whitespace-nowrap">
+                                  {kopSekolah.namaKepalaSekolah || EMPTY_SIGNATURE}
                                 </p>
-                              ) : (
-                                <p className="text-[8pt] text-slate-500 font-sans mt-0.5 italic select-none">Tanda Tangan & Nama Terang</p>
-                              )}
-                            </div>
+                                {kopSekolah.nipKepalaSekolah ? (
+                                  <p className="text-[8.5pt] text-slate-700 font-mono mt-0.5 select-all whitespace-nowrap">
+                                    NIP. {kopSekolah.nipKepalaSekolah}
+                                  </p>
+                                ) : (
+                                  <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none whitespace-nowrap">Tanda Tangan & Nama Terang</p>
+                                )}
+                              </div>
                           </div>
 
                           {/* Guru Kelas */}
@@ -2557,18 +2602,18 @@ export default function RaporCetak({
                                 <div className="h-4"></div>
                               )}
                             </div>
-                            <div className="flex flex-col items-center w-full font-sans">
-                              <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
-{waliKelasName || EMPTY_SIGNATURE}
-</p>
-                              {waliKelasNip ? (
-                                <p className="text-[8.5pt] text-slate-700 font-mono mt-1 select-all">
-                                  NIP. {waliKelasNip}
+                            <div className="flex flex-col items-center w-full font-sans h-[1.2cm] justify-start">
+                                <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.5cm] whitespace-nowrap">
+                                  {waliKelasName || EMPTY_SIGNATURE}
                                 </p>
-                              ) : (
-                                <p className="text-[8pt] text-slate-500 font-sans mt-0.5 italic select-none">Tanda Tangan & Nama Terang</p>
-                              )}
-                            </div>
+                                {waliKelasNip ? (
+                                  <p className="text-[8.5pt] text-slate-700 font-mono mt-0.5 select-all whitespace-nowrap">
+                                    NIP. {waliKelasNip}
+                                  </p>
+                                ) : (
+                                  <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none whitespace-nowrap">Tanda Tangan & Nama Terang</p>
+                                )}
+                              </div>
                           </div>
                         </div>
                       ) : (
@@ -2588,12 +2633,12 @@ export default function RaporCetak({
                                 <div className="h-4"></div>
                               )}
                             </div>
-                            <div className="flex flex-col items-center w-full font-sans">
-                              <p id="tanda-tangan-wali-murid" className="font-bold text-black text-[10.5pt] text-center leading-tight select-none border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
-{EMPTY_SIGNATURE_PARENT}
-</p>
-                              <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none">Tanda Tangan & Nama Terang</p>
-                            </div>
+                            <div className="flex flex-col items-center w-full font-sans h-[1.2cm] justify-start">
+                                <p id="tanda-tangan-wali-murid" className="font-bold text-black text-[10.5pt] text-center leading-tight select-none border-b-[1px] border-black pb-0.5 inline-block min-w-[5.0cm] whitespace-nowrap">
+                                  {EMPTY_SIGNATURE_PARENT}
+                                </p>
+                                <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none whitespace-nowrap">Tanda Tangan & Nama Terang</p>
+                              </div>
                           </div>
 
                           {/* Guru Kelas */}
@@ -2611,18 +2656,18 @@ export default function RaporCetak({
                                 <div className="h-4"></div>
                               )}
                             </div>
-                            <div className="flex flex-col items-center w-full font-sans">
-                              <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
-{waliKelasName || EMPTY_SIGNATURE}
-</p>
-                              {waliKelasNip ? (
-                                <p className="text-[8.5pt] text-slate-700 font-mono mt-1 select-all">
-                                  NIP. {waliKelasNip}
+                            <div className="flex flex-col items-center w-full font-sans h-[1.2cm] justify-start">
+                                <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.5cm] whitespace-nowrap">
+                                  {waliKelasName || EMPTY_SIGNATURE}
                                 </p>
-                              ) : (
-                                <p className="text-[8pt] text-slate-500 font-sans mt-0.5 italic select-none">Tanda Tangan & Nama Terang</p>
-                              )}
-                            </div>
+                                {waliKelasNip ? (
+                                  <p className="text-[8.5pt] text-slate-700 font-mono mt-0.5 select-all whitespace-nowrap">
+                                    NIP. {waliKelasNip}
+                                  </p>
+                                ) : (
+                                  <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none whitespace-nowrap">Tanda Tangan & Nama Terang</p>
+                                )}
+                              </div>
                           </div>
                         </div>
                       )}
@@ -2829,3 +2874,177 @@ function convertOklchCss(css: string): string {
   });
 }
 
+
+// Color safe proxy helpers
+let globalStyleOverridesCount = 0;
+let originalWindowGetComputedStyle = null;
+
+const colorCache = new Map();
+
+function toSafeRgb(val, fallback = 'transparent') {
+  if (!val || typeof val !== 'string') return val;
+  if (colorCache.has(val)) return colorCache.get(val);
+  
+  const trimmed = val.trim();
+  if (trimmed.includes('oklch')) {
+    const parsed = parseOklchColor(trimmed);
+    if (parsed) {
+      colorCache.set(val, parsed);
+      return parsed;
+    }
+  }
+  if (trimmed.includes('oklab')) {
+    const parsed = parseOklabColor(trimmed);
+    if (parsed) {
+      colorCache.set(val, parsed);
+      return parsed;
+    }
+  }
+  if (trimmed.includes('color-mix')) {
+    const nestedOklch = trimmed.match(/oklch\(([^)]+)\)/i);
+    if (nestedOklch) {
+      const parsed = parseOklchColor(nestedOklch[0]);
+      if (parsed) {
+        if (trimmed.includes('transparent') || trimmed.includes('rgba(0,0,0,0)')) {
+          const matchRgb = parsed.match(/\d+,\s*\d+,\s*\d+/);
+          if (matchRgb) {
+            const alphaVal = trimmed.includes('0.') ? trimmed.match(/0\.\d+/)?.[0] || '0.15' : '0.15';
+            const adjusted = "rgba(" + matchRgb[0] + ", " + alphaVal + ")";
+            colorCache.set(val, adjusted);
+            return adjusted;
+          }
+        }
+        colorCache.set(val, parsed);
+        return parsed;
+      }
+    }
+    const nestedOklab = trimmed.match(/oklab\(([^)]+)\)/i);
+    if (nestedOklab) {
+      const parsed = parseOklabColor(nestedOklab[0]);
+      if (parsed) {
+        colorCache.set(val, parsed);
+        return parsed;
+      }
+    }
+  }
+  
+  if (!trimmed.includes('oklch') && !trimmed.includes('oklab') && !trimmed.includes('color-mix')) {
+    return trimmed;
+  }
+  
+  if (trimmed.includes('0.4') || trimmed.includes('0.96')) return 'rgb(241, 245, 249)';
+  if (trimmed.includes('0.5') || trimmed.includes('0.98')) return 'rgb(248, 250, 252)';
+  return fallback;
+}
+
+function applyGlobalStyleOverrides() {
+  if (globalStyleOverridesCount === 0) {
+    originalWindowGetComputedStyle = window.getComputedStyle;
+    window.getComputedStyle = function(el, pseudo) {
+      let style;
+      try {
+        style = originalWindowGetComputedStyle.call(window, el, pseudo);
+      } catch (e) {
+        try {
+          style = originalWindowGetComputedStyle(el, pseudo);
+        } catch (e2) {
+          return {} as CSSStyleDeclaration;
+        }
+      }
+      return new Proxy(style, {
+        get(target, prop) {
+          let val;
+          try {
+            val = Reflect.get(target, prop);
+          } catch (e) {
+            return undefined;
+          }
+          if (prop === 'getPropertyValue') {
+            return function(key: string) {
+              try {
+                const v = target.getPropertyValue(key);
+                if (v && typeof v === 'string' && (v.includes('oklch') || v.includes('oklab') || v.includes('color-mix'))) {
+                  return toSafeRgb(v);
+                }
+                return v;
+              } catch (e) {
+                return '';
+              }
+            };
+          }
+          if (typeof val === 'function') {
+            return val.bind(target);
+          }
+          if (typeof val === 'string' && (val.includes('oklch') || val.includes('oklab') || val.includes('color-mix'))) {
+            return toSafeRgb(val);
+          }
+          return val;
+        }
+      });
+    };
+  }
+  globalStyleOverridesCount++;
+}
+
+function restoreGlobalStyleOverrides() {
+  globalStyleOverridesCount--;
+  if (globalStyleOverridesCount === 0 && originalWindowGetComputedStyle) {
+    window.getComputedStyle = originalWindowGetComputedStyle;
+    originalWindowGetComputedStyle = null;
+  }
+}
+
+function convertOklabCss(css) {
+  return css.replace(/oklab\(([^)]+)\)/gi, (_, contents) => {
+    try {
+      const parts = contents.trim().split(/[\s/]+/);
+      if (parts.length < 3) return 'rgb(240, 240, 240)';
+      
+      const lStr = parts[0];
+      const aStr = parts[1];
+      const bStr = parts[2];
+      const alphaStr = parts[3] || '1';
+      
+      const l = lStr.endsWith('%') ? parseFloat(lStr) / 100 : parseFloat(lStr);
+      const a = parseFloat(aStr);
+      const b = parseFloat(bStr);
+      
+      let alpha = 1;
+      if (alphaStr) {
+        alpha = alphaStr.endsWith('%') ? parseFloat(alphaStr) / 100 : parseFloat(alphaStr);
+      }
+      
+      if (isNaN(l) || isNaN(a) || isNaN(b)) return 'rgb(240, 240, 240)';
+      
+      const l_ = l + 0.3963377774 * a + 0.2158037573 * b;
+      const m_ = l - 0.1055613458 * a - 0.0638541728 * b;
+      const s_ = l - 0.0894841775 * a - 1.2914855480 * b;
+      
+      const l3 = l_ * l_ * l_;
+      const m3 = m_ * m_ * m_;
+      const s3 = s_ * s_ * s_;
+      
+      const x = 4.0767416621 * l3 - 3.3077115913 * m3 + 0.2309699292 * s3;
+      const y = -1.2684380046 * l3 + 2.6097574011 * m3 - 0.3413193965 * s3;
+      const z = -0.0041960863 * l3 - 0.7034186147 * m3 + 1.7076147010 * s3;
+      
+      const r = 3.2404542 * x - 1.5371385 * y - 0.4985314 * z;
+      const g = -0.9692660 * x + 1.8760108 * y + 0.0415560 * z;
+      const b_val = 0.0556434 * x - 0.2040259 * y + 1.0572252 * z;
+      
+      const gamma = (c_val) => {
+        return c_val <= 0.0031308 ? 12.92 * c_val : 1.055 * Math.pow(c_val, 1 / 2.4) - 0.055;
+      };
+      
+      const red = Math.round(Math.max(0, Math.min(1, gamma(r))) * 255);
+      const green = Math.round(Math.max(0, Math.min(1, gamma(g))) * 255);
+      const blue = Math.round(Math.max(0, Math.min(1, gamma(b_val))) * 255);
+      
+      return alpha === 1 
+        ? "rgb(" + red + ", " + green + ", " + blue + ")" 
+        : "rgba(" + red + ", " + green + ", " + blue + ", " + alpha + ")";
+    } catch (e) {
+      return 'rgb(240, 240, 240)';
+    }
+  });
+}

@@ -274,6 +274,11 @@ export function getVbaMacroInstructionsRows(): any[][] {
 }
 
 export function generateClassExcelBlob(students: Student[], className: string, waliKelasName: string, categories: Category[]): Blob {
+  // Validate that the students array is non-empty and well-structured
+  if (!students || !Array.isArray(students) || students.length === 0) {
+    throw new Error("Pengecekan gagal: Array siswa kosong atau tidak valid. Tidak dapat menghasilkan data blob Excel.");
+  }
+
   const rows: any[] = [];
   rows.push(['YAYASAN KARTIKA JAYA']);
   rows.push([`REKAPITULASI PENILAIAN 5NK KELAS ${className}`]);
@@ -307,20 +312,45 @@ export function generateClassExcelBlob(students: Student[], className: string, w
   const wsVba = XLSX.utils.aoa_to_sheet(vbaHeaders);
   XLSX.utils.book_append_sheet(workbook, wsVba, 'VBA_Macro_Instruksi');
   
+  // Write the workbook content to a binary buffer
   const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
-  return new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  
+  // Explicitly flush and close data structures to prevent memory leaks and empty downloads
+  rows.length = 0;
+  indicatorIds.length = 0;
+  indicatorHeaders.length = 0;
+  
+  const resultBlob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  
+  // Validate that the generated Blob has an actual non-zero size
+  if (!resultBlob || resultBlob.size === 0) {
+    throw new Error("Pengecekan gagal: Berkas Excel yang dihasilkan berukuran 0 byte. Gagal mengunduh.");
+  }
+  
+  return resultBlob;
 }
 
 export function exportClassToExcel(students: Student[], className: string, waliKelasName: string, categories: Category[]) {
-  const blob = generateClassExcelBlob(students, className, waliKelasName, categories);
-  const url = window.URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `Rekap_5NK_Kelas_${className}.xlsx`;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  window.URL.revokeObjectURL(url);
+  if (!students || !Array.isArray(students) || students.length === 0) {
+    alert("Peringatan: Tidak ada data siswa yang valid untuk diekspor ke Excel.");
+    return;
+  }
+  try {
+    const blob = generateClassExcelBlob(students, className, waliKelasName, categories);
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `Rekap_5NK_Kelas_${className}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    
+    // Explicit clean-up actions to release the URL resource
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+  } catch (error) {
+    console.error("Kesalahan ekspor Excel:", error);
+    alert(`Terjadi kesalahan saat mengekspor kelas ke Excel: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 export function exportClassToCsv(students: Student[], className: string, categories: Category[]) {

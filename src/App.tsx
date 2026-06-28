@@ -907,7 +907,8 @@ export default function App() {
   const activeWaliKelas = teachers.find(t => t.classAssigned === selectedClass) || {
     name: 'Tidak Terdefinisi',
     nip: '-',
-    role: 'Guru Kelas'
+    role: 'Guru Kelas',
+    signatureUrl: ''
   };
 
   const filteredStudents = students.filter(s => s.kelas === selectedClass);

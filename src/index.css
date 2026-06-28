@@ -365,3 +365,64 @@
   background-size: 5mm 5mm !important;
 }
 
+
+
+/* RIGID SIGNATURE AND TABLE STRUCTURE OVERRIDES */
+#tanda-tangan-wali-murid {
+  border-bottom: 1px solid black !important;
+  width: calc(100% - 1.5cm) !important;
+  display: inline-block !important;
+  height: 1px !important;
+  margin-top: 10px !important;
+}
+
+/* Indicator predicate header cell styles to prevent wrapping and ensure perfect layout */
+.indicator-predicate-header {
+  white-space: nowrap !important;
+  font-size: 6px !important;
+  letter-spacing: -0.05em !important;
+  line-height: 1.1 !important;
+  padding: 2px 1px !important;
+}
+
+.indicator-predicate-desc {
+  white-space: normal !important;
+  font-size: 5px !important;
+  line-height: 1.1 !important;
+  display: block !important;
+  margin-top: 2px !important;
+}
+
+#rapor-cetak-wrapper table,
+#rapor-pdf-content table,
+.print-page table {
+  table-layout: fixed !important;
+  width: 100% !important;
+}
+
+#rapor-cetak-wrapper table col:nth-child(1),
+#rapor-pdf-content table col:nth-child(1),
+.print-page table col:nth-child(1) {
+  width: 15% !important;
+}
+
+#rapor-cetak-wrapper table col:nth-child(2),
+#rapor-pdf-content table col:nth-child(2),
+.print-page table col:nth-child(2) {
+  width: 41% !important;
+}
+
+#rapor-cetak-wrapper table col:nth-child(3),
+#rapor-cetak-wrapper table col:nth-child(4),
+#rapor-cetak-wrapper table col:nth-child(5),
+#rapor-cetak-wrapper table col:nth-child(6),
+#rapor-pdf-content table col:nth-child(3),
+#rapor-pdf-content table col:nth-child(4),
+#rapor-pdf-content table col:nth-child(5),
+#rapor-pdf-content table col:nth-child(6),
+.print-page table col:nth-child(3),
+.print-page table col:nth-child(4),
+.print-page table col:nth-child(5),
+.print-page table col:nth-child(6) {
+  width: 11% !important;
+}
