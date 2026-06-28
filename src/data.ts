@@ -1,6 +1,6 @@
 import { Student, Teacher, Category, KopSekolah, CATEGORIES_DATA, ScoreKey } from './types';
 import { formatProperName } from './utils';
-export const kartikaLogoUrl = 'https://lh3.googleusercontent.com/d/1SD7iCTF6AZsj54LY0KckHkgIS93wtzq3';
+export const kartikaLogoUrl = 'https://lh3.googleusercontent.com/d/1S7UuyDpIDDTxOCqb1aOa1JNtmMQggUEC';
 
 // List of 33 actual Teachers matching our requirements
 export const TEACHERS_LIST: Teacher[] = [
@@ -678,7 +678,8 @@ export const DEFAULT_KOP: KopSekolah = {
   tahunAjaran: '2025 - 2026',
   logoUrl: kartikaLogoUrl,
   signatureTeacherUrl: '',
-  signatureParentUrl: ''
+  signatureParentUrl: '',
+  showPageNumbering: true
 };
 
 export function getSavedKopSekolah(): KopSekolah {

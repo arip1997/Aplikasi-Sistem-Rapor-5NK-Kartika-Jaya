@@ -65,6 +65,7 @@ import {
   Redo,
   MessageCircle,
   History,
+  Keyboard,
   DownloadCloud,
   Download
 } from 'lucide-react';
@@ -91,6 +92,7 @@ export default function App() {
     return 'edit';
   });
   const [alert, setAlert] = useState<{ type: 'success' | 'info' | 'error'; message: string } | null>(null);
+  const [toast, setToast] = useState<{ type: 'success' | 'info' | 'error'; message: string } | null>(null);
   const [isGuideOpen, setIsGuideOpen] = useState(false);
   const [isQuickHelpOpen, setIsQuickHelpOpen] = useState(false);
   const [showToast, setShowToast] = useState(true);
@@ -150,7 +152,7 @@ export default function App() {
   const [exportHistory, setExportHistory] = useState<{
     id: string;
     timestamp: string;
-    type: 'EXCEL' | 'PDF';
+    type: 'EXCEL' | 'PDF' | 'CSV';
     description: string;
     fileName: string;
     studentCount: number;
@@ -165,7 +167,7 @@ export default function App() {
 
   const [isExportHistoryOpen, setIsExportHistoryOpen] = useState(false);
 
-  const addExportLog = (type: 'EXCEL' | 'PDF', description: string, fileName: string, studentCount: number) => {
+  const addExportLog = (type: 'EXCEL' | 'PDF' | 'CSV', description: string, fileName: string, studentCount: number) => {
     const newLog = {
       id: Math.random().toString(36).substring(2, 9),
       timestamp: new Date().toISOString(),
@@ -741,9 +743,9 @@ export default function App() {
 
         if (currentUser) {
           triggerCloudAndFirebaseSync(students, teachers, categories, kopSekolah, classes);
-          triggerAlert('success', '✓ Menyinkronkan seluruh data ke Cloud & Firebase secara instan... (Ctrl+S)');
+          triggerToast('success', '✓ Menyinkronkan seluruh data ke Cloud & Firebase secara instan...');
         } else {
-          triggerAlert('success', '✓ Data sukses disimpan aman ke Memori Lokal! Masuk (Login) untuk sinkronisasi cloud otomatis. (Ctrl+S)');
+          triggerToast('success', '✓ Data sukses disimpan aman ke Memori Lokal!');
         }
       }
 
@@ -1185,6 +1187,13 @@ export default function App() {
     }, 4500);
   };
 
+  const triggerToast = (type: 'success' | 'info' | 'error', message: string) => {
+    setToast({ type, message });
+    setTimeout(() => {
+      setToast(null);
+    }, 3000);
+  };
+
   const totalCompletedCount = students.filter(s => s.completed).length;
   const totalPercentage = students.length > 0 ? Math.round((totalCompletedCount / students.length) * 100) : 0;
 
@@ -1313,6 +1322,52 @@ export default function App() {
             >
               <Info className="h-3.5 w-3.5" /> Panduan
             </button>
+
+            {/* Shortcut Legend Tooltip */}
+            <div className="relative group hidden md:block">
+              <button className="bg-emerald-800 hover:bg-emerald-700 border border-emerald-600/50 font-semibold px-3 py-2 rounded-lg text-emerald-100 hover:text-white flex items-center gap-1.5 transition-all text-xs cursor-help shadow-xs">
+                <Keyboard className="h-3.5 w-3.5" /> Shortcuts
+              </button>
+              <div className="absolute right-0 top-full mt-2 w-64 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-4 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
+                <div className="text-white font-bold text-sm mb-3 border-b border-slate-700 pb-2">Keyboard Shortcuts</div>
+                <div className="space-y-2 text-xs">
+                  <div className="flex justify-between items-center text-slate-300">
+                    <span>Simpan / Sinkron Data</span>
+                    <kbd className="px-1.5 py-0.5 bg-slate-800 text-slate-100 rounded border border-slate-600 font-mono text-[10px]">Ctrl+S</kbd>
+                  </div>
+                  <div className="flex justify-between items-center text-slate-300">
+                    <span>Print Preview</span>
+                    <kbd className="px-1.5 py-0.5 bg-slate-800 text-slate-100 rounded border border-slate-600 font-mono text-[10px]">Ctrl+P</kbd>
+                  </div>
+                  <div className="flex justify-between items-center text-slate-300">
+                    <span>Pencarian Cepat</span>
+                    <kbd className="px-1.5 py-0.5 bg-slate-800 text-slate-100 rounded border border-slate-600 font-mono text-[10px]">Ctrl+K</kbd>
+                  </div>
+                  <div className="flex justify-between items-center text-slate-300">
+                    <span>Undo / Redo</span>
+                    <kbd className="px-1.5 py-0.5 bg-slate-800 text-slate-100 rounded border border-slate-600 font-mono text-[10px]">Ctrl+Z/Y</kbd>
+                  </div>
+                  <div className="pt-2 mt-2 border-t border-slate-700/50">
+                    <div className="flex justify-between items-center text-slate-400">
+                      <span>Grid Cepat</span>
+                      <kbd className="px-1.5 py-0.5 bg-slate-800 text-slate-100 rounded border border-slate-600 font-mono text-[10px]">Alt+1</kbd>
+                    </div>
+                    <div className="flex justify-between items-center text-slate-400 mt-1.5">
+                      <span>Form Penilaian</span>
+                      <kbd className="px-1.5 py-0.5 bg-slate-800 text-slate-100 rounded border border-slate-600 font-mono text-[10px]">Alt+2</kbd>
+                    </div>
+                    <div className="flex justify-between items-center text-slate-400 mt-1.5">
+                      <span>Rekap Nilai</span>
+                      <kbd className="px-1.5 py-0.5 bg-slate-800 text-slate-100 rounded border border-slate-600 font-mono text-[10px]">Alt+3</kbd>
+                    </div>
+                    <div className="flex justify-between items-center text-slate-400 mt-1.5">
+                      <span>Kelola Database</span>
+                      <kbd className="px-1.5 py-0.5 bg-slate-800 text-slate-100 rounded border border-slate-600 font-mono text-[10px]">Alt+4</kbd>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
 
             <button
               onClick={handleResetToDefault}
@@ -1579,6 +1634,7 @@ export default function App() {
                 dirtyCells={dirtyCells}
                 aiModifiedStudentIds={aiModifiedStudentIds}
                 onBatchPrint={handleBatchPrint}
+                onAddExportLog={addExportLog}
               />
             </div>
 
@@ -1898,6 +1954,7 @@ export default function App() {
               waliKelasName={activeWaliKelas.name}
               initialBatchNisList={batchPrintNisList}
               waliKelasNip={activeWaliKelas.nip}
+              waliKelasSignatureUrl={activeWaliKelas.signatureUrl}
               onBack={() => {
                 const wasBatch = autoTriggerBatchPdf;
                 setAutoTriggerBatchPdf(false);
@@ -2399,6 +2456,16 @@ export default function App() {
           </div>
         </div>
       )}
+      {/* Custom Global Toast */}
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-[99999] bg-slate-900 border border-slate-700 text-white rounded-xl shadow-2xl p-4 flex items-center gap-3 animate-in slide-in-from-bottom-5 fade-in duration-300 no-print">
+          <div className={`p-1.5 rounded-full ${toast.type === 'success' ? 'bg-emerald-500/20 text-emerald-400' : toast.type === 'error' ? 'bg-rose-500/20 text-rose-400' : 'bg-blue-500/20 text-blue-400'}`}>
+            <CheckCircle className="h-5 w-5" />
+          </div>
+          <p className="text-sm font-semibold pr-4">{toast.message}</p>
+        </div>
+      )}
+
       {/* 1. Startup Notification Toast Slide-In (Sleek Compact Bubble Form) */}
       {showToast && (
         <div className="fixed bottom-20 left-4 right-4 sm:left-auto sm:right-6 z-[9999] max-w-xs mx-auto sm:mx-0 bg-slate-900/95 backdrop-blur-md border border-slate-800 text-white rounded-xl shadow-xl p-3 flex items-center justify-between gap-3 animate-in fade-in slide-in-from-bottom-2 duration-300 no-print">

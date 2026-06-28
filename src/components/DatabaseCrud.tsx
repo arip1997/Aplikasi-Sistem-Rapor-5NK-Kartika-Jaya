@@ -145,6 +145,7 @@ export default function DatabaseCrud({
   }, []);
   const [currentCatIdForInd, setCurrentCatIdForInd] = useState('');
   const [newIndText, setNewIndText] = useState('');
+  const [newIndId, setNewIndId] = useState('');
 
   const [selectedStudentIds, setSelectedStudentIds] = useState<Set<string>>(new Set());
 
@@ -356,7 +357,8 @@ export default function DatabaseCrud({
             name: formatProperName(newGuru.name!),
             nip: newGuru.nip ? newGuru.nip.trim() : '',
             role: newGuru.role!,
-            classAssigned: newGuru.classAssigned || undefined
+            classAssigned: newGuru.classAssigned || undefined,
+            signatureUrl: newGuru.signatureUrl
           };
         }
         return t;
@@ -371,7 +373,8 @@ export default function DatabaseCrud({
         name: formatProperName(newGuru.name!),
         nip: newGuru.nip ? newGuru.nip.trim() : '',
         role: newGuru.role!,
-        classAssigned: newGuru.classAssigned || undefined
+            classAssigned: newGuru.classAssigned || undefined,
+            signatureUrl: newGuru.signatureUrl
       };
       onUpdateTeachers([...teachers, fresh]);
       addChangeLog('TAMBAH_GURU', `Menambahkan guru baru "${newGuru.name}" (${newGuru.role})`);
@@ -400,6 +403,7 @@ export default function DatabaseCrud({
     setEditingIndicator(null);
     setCurrentCatIdForInd(catId);
     setNewIndText('');
+    setNewIndId(suggestedId);
     setEditingIndicator({
       catId,
       ind: { id: suggestedId, text: '' }
@@ -411,6 +415,7 @@ export default function DatabaseCrud({
     setEditingIndicator({ catId, ind });
     setCurrentCatIdForInd(catId);
     setNewIndText(ind.text);
+    setNewIndId(ind.id);
     setIsIndicatorFormOpen(true);
   };
 
@@ -424,16 +429,31 @@ export default function DatabaseCrud({
     if (!editingIndicator) return;
 
     const { catId, ind } = editingIndicator;
-    
+    const targetId = newIndId.trim().toUpperCase().replace(/\s+/g, '');
+
+    if (!targetId) {
+      alert('[VALIDASI ERROR] ID Indikator tidak boleh kosong!');
+      return;
+    }
+
     // Check if edits or adding new
     const isNew = !categories.flatMap(c => c.indicators).some(i => i.id === ind.id);
+
+    // 🛡️ Data Integrity: Validate that ID is not duplicate across ALL categories if it's a new indicator
+    if (isNew) {
+      const allExistingIds = categories.flatMap(c => c.indicators.map(i => i.id.toUpperCase()));
+      if (allExistingIds.includes(targetId)) {
+        alert(`[VALIDASI ERROR] ID Indikator "${targetId}" sudah digunakan!\nSilakan gunakan ID lain agar tidak duplikat.`);
+        return;
+      }
+    }
 
     const updatedCategories = categories.map(cat => {
       if (cat.id === catId) {
         if (isNew) {
           return {
             ...cat,
-            indicators: [...cat.indicators, { id: ind.id, text: newIndText }]
+            indicators: [...cat.indicators, { id: targetId, text: newIndText }]
           };
         } else {
           return {
@@ -449,7 +469,7 @@ export default function DatabaseCrud({
     addChangeLog(
       isNew ? 'TAMBAH_INDIKATOR' : 'EDIT_INDIKATOR', 
       isNew 
-        ? `Menambahkan indikator perilaku baru "${newIndText}" ke kategori ${catId}` 
+        ? `Menambahkan indikator perilaku baru "${newIndText}" dengan ID ${targetId} ke kategori ${catId}` 
         : `Mengubah indikator perilaku "${ind.id}" menjadi "${newIndText}"`
     );
     setIsIndicatorFormOpen(false);
@@ -1655,6 +1675,23 @@ export default function DatabaseCrud({
               </div>
             </div>
 
+            {/* Page Numbering Options */}
+            <div className="mt-4 p-4 bg-white border border-slate-200 rounded-xl flex items-center justify-between">
+              <div>
+                <h5 className="font-bold text-slate-700 text-xs">Penomoran Halaman Otomatis</h5>
+                <p className="text-[11px] text-slate-400 mt-0.5">Tampilkan nomor halaman otomatis (Page X of Y) di sudut bawah halaman rapor.</p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={editKop.showPageNumbering ?? true}
+                  onChange={(e) => setEditKop({ ...editKop, showPageNumbering: e.target.checked })}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+              </label>
+            </div>
+
             <div className="mt-6 p-4 bg-white border border-slate-200 rounded-xl">
               <h5 className="font-bold text-slate-700 text-xs mb-3">Penyesuaian Margin Cetak (mm)</h5>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -2204,6 +2241,43 @@ export default function DatabaseCrud({
                   className="bg-slate-50 border border-slate-200 rounded-lg p-2 font-semibold"
                 />
               </div>
+
+              <div className="flex flex-col gap-1 border-t border-slate-100 pt-3">
+                <label className="font-bold text-slate-500">Tanda Tangan Digital (Opsional)</label>
+                <div className="flex items-center gap-3">
+                  {newGuru.signatureUrl ? (
+                    <div className="relative">
+                      <img src={newGuru.signatureUrl} alt="Tanda Tangan Guru" className="w-16 h-12 object-contain bg-slate-50 rounded border border-slate-200" />
+                      <button
+                        type="button"
+                        onClick={() => setNewGuru({ ...newGuru, signatureUrl: undefined })}
+                        className="absolute -top-1.5 -right-1.5 bg-red-500 text-white rounded-full h-4 w-4 flex items-center justify-center shadow-md font-bold text-[10px]"
+                        title="Hapus"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="w-16 h-12 bg-slate-100 border border-dashed border-slate-300 rounded flex items-center justify-center text-slate-400 font-mono text-[8px] text-center">KOSONG</div>
+                  )}
+                  <input
+                    type="file"
+                    accept="image/png, image/jpeg, image/jpg"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        const reader = new FileReader();
+                        reader.onload = (ev) => {
+                          setNewGuru({ ...newGuru, signatureUrl: ev.target?.result as string });
+                        };
+                        reader.readAsDataURL(file);
+                      }
+                    }}
+                    className="text-[10px] w-full"
+                  />
+                </div>
+              </div>
+
             </div>
 
             <div className="flex justify-end gap-2 mt-4 pt-4 border-t border-slate-100">
@@ -2236,7 +2310,7 @@ export default function DatabaseCrud({
               <h3 className="font-bold text-slate-800 text-sm">
                 {categories.flatMap(c => c.indicators).some(i => i.id === editingIndicator.ind.id)
                   ? `Sunting Kalimat Indikator ${editingIndicator.ind.id}`
-                  : `Tambah Indikator Baru ${editingIndicator.ind.id}`}
+                  : 'Tambah Indikator Baru'}
               </h3>
               <p className="text-[11px] text-slate-400 mt-0.5">
                 Sesuaikan teks indikator untuk dicetak di rubrik Nilai Kartika
@@ -2249,6 +2323,28 @@ export default function DatabaseCrud({
                 <span className="font-bold text-slate-700 mt-1">
                   {categories.find(c => c.id === currentCatIdForInd)?.name}
                 </span>
+              </div>
+
+              {/* ID Indikator Input */}
+              <div className="flex flex-col gap-1.5">
+                <label className="font-bold text-slate-500">
+                  {categories.flatMap(c => c.indicators).some(i => i.id === editingIndicator.ind.id)
+                    ? 'ID Indikator (Tidak Dapat Diubah)'
+                    : 'ID Indikator (Harus Unik)'}
+                </label>
+                <input
+                  type="text"
+                  required
+                  disabled={categories.flatMap(c => c.indicators).some(i => i.id === editingIndicator.ind.id)}
+                  value={newIndId}
+                  onChange={(e) => setNewIndId(e.target.value.toUpperCase().replace(/\s+/g, ''))}
+                  placeholder="Contoh: CTA4"
+                  className={`border border-slate-200 rounded-lg p-2.5 font-mono text-xs uppercase focus:outline-none focus:ring-1 focus:ring-emerald-500 ${
+                    categories.flatMap(c => c.indicators).some(i => i.id === editingIndicator.ind.id)
+                      ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                      : 'bg-slate-50 text-slate-800'
+                  }`}
+                />
               </div>
 
               <div className="flex flex-col gap-1.5">

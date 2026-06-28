@@ -323,6 +323,55 @@ export function exportClassToExcel(students: Student[], className: string, waliK
   window.URL.revokeObjectURL(url);
 }
 
+export function exportClassToCsv(students: Student[], className: string, categories: Category[]) {
+  const indicatorIds: string[] = [];
+  categories.forEach(cat => {
+    cat.indicators.forEach(ind => {
+      indicatorIds.push(ind.id);
+    });
+  });
+
+  // Construct CSV Header
+  const headers = ['No', 'NIS', 'Nama Siswa', 'Kelas', 'L/P', ...indicatorIds, 'Kesimpulan', 'Catatan Wali'];
+  
+  // Helper to escape CSV values according to RFC 4180 rules
+  const escapeCsv = (val: any) => {
+    if (val === undefined || val === null) return '""';
+    const str = String(val).trim();
+    if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return `"${str}"`;
+  };
+
+  const csvRows = [headers.map(escapeCsv).join(',')];
+
+  students.forEach((student, index) => {
+    const row = [
+      index + 1,
+      student.nis,
+      student.name,
+      student.kelas,
+      student.gender,
+      ...indicatorIds.map(id => student.grades[id] || '-'),
+      student.kesimpulan || '',
+      student.catatanWali || ''
+    ];
+    csvRows.push(row.map(escapeCsv).join(','));
+  });
+
+  const csvContent = "\uFEFF" + csvRows.join('\r\n'); // Add BOM for Excel/third-party UTF-8 parsing and CR-LF for compatibility
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `Rekap_5NK_Kelas_${className}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.URL.revokeObjectURL(url);
+}
+
 // -------------------------------------------------------------
 // Excel Bulk Import Functions
 // -------------------------------------------------------------

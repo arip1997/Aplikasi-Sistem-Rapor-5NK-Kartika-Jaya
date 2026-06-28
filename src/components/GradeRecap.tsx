@@ -183,6 +183,21 @@ export default function GradeRecap({
                 if (!val || typeof val !== 'string') return val;
                 if (colorCache.has(val)) return colorCache.get(val)!;
                 
+                if (val.includes('oklch')) {
+                  const parsed = parseOklchColor(val);
+                  if (parsed) {
+                    colorCache.set(val, parsed);
+                    return parsed;
+                  }
+                }
+                if (val.includes('oklab')) {
+                  const parsed = parseOklabColor(val);
+                  if (parsed) {
+                    colorCache.set(val, parsed);
+                    return parsed;
+                  }
+                }
+                
                 if (!val.includes('oklch') && !val.includes('oklab') && !val.includes('color-mix')) {
                   return val;
                 }
@@ -1616,10 +1631,10 @@ export default function GradeRecap({
             {kopSekolah ? (
               <div className="flex items-center justify-between border-b-4 border-double border-slate-800 pb-3 mb-4">
                 <div className="flex items-center gap-4">
-                  {kopSekolah.logoUrl ? (
+                  {kopSekolah.logoUrl && kopSekolah.logoUrl.startsWith('data:') ? (
                     <img src={kopSekolah.logoUrl} className="h-14 w-14 object-contain" referrerPolicy="no-referrer" crossOrigin="anonymous" alt="Logo" />
                   ) : (
-                    <div className="h-14 w-14 rounded bg-slate-100 border border-slate-300 flex items-center justify-center font-bold text-[9px] text-slate-400">LOGO</div>
+                    <KartikaLogo size="h-14 w-14" />
                   )}
                   <div>
                     <h1 className="text-sm font-black uppercase text-slate-900 leading-tight tracking-wider">{kopSekolah.yayasan}</h1>
@@ -1772,4 +1787,141 @@ export default function GradeRecap({
       )}
     </div>
   );
+}
+
+// ==========================================
+// KARTIKA LOGO IMAGE COMPONENT
+// ==========================================
+function KartikaLogo({ size = "h-14 w-14" }: { size?: string }) {
+  return (
+    <img 
+      src="https://lh3.googleusercontent.com/d/1S7UuyDpIDDTxOCqb1aOa1JNtmMQggUEC" 
+      className={`${size} flex-none object-contain`} 
+      referrerPolicy="no-referrer" 
+      crossOrigin="anonymous" 
+      alt="Logo Sekolah" 
+    />
+  );
+}
+
+// ==========================================
+// MATHEMATICAL OKLCH TO sRGB CONVERSION
+// ==========================================
+function parseOklchColor(val: string): string | null {
+  if (!val || typeof val !== 'string') return null;
+  const match = val.match(/oklch\(([^)]+)\)/i);
+  if (!match) return null;
+  
+  const contents = match[1].trim();
+  const parts = contents.split(/[\s/]+/);
+  if (parts.length < 3) return null;
+  
+  const lStr = parts[0];
+  const cStr = parts[1];
+  const hStr = parts[2];
+  const aStr = parts[3] || '1';
+  
+  const l = lStr.endsWith('%') ? parseFloat(lStr) / 100 : parseFloat(lStr);
+  const c = cStr.endsWith('%') ? parseFloat(cStr) / 100 : parseFloat(cStr);
+  const h = parseFloat(hStr);
+  
+  let alpha = 1;
+  if (aStr) {
+    alpha = aStr.endsWith('%') ? parseFloat(aStr) / 100 : parseFloat(aStr);
+  }
+  
+  if (isNaN(l) || isNaN(c) || isNaN(h)) return null;
+  
+  return oklchToRgb(l, c, h, alpha);
+}
+
+function parseOklabColor(val: string): string | null {
+  if (!val || typeof val !== 'string') return null;
+  const match = val.match(/oklab\(([^)]+)\)/i);
+  if (!match) return null;
+  
+  const contents = match[1].trim();
+  const parts = contents.split(/[\s/]+/);
+  if (parts.length < 3) return null;
+  
+  const lStr = parts[0];
+  const aStr = parts[1];
+  const bStr = parts[2];
+  const alphaStr = parts[3] || '1';
+  
+  const l = lStr.endsWith('%') ? parseFloat(lStr) / 100 : parseFloat(lStr);
+  const a = parseFloat(aStr);
+  const b = parseFloat(bStr);
+  
+  let alpha = 1;
+  if (alphaStr) {
+    alpha = alphaStr.endsWith('%') ? parseFloat(alphaStr) / 100 : parseFloat(alphaStr);
+  }
+  if (isNaN(l) || isNaN(a) || isNaN(b)) return null;
+  
+  return oklabToRgb(l, a, b, alpha);
+}
+
+function oklabToRgb(l: number, a: number, b: number, alpha: number = 1): string {
+  const l_ = l + 0.3963377774 * a + 0.2158037573 * b;
+  const m_ = l - 0.1055613458 * a - 0.0638541728 * b;
+  const s_ = l - 0.0894841775 * a - 1.2914855480 * b;
+  
+  const l3 = l_ * l_ * l_;
+  const m3 = m_ * m_ * m_;
+  const s3 = s_ * s_ * s_;
+  
+  const x = 4.0767416621 * l3 - 3.3077115913 * m3 + 0.2309699292 * s3;
+  const y = -1.2684380046 * l3 + 2.6097574011 * m3 - 0.3413193965 * s3;
+  const z = -0.0041960863 * l3 - 0.7034186147 * m3 + 1.7076147010 * s3;
+  
+  const r = 3.2404542 * x - 1.5371385 * y - 0.4985314 * z;
+  const g = -0.9692660 * x + 1.8760108 * y + 0.0415560 * z;
+  const b_val = 0.0556434 * x - 0.2040259 * y + 1.0572252 * z;
+  
+  const gamma = (c_val: number): number => {
+    return c_val <= 0.0031308 ? 12.92 * c_val : 1.055 * Math.pow(c_val, 1 / 2.4) - 0.055;
+  };
+  
+  const red = Math.round(Math.max(0, Math.min(1, gamma(r))) * 255);
+  const green = Math.round(Math.max(0, Math.min(1, gamma(g))) * 255);
+  const blue = Math.round(Math.max(0, Math.min(1, gamma(b_val))) * 255);
+  
+  return alpha === 1 
+    ? `rgb(${red}, ${green}, ${blue})` 
+    : `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+function oklchToRgb(l: number, c: number, h: number, alpha: number = 1): string {
+  const hRad = (h * Math.PI) / 180;
+  const a = c * Math.cos(hRad);
+  const b = c * Math.sin(hRad);
+  
+  const l_ = l + 0.3963377774 * a + 0.2158037573 * b;
+  const m_ = l - 0.1055613458 * a - 0.0638541728 * b;
+  const s_ = l - 0.0894841775 * a - 1.2914855480 * b;
+  
+  const l3 = l_ * l_ * l_;
+  const m3 = m_ * m_ * m_;
+  const s3 = s_ * s_ * s_;
+  
+  const x = 4.0767416621 * l3 - 3.3077115913 * m3 + 0.2309699292 * s3;
+  const y = -1.2684380046 * l3 + 2.6097574011 * m3 - 0.3413193965 * s3;
+  const z = -0.0041960863 * l3 - 0.7034186147 * m3 + 1.7076147010 * s3;
+  
+  const r = 3.2404542 * x - 1.5371385 * y - 0.4985314 * z;
+  const g = -0.9692660 * x + 1.8760108 * y + 0.0415560 * z;
+  const b_val = 0.0556434 * x - 0.2040259 * y + 1.0572252 * z;
+  
+  const gamma = (c_val: number): number => {
+    return c_val <= 0.0031308 ? 12.92 * c_val : 1.055 * Math.pow(c_val, 1 / 2.4) - 0.055;
+  };
+  
+  const red = Math.round(Math.max(0, Math.min(1, gamma(r))) * 255);
+  const green = Math.round(Math.max(0, Math.min(1, gamma(g))) * 255);
+  const blue = Math.round(Math.max(0, Math.min(1, gamma(b_val))) * 255);
+  
+  return alpha === 1 
+    ? `rgb(${red}, ${green}, ${blue})` 
+    : `rgba(${red}, ${green}, ${blue}, ${alpha})`;
 }

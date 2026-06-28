@@ -8,7 +8,7 @@ export const HighlightText = ({ text, query, className }: { text: string; query:
     <span className={className}>
       {parts.map((part, index) => 
         part.toLowerCase() === query.toLowerCase() ? (
-          <mark key={index} className="bg-yellow-200 text-slate-900 font-bold">{part}</mark>
+          <mark key={index} className="bg-indigo-200 text-indigo-950 font-bold px-[2px] rounded-sm">{part}</mark>
         ) : (
           part
         )

@@ -62,9 +62,8 @@
   box-shadow: none !important;
   border: none !important;
   position: relative !important;
-  display: flex !important;
-  flex-direction: column !important;
-  justify-content: space-between !important;
+  display: grid !important;
+  grid-template-rows: auto 1fr auto !important;
   align-items: stretch !important;
   page-break-after: always !important;
   break-after: page !important;
@@ -114,6 +113,26 @@
   margin: 0 0 1.5mm 0 !important;
   page-break-inside: avoid !important;
   break-inside: avoid !important;
+}
+
+/* Ensure checkmarks in RaporCetak tables are pure black under all previews and PDF exports */
+#rapor-cetak-wrapper table td.text-emerald-700,
+#rapor-cetak-wrapper table td.text-blue-700,
+#rapor-cetak-wrapper table td.text-amber-700,
+#rapor-cetak-wrapper table td.text-rose-700,
+#rapor-pdf-content table td.text-emerald-700,
+#rapor-pdf-content table td.text-blue-700,
+#rapor-pdf-content table td.text-amber-700,
+#rapor-pdf-content table td.text-rose-700,
+.simulate-print table td.text-emerald-700,
+.simulate-print table td.text-blue-700,
+.simulate-print table td.text-amber-700,
+.simulate-print table td.text-rose-700,
+.print-page table td.text-emerald-700,
+.print-page table td.text-blue-700,
+.print-page table td.text-amber-700,
+.print-page table td.text-rose-700 {
+  color: #000000 !important;
 }
 
 .print-page th,
@@ -183,9 +202,8 @@
     break-inside: avoid !important;
     page-break-after: always !important;
     break-after: page !important;
-    display: flex !important;
-    flex-direction: column !important;
-    justify-content: space-between !important;
+    display: grid !important;
+    grid-template-rows: auto 1fr auto !important;
     align-items: stretch !important;
     box-sizing: border-box !important;
     overflow: hidden !important;
@@ -305,9 +323,8 @@
   box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1) !important;
   border: 1.5px solid #94a3b8 !important;
   border-radius: 4px !important;
-  display: flex !important;
-  flex-direction: column !important;
-  justify-content: space-between !important;
+  display: grid !important;
+  grid-template-rows: 1fr auto !important;
   align-items: stretch !important;
   overflow: hidden !important;
   position: relative !important;

@@ -15,6 +15,7 @@ export interface KopSekolah {
   signatureWaliKelasUrl?: string;
   namaKepalaSekolah?: string;
   nipKepalaSekolah?: string;
+  showPageNumbering?: boolean;
 }
 
 export interface ScoreOption {
@@ -40,6 +41,7 @@ export interface Teacher {
   role: string;
   classAssigned?: string;
   nip?: string;
+  signatureUrl?: string;
 }
 
 export interface Student {

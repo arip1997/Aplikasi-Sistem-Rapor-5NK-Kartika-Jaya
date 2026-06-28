@@ -8,6 +8,9 @@ import html2pdf from 'html2pdf.js';
 import { uploadFileToDrive } from '../lib/drive.ts';
 import { googleSignIn, getAccessToken, initAuth } from '../firebase.ts';
 
+const EMPTY_SIGNATURE = "\u00A0".repeat(28);
+const EMPTY_SIGNATURE_PARENT = "\u00A0".repeat(45);
+
 interface RaporCetakProps {
   student: Student;
   allClassStudents?: Student[];
@@ -15,6 +18,7 @@ interface RaporCetakProps {
   kopSekolah: KopSekolah;
   waliKelasName: string;
   waliKelasNip?: string;
+  waliKelasSignatureUrl?: string;
   onBack: () => void;
   onDownloadExcel: () => void;
   initialBatchNisList?: string[];
@@ -33,6 +37,7 @@ export default function RaporCetak({
   kopSekolah,
   waliKelasName,
   waliKelasNip,
+  waliKelasSignatureUrl,
   onBack,
   onDownloadExcel,
   initialBatchNisList = [],
@@ -183,10 +188,11 @@ export default function RaporCetak({
       margin:       0,
       filename:     `Rapor_5NK_${targetStudent.name.replace(/\s+/g, '_')}_${targetStudent.nis}.pdf`,
       image:        { type: 'jpeg', quality: 0.95 },
+      pagebreak:    { mode: ['css', 'legacy'], avoid: ['.avoid-break'] },
       html2canvas:  { 
-        scale: 1.5, 
+        scale: 2.2, 
         useCORS: true, 
-        imageTimeout: 15000,
+        imageTimeout: 10000,
         letterRendering: true, 
         logging: false,
         scrollX: 0,
@@ -216,36 +222,35 @@ export default function RaporCetak({
             clonedTarget.style.opacity = '1';
             
             const colorCache = new Map<string, string>();
-            let ctx: CanvasRenderingContext2D | null = null;
             
             const toSafeRgb = (val: string, fallback: string = 'transparent') => {
               if (!val || typeof val !== 'string') return val;
               if (colorCache.has(val)) return colorCache.get(val)!;
               
-              if (val.includes('oklch')) {
-                const parsed = parseOklchColor(val);
+              const trimmed = val.trim();
+              if (trimmed.includes('oklch')) {
+                const parsed = parseOklchColor(trimmed);
                 if (parsed) {
                   colorCache.set(val, parsed);
                   return parsed;
                 }
               }
-              if (val.includes('oklab')) {
-                const parsed = parseOklabColor(val);
+              if (trimmed.includes('oklab')) {
+                const parsed = parseOklabColor(trimmed);
                 if (parsed) {
                   colorCache.set(val, parsed);
                   return parsed;
                 }
               }
-              if (val.includes('color-mix')) {
-                const nestedOklch = val.match(/oklch\(([^)]+)\)/i);
+              if (trimmed.includes('color-mix')) {
+                const nestedOklch = trimmed.match(/oklch\(([^)]+)\)/i);
                 if (nestedOklch) {
                   const parsed = parseOklchColor(nestedOklch[0]);
                   if (parsed) {
-                    if (val.includes('transparent') || val.includes('rgba(0,0,0,0)')) {
-                      // fallback clean replacement
+                    if (trimmed.includes('transparent') || trimmed.includes('rgba(0,0,0,0)')) {
                       const matchRgb = parsed.match(/\d+,\s*\d+,\s*\d+/);
                       if (matchRgb) {
-                        const alphaVal = val.includes('0.') ? val.match(/0\.\d+/)?.[0] || '0.15' : '0.15';
+                        const alphaVal = trimmed.includes('0.') ? trimmed.match(/0\.\d+/)?.[0] || '0.15' : '0.15';
                         const adjusted = `rgba(${matchRgb[0]}, ${alphaVal})`;
                         colorCache.set(val, adjusted);
                         return adjusted;
@@ -255,7 +260,7 @@ export default function RaporCetak({
                     return parsed;
                   }
                 }
-                const nestedOklab = val.match(/oklab\(([^)]+)\)/i);
+                const nestedOklab = trimmed.match(/oklab\(([^)]+)\)/i);
                 if (nestedOklab) {
                   const parsed = parseOklabColor(nestedOklab[0]);
                   if (parsed) {
@@ -265,37 +270,12 @@ export default function RaporCetak({
                 }
               }
               
-              // Only run canvas parsing of colors if they are not already parsed and contain oklch/oklab
-              if (!val.includes('oklch') && !val.includes('oklab') && !val.includes('color-mix')) {
-                return val;
+              if (!trimmed.includes('oklch') && !trimmed.includes('oklab') && !trimmed.includes('color-mix')) {
+                return trimmed;
               }
               
-              try {
-                if (!ctx) {
-                  const canvas = document.createElement('canvas');
-                  canvas.width = 1;
-                  canvas.height = 1;
-                  ctx = canvas.getContext('2d', { willReadFrequently: true });
-                }
-                
-                if (ctx) {
-                  ctx.clearRect(0, 0, 1, 1);
-                  ctx.fillStyle = val;
-                  ctx.fillRect(0, 0, 1, 1);
-                  const data = ctx.getImageData(0, 0, 1, 1).data;
-                  if (data[3] === 0) {
-                    colorCache.set(val, 'transparent');
-                    return 'transparent';
-                  }
-                  
-                  const rgbStr = `rgba(${data[0]}, ${data[1]}, ${data[2]}, ${data[3] / 255})`;
-                  colorCache.set(val, rgbStr);
-                  return rgbStr;
-                }
-              } catch (e) {}
-              
-              if (val.includes('0.4') || val.includes('0.96')) return 'rgb(241, 245, 249)';
-              if (val.includes('0.5') || val.includes('0.98')) return 'rgb(248, 250, 252)';
+              if (trimmed.includes('0.4') || trimmed.includes('0.96')) return 'rgb(241, 245, 249)';
+              if (trimmed.includes('0.5') || trimmed.includes('0.98')) return 'rgb(248, 250, 252)';
               return fallback;
             };
 
@@ -462,6 +442,42 @@ export default function RaporCetak({
     return passedAll;
   };
 
+  const generatePdfWithTimeout = (html2pdfFn: any, element: HTMLElement, opt: any, timeoutMs = 60000): Promise<Blob> => {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`Timeout: Pembuatan PDF melebihi ${timeoutMs / 1000} detik. Gambar atau font eksternal mungkin lambat dimuat.`));
+      }, timeoutMs);
+
+      html2pdfFn().set(opt).from(element).output('blob')
+        .then((blob: Blob) => {
+          clearTimeout(timer);
+          resolve(blob);
+        })
+        .catch((err: any) => {
+          clearTimeout(timer);
+          reject(err);
+        });
+    });
+  };
+
+  const savePdfWithTimeout = (html2pdfFn: any, element: HTMLElement, opt: any, timeoutMs = 60000): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`Timeout: Unduh PDF melebihi ${timeoutMs / 1000} detik.`));
+      }, timeoutMs);
+
+      html2pdfFn().set(opt).from(element).save()
+        .then(() => {
+          clearTimeout(timer);
+          resolve();
+        })
+        .catch((err: any) => {
+          clearTimeout(timer);
+          reject(err);
+        });
+    });
+  };
+
   const handleDownloadPDF = async () => {
     const html2pdfFn = typeof html2pdf === 'function' ? html2pdf : (html2pdf as any).default;
     if (!html2pdfFn) {
@@ -472,10 +488,9 @@ export default function RaporCetak({
     setIsGeneratingPdf(true);
 
     try {
-      // Force a complete clean re-render of student data and flush updates synchronously
-      flushSync(() => {
-        setRenderTrigger(prev => prev + 1);
-      });
+      setRenderTrigger(prev => prev + 1);
+      // Wait for React to process state and paint
+      await new Promise(resolve => setTimeout(resolve, 350));
 
       const originalElement = document.getElementById('rapor-pdf-content');
       if (!originalElement) {
@@ -494,8 +509,6 @@ export default function RaporCetak({
       try {
         // Force immediate layout reflow
         void originalElement.offsetHeight;
-        
-        // Let the browser paint
         await new Promise(resolve => setTimeout(resolve, 150));
 
         // Run live dry-run DOM verification check with deep audits
@@ -517,7 +530,7 @@ export default function RaporCetak({
         };
 
         console.log(`[PDF Generator] Starting html2pdf with filename: "${filename}"`);
-        await html2pdfFn().set(opt).from(originalElement).save();
+        await savePdfWithTimeout(html2pdfFn, originalElement, opt, 60000);
         console.log("[PDF Generator] File generated and download triggered successfully.");
       } finally {
         // Clean up data-layout-id
@@ -570,59 +583,62 @@ export default function RaporCetak({
       console.log(`[Drive Engine] Starting generation of ${selectedStudents.length} student documents.`);
 
       for (const curStudent of selectedStudents) {
-        flushSync(() => {
+        try {
           setBatchStudent(curStudent);
           setRenderTrigger(prev => prev + 1);
-        });
 
-        await new Promise(resolve => setTimeout(resolve, 150));
+          // Give a solid delay to ensure complete React state hydration and layout paint
+          await new Promise(resolve => setTimeout(resolve, 400));
 
-        const originalElement = document.getElementById('rapor-pdf-content');
-        if (!originalElement) {
-          continue;
-        }
-
-        // Tag original elements with data-layout-id for reliable onclone mapping
-        let idCounter = 1;
-        originalElement.setAttribute('data-layout-id', String(idCounter++));
-        const origDescendants = originalElement.querySelectorAll('*');
-        origDescendants.forEach(el => {
-          el.setAttribute('data-layout-id', String(idCounter++));
-        });
-
-        try {
-          void originalElement.offsetHeight;
-          await new Promise(resolve => setTimeout(resolve, 100));
-
-          runDryRunAuditAndVerifyDom(1);
-
-          const baseOpt = getHtml2PdfOpt(curStudent, originalElement);
-          let filename = `Rapor_5NK_${curStudent.name.replace(/\s+/g, '_')}_${curStudent.nis}.pdf`;
-          
-          const opt = {
-            ...baseOpt,
-            filename
-          };
-
-          const pdfBlob = await html2pdfFn().set(opt).from(originalElement).output('blob');
-          
-          if (pdfBlob && pdfBlob.size > 0) {
-            await uploadFileToDrive(token, pdfBlob, filename);
-            uploadedCount++;
+          const originalElement = document.getElementById('rapor-pdf-content');
+          if (!originalElement) {
+            console.error(`[Drive Engine Error] #rapor-pdf-content element is missing for ${curStudent.name}.`);
+            continue;
           }
-        } finally {
-          // Clean up data-layout-id
-          originalElement.removeAttribute('data-layout-id');
+
+          // Tag original elements with data-layout-id for reliable onclone mapping
+          let idCounter = 1;
+          originalElement.setAttribute('data-layout-id', String(idCounter++));
+          const origDescendants = originalElement.querySelectorAll('*');
           origDescendants.forEach(el => {
-            el.removeAttribute('data-layout-id');
+            el.setAttribute('data-layout-id', String(idCounter++));
           });
+
+          try {
+            void originalElement.offsetHeight;
+            await new Promise(resolve => setTimeout(resolve, 150));
+
+            runDryRunAuditAndVerifyDom(1);
+
+            const baseOpt = getHtml2PdfOpt(curStudent, originalElement);
+            let filename = `Rapor_5NK_${curStudent.name.replace(/\s+/g, '_')}_${curStudent.nis}.pdf`;
+            
+            const opt = {
+              ...baseOpt,
+              filename
+            };
+
+            const pdfBlob = await generatePdfWithTimeout(html2pdfFn, originalElement, opt, 60000);
+            
+            if (pdfBlob && pdfBlob.size > 0) {
+              await uploadFileToDrive(token, pdfBlob, filename);
+              uploadedCount++;
+            } else {
+              console.error(`[Drive Engine Error] Generated blob for "${curStudent.name}" is empty or failed!`);
+            }
+          } finally {
+            // Clean up data-layout-id
+            originalElement.removeAttribute('data-layout-id');
+            origDescendants.forEach(el => {
+              el.removeAttribute('data-layout-id');
+            });
+          }
+        } catch (studentErr) {
+          console.error(`[Drive Engine Failure Skipped] Gagal memproses siswa "${curStudent.name}":`, studentErr);
         }
       }
 
-      flushSync(() => {
-        setBatchStudent(null);
-      });
-
+      setBatchStudent(null);
       alert(`Berhasil menyimpan ${uploadedCount} dokumen ke Google Drive Anda.`);
     } catch (err) {
       console.error("Kesalahan Simpan ke Drive:", err);
@@ -653,69 +669,68 @@ export default function RaporCetak({
       console.log(`[Batch PDF Engine] Starting generation of ${selectedStudents.length} student documents.`);
 
       for (const curStudent of selectedStudents) {
-        console.log(`[Batch PDF Engine] Processing student: "${curStudent.name}" (${curStudent.nis})`);
-        
-        flushSync(() => {
+        try {
+          console.log(`[Batch PDF Engine] Processing student: "${curStudent.name}" (${curStudent.nis})`);
+          
           setBatchStudent(curStudent);
           setRenderTrigger(prev => prev + 1);
-        });
 
-        // Ensure React finishes rendering and DOM hydrates
-        await new Promise(resolve => setTimeout(resolve, 150));
+          // Give a solid delay to ensure complete React state hydration and layout paint
+          await new Promise(resolve => setTimeout(resolve, 1000));
 
-        const originalElement = document.getElementById('rapor-pdf-content');
-        if (!originalElement) {
-          console.error("[Cetak Semua Error] #rapor-pdf-content element is missing.");
-          continue;
-        }
-
-        // Tag original elements with data-layout-id for reliable onclone mapping
-        let idCounter = 1;
-        originalElement.setAttribute('data-layout-id', String(idCounter++));
-        const origDescendants = originalElement.querySelectorAll('*');
-        origDescendants.forEach(el => {
-          el.setAttribute('data-layout-id', String(idCounter++));
-        });
-
-        try {
-          // Force synchronous layout reflow
-          void originalElement.offsetHeight;
-          
-          // Allow the browser to calculate complete styles
-          await new Promise(resolve => setTimeout(resolve, 100));
-
-          // Run live dry-run DOM verification check for 1 expected student group in batch focus mode
-          const dryRunPassed = runDryRunAuditAndVerifyDom(1);
-          if (!dryRunPassed) {
-            console.warn(`[Batch Dry-Run Warning] Student "${curStudent.name}" failed complete pristine DOM audit verification.`);
+          const originalElement = document.getElementById('rapor-pdf-content');
+          if (!originalElement) {
+            console.error(`[Batch PDF Error] #rapor-pdf-content element is missing for ${curStudent.name}.`);
+            continue;
           }
 
-          const opt = getHtml2PdfOpt(curStudent, originalElement);
-          
-          // Generate Blob directly from the fully stable element
-          console.log(` - Generating html2pdf blob for ${curStudent.name}...`);
-          const pdfBlob = await html2pdfFn().set(opt).from(originalElement).output('blob');
-          
-          if (pdfBlob && pdfBlob.size > 0) {
-            console.log(` ✅ Blob generated successfully: ${pdfBlob.size} bytes. MIME: ${pdfBlob.type}`);
-            folder.file(opt.filename, pdfBlob);
-          } else {
-            console.error(` ❌ ERROR: Generated blob for "${curStudent.name}" is empty or failed!`);
-            throw new Error(`Empty blob generated for student: ${curStudent.name}`);
-          }
-        } finally {
-          // Clean up data-layout-id
-          originalElement.removeAttribute('data-layout-id');
+          // Tag original elements with data-layout-id for reliable onclone mapping
+          let idCounter = 1;
+          originalElement.setAttribute('data-layout-id', String(idCounter++));
+          const origDescendants = originalElement.querySelectorAll('*');
           origDescendants.forEach(el => {
-            el.removeAttribute('data-layout-id');
+            el.setAttribute('data-layout-id', String(idCounter++));
           });
+
+          try {
+            // Force synchronous layout reflow
+            void originalElement.offsetHeight;
+            
+            // Allow the browser to calculate complete styles
+            await new Promise(resolve => setTimeout(resolve, 150));
+
+            // Run live dry-run DOM verification check for 1 expected student group in batch focus mode
+            const dryRunPassed = runDryRunAuditAndVerifyDom(1);
+            if (!dryRunPassed) {
+              console.warn(`[Batch Dry-Run Warning] Student "${curStudent.name}" failed complete pristine DOM audit verification.`);
+            }
+
+            const opt = getHtml2PdfOpt(curStudent, originalElement);
+            
+            // Generate Blob directly from the fully stable element
+            console.log(` - Generating html2pdf blob for ${curStudent.name}...`);
+            const pdfBlob = await generatePdfWithTimeout(html2pdfFn, originalElement, opt, 60000);
+            
+            if (pdfBlob && pdfBlob.size > 0) {
+              console.log(` ✅ Blob generated successfully: ${pdfBlob.size} bytes. MIME: ${pdfBlob.type}`);
+              folder.file(opt.filename, pdfBlob);
+            } else {
+              console.error(` ❌ ERROR: Generated blob for "${curStudent.name}" is empty or failed!`);
+            }
+          } finally {
+            // Clean up data-layout-id
+            originalElement.removeAttribute('data-layout-id');
+            origDescendants.forEach(el => {
+              el.removeAttribute('data-layout-id');
+            });
+          }
+        } catch (studentErr) {
+          console.error(`[Batch Failure Skipped] Gagal memproses siswa "${curStudent.name}":`, studentErr);
         }
       }
 
       // Restore UI back to normal Selected Student
-      flushSync(() => {
-        setBatchStudent(null);
-      });
+      setBatchStudent(null);
 
       console.log("[Batch PDF Engine] Compiling ZIP archive...");
       const zipBlob = await zip.generateAsync({ type: 'blob' });
@@ -738,26 +753,29 @@ export default function RaporCetak({
     }
   };
 
-  // Kartika Jaya School Seal SVG Representation
+  // Kartika Jaya School Seal Image Representation
   const KartikaLogo = () => (
-    <svg width="80" height="80" viewBox="0 0 100 100" className="h-20 w-20 flex-none text-emerald-700 mx-auto" aria-hidden="true">
-      {/* Outer shield/crest */}
-      <polygon points="50,5 90,25 90,75 50,95 10,75 10,25" fill="#15803d" stroke="#facc15" strokeWidth="2.5" />
-      {/* Inner crest */}
-      <polygon points="50,12 82,28 82,72 50,88 18,72 18,28" fill="#16a34a" />
-      {/* Star */}
-      <polygon points="50,15 58,35 78,35 62,48 68,68 50,55 32,68 38,48 22,35 42,35" fill="#facc15" stroke="#ca8a04" strokeWidth="1" />
-      {/* Shield circle */}
-      <circle cx="50" cy="50" r="14" fill="#ffffff" stroke="#1e3a8a" strokeWidth="1.5" />
-      {/* Book symbol lines */}
-      <path d="M42,48 C46,51 50,47 50,47 C50,47 54,51 58,48 M42,52 C46,55 50,51 50,51 C50,51 54,55 58,52" stroke="#ea580c" strokeWidth="1.5" fill="none" />
-      {/* Laurel leaves branches at bottom */}
-      <path d="M22,60 Q30,85 50,82 Q70,85 78,60" stroke="#facc15" strokeWidth="2.5" fill="none" />
-      {/* Banner */}
-      <path d="M12,70 L30,75 L50,72 L70,75 L88,70 L84,78 L50,78 L16,78 Z" fill="#b91c1c" stroke="#facc15" strokeWidth="1" />
-      <text x="50" y="76" fill="#ffffff" fontSize="5" fontWeight="bold" textAnchor="middle" letterSpacing="0.5">KARTIKA JAYA</text>
-    </svg>
+    <img 
+      src="https://lh3.googleusercontent.com/d/1S7UuyDpIDDTxOCqb1aOa1JNtmMQggUEC" 
+      className="h-20 w-20 flex-none object-contain mx-auto" 
+      referrerPolicy="no-referrer" 
+      crossOrigin="anonymous" 
+      alt="Logo Sekolah" 
+    />
   );
+
+  const renderKopLogo = (sizeClass = "h-20 w-20") => {
+    const logoSrc = kopSekolah.logoUrl || "https://lh3.googleusercontent.com/d/1S7UuyDpIDDTxOCqb1aOa1JNtmMQggUEC";
+    return (
+      <img 
+        src={logoSrc} 
+        alt="Logo Sekolah" 
+        className={`${sizeClass} object-contain`} 
+        referrerPolicy="no-referrer" 
+        crossOrigin="anonymous" 
+      />
+    );
+  };
 
   return (
     <div id="rapor-cetak-wrapper" className="flex flex-col gap-6">
@@ -1054,20 +1072,24 @@ export default function RaporCetak({
 
               {/* SIMULATED WORKBENCH CANVAS */}
               <div className="bg-slate-700/90 p-8 rounded-2xl border border-slate-600 shadow-inner flex flex-col items-center gap-8 overflow-x-auto select-none no-print">
-                <div className={`simulate-print w-fit ${showMarginsGuide ? 'show-margins-guide' : ''} ${showGridRuler ? 'show-grid-ruler' : ''}`}>
+                <AnimatePresence mode="wait">
+                  <motion.div 
+                    key={activeStudent.nis}
+                    initial={{ opacity: 0, scale: 0.98 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    exit={{ opacity: 0, scale: 0.98 }}
+                    transition={{ duration: 0.35, ease: "easeInOut" }}
+                    className={`simulate-print w-fit ${showMarginsGuide ? 'show-margins-guide' : ''} ${showGridRuler ? 'show-grid-ruler' : ''}`}
+                  >
                   
                   {/* PRINT PAGE 1 SIMULATION */}
                   <div className="print-page relative">
-                    <div>
+                    <div className="flex flex-col h-full w-full justify-between">
                       {/* Header, title & info */}
                       <div className="avoid-break select-none">
                         <div className="flex items-start gap-4 mb-0.5">
                           <div className="h-20 w-20 flex flex-col justify-center items-center flex-none">
-                            {kopSekolah.logoUrl ? (
-                              <img src={kopSekolah.logoUrl} alt="Logo Sekolah" className="max-h-20 max-w-20 object-contain" referrerPolicy="no-referrer" crossOrigin="anonymous" />
-                            ) : (
-                              <div className="h-20 w-20 bg-neutral-100 flex items-center justify-center font-sans font-bold text-xs">LOGO</div>
-                            )}
+                            {renderKopLogo("max-h-20 max-w-20")}
                           </div>
                           <div className="flex-1 flex flex-col justify-start">
                             <h1 className="font-bold text-[14pt] leading-tight font-sans text-black uppercase text-left">
@@ -1124,12 +1146,12 @@ export default function RaporCetak({
                       {/* Table */}
                       <table className="w-full table-fixed text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
                         <colgroup>
-                          <col style={{ width: '15%' }} />
-                          <col style={{ width: '41%' }} />
-                          <col style={{ width: '11%' }} />
-                          <col style={{ width: '11%' }} />
-                          <col style={{ width: '11%' }} />
-                          <col style={{ width: '11%' }} />
+                          <col style={{ width: '20%' }} />
+                          <col style={{ width: '44%' }} />
+                          <col style={{ width: '9%' }} />
+                          <col style={{ width: '9%' }} />
+                          <col style={{ width: '9%' }} />
+                          <col style={{ width: '9%' }} />
                         </colgroup>
                         <thead>
                           <tr style={{ backgroundColor: '#f1f5f9' }}>
@@ -1293,20 +1315,26 @@ export default function RaporCetak({
                         </tbody>
                       </table>
                     </div>
+                    {/* Page Numbering */}
+                    {(kopSekolah.showPageNumbering ?? true) && (
+                      <div className="absolute bottom-[8mm] right-[15mm] text-[8.5pt] font-mono font-bold text-slate-700 print:text-black select-none pointer-events-none">
+                        Page 1 of 2
+                      </div>
+                    )}
                   </div>
 
                   {/* PRINT PAGE 2 SIMULATION */}
                   <div className="print-page relative">
-                    <div className="flex flex-col gap-4">
+                    <div className="flex flex-col h-full w-full justify-between gap-4">
                       {/* Table continuation on Page 2 */}
                       <table className="w-full table-fixed text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
                         <colgroup>
-                          <col style={{ width: '15%' }} />
-                          <col style={{ width: '41%' }} />
-                          <col style={{ width: '11%' }} />
-                          <col style={{ width: '11%' }} />
-                          <col style={{ width: '11%' }} />
-                          <col style={{ width: '11%' }} />
+                          <col style={{ width: '20%' }} />
+                          <col style={{ width: '44%' }} />
+                          <col style={{ width: '9%' }} />
+                          <col style={{ width: '9%' }} />
+                          <col style={{ width: '9%' }} />
+                          <col style={{ width: '9%' }} />
                         </colgroup>
                         <tbody>
                           {/* Cerdas (2nd and 3rd indicators) */}
@@ -1412,7 +1440,7 @@ export default function RaporCetak({
                       </div>
 
                       {/* Signatures block */}
-                      <div className="mt-4 avoid-break font-sans">
+                      <div className="mt-auto pt-4 avoid-break font-sans">
                         <p className="text-[10.5pt] font-semibold text-black text-center mb-4 select-none">
                           Mengetahui,
                         </p>
@@ -1433,8 +1461,10 @@ export default function RaporCetak({
                                   <div className="h-4"></div>
                                 )}
                               </div>
-                              <div className="flex flex-col items-center w-full">
-                                <div className="w-36 border-b-2 border-black pb-0.5"></div>
+                              <div className="flex flex-col items-center w-full font-sans">
+                                <p id="tanda-tangan-wali-murid" className="font-bold text-black text-[10.5pt] text-center leading-tight select-none border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
+{EMPTY_SIGNATURE_PARENT}
+</p>
                                 <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none">Tanda Tangan & Nama Terang</p>
                               </div>
                             </div>
@@ -1455,9 +1485,9 @@ export default function RaporCetak({
                                 )}
                               </div>
                               <div className="flex flex-col items-center min-w-[160px]">
-                                <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px] whitespace-nowrap">
-                                  {kopSekolah.namaKepalaSekolah || '____________________'}
-                                </p>
+                                <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
+{kopSekolah.namaKepalaSekolah || EMPTY_SIGNATURE}
+</p>
                                 {kopSekolah.nipKepalaSekolah ? (
                                   <p className="text-[8.5pt] text-slate-700 font-mono mt-1 select-all">
                                     NIP. {kopSekolah.nipKepalaSekolah}
@@ -1472,9 +1502,9 @@ export default function RaporCetak({
                             <div className="flex flex-col items-center justify-between h-32 relative">
                               <p className="text-[10.5pt] text-black font-bold">Guru Kelas / Wali Kelas</p>
                               <div className="h-16 flex items-center justify-center relative w-full">
-                                {kopSekolah.signatureTeacherUrl ? (
+                                {(waliKelasSignatureUrl || kopSekolah.signatureTeacherUrl) ? (
                                   <img
-                                    src={kopSekolah.signatureTeacherUrl}
+                                    src={(waliKelasSignatureUrl || kopSekolah.signatureTeacherUrl)}
                                     alt="Tanda Tangan Guru"
                                     className="max-h-16 max-w-[140px] object-contain"
                                     referrerPolicy="no-referrer" crossOrigin="anonymous"
@@ -1484,9 +1514,9 @@ export default function RaporCetak({
                                 )}
                               </div>
                               <div className="flex flex-col items-center w-full font-sans">
-                                <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px] whitespace-nowrap">
-                                  {waliKelasName || '____________________'}
-                                </p>
+                                <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
+{waliKelasName || EMPTY_SIGNATURE}
+</p>
                                 {waliKelasNip ? (
                                   <p className="text-[8.5pt] text-slate-700 font-mono mt-1 select-all">
                                     NIP. {waliKelasNip}
@@ -1514,8 +1544,10 @@ export default function RaporCetak({
                                   <div className="h-4"></div>
                                 )}
                               </div>
-                              <div className="flex flex-col items-center w-full">
-                                <div className="w-48 border-b-2 border-black pb-0.5"></div>
+                              <div className="flex flex-col items-center w-full font-sans">
+                                <p id="tanda-tangan-wali-murid" className="font-bold text-black text-[10.5pt] text-center leading-tight select-none border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
+{EMPTY_SIGNATURE_PARENT}
+</p>
                                 <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none">Tanda Tangan & Nama Terang</p>
                               </div>
                             </div>
@@ -1524,9 +1556,9 @@ export default function RaporCetak({
                             <div className="flex flex-col items-center justify-between h-32 relative">
                               <p className="text-[10.5pt] text-black font-bold">Guru Kelas / Wali Kelas</p>
                               <div className="h-16 flex items-center justify-center relative w-full">
-                                {kopSekolah.signatureTeacherUrl ? (
+                                {(waliKelasSignatureUrl || kopSekolah.signatureTeacherUrl) ? (
                                   <img
-                                    src={kopSekolah.signatureTeacherUrl}
+                                    src={(waliKelasSignatureUrl || kopSekolah.signatureTeacherUrl)}
                                     alt="Tanda Tangan Guru"
                                     className="max-h-16 max-w-[140px] object-contain"
                                     referrerPolicy="no-referrer" crossOrigin="anonymous"
@@ -1536,9 +1568,9 @@ export default function RaporCetak({
                                 )}
                               </div>
                               <div className="flex flex-col items-center w-full font-sans">
-                                <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px] whitespace-nowrap">
-                                  {waliKelasName || '____________________'}
-                                </p>
+                                <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
+{waliKelasName || EMPTY_SIGNATURE}
+</p>
                                 {waliKelasNip ? (
                                   <p className="text-[8.5pt] text-slate-700 font-mono mt-1 select-all">
                                     NIP. {waliKelasNip}
@@ -1552,11 +1584,18 @@ export default function RaporCetak({
                         )}
                       </div>
                     </div>
+                    {/* Page Numbering */}
+                    {(kopSekolah.showPageNumbering ?? true) && (
+                      <div className="absolute bottom-[8mm] right-[15mm] text-[8.5pt] font-mono font-bold text-slate-700 print:text-black select-none pointer-events-none">
+                        Page 2 of 2
+                      </div>
+                    )}
                   </div>
 
-                </div>
-              </div>
+                </motion.div>
+              </AnimatePresence>
             </div>
+          </div>
           ) : (
             <>
               <div className="bg-neutral-100/50 p-6 xl:p-12 rounded-2xl border border-slate-200/80 shadow-inner flex justify-center no-print selection:bg-transparent">
@@ -1565,11 +1604,7 @@ export default function RaporCetak({
             {/* Header block with organization logo & info */}
             <div className="flex items-start gap-4 mb-1">
               <div className="h-24 w-24 flex flex-col justify-center items-center flex-none">
-                {kopSekolah.logoUrl ? (
-                  <img src={kopSekolah.logoUrl} alt="Logo Sekolah" className="max-h-24 max-w-24 object-contain" referrerPolicy="no-referrer" crossOrigin="anonymous" />
-                ) : (
-                  <KartikaLogo />
-                )}
+                {renderKopLogo("max-h-24 max-w-24")}
               </div>
               <div className="flex-1 flex flex-col justify-start">
                 <h1 className="font-bold text-[14pt] leading-tight font-sans text-black uppercase">
@@ -1626,12 +1661,12 @@ export default function RaporCetak({
             {/* The core 5NK indicators evaluation table */}
             <table className="w-full table-fixed text-left text-[9pt] border border-black border-collapse font-sans leading-snug">
               <colgroup>
-                <col style={{ width: '15%' }} />
-                <col style={{ width: '41%' }} />
-                <col style={{ width: '11%' }} />
-                <col style={{ width: '11%' }} />
-                <col style={{ width: '11%' }} />
-                <col style={{ width: '11%' }} />
+                <col style={{ width: '20%' }} />
+                <col style={{ width: '44%' }} />
+                <col style={{ width: '9%' }} />
+                <col style={{ width: '9%' }} />
+                <col style={{ width: '9%' }} />
+                <col style={{ width: '9%' }} />
               </colgroup>
               <thead>
                 <tr style={{ backgroundColor: '#f1f5f9' }}>
@@ -1805,12 +1840,12 @@ export default function RaporCetak({
             {/* Table continuation on screen Page 2 */}
             <table className="w-full table-fixed text-left text-[9pt] border border-black border-collapse font-sans leading-snug">
               <colgroup>
-                <col style={{ width: '15%' }} />
-                <col style={{ width: '41%' }} />
-                <col style={{ width: '11%' }} />
-                <col style={{ width: '11%' }} />
-                <col style={{ width: '11%' }} />
-                <col style={{ width: '11%' }} />
+                <col style={{ width: '20%' }} />
+                <col style={{ width: '44%' }} />
+                <col style={{ width: '9%' }} />
+                <col style={{ width: '9%' }} />
+                <col style={{ width: '9%' }} />
+                <col style={{ width: '9%' }} />
               </colgroup>
               <tbody>
                 {/* Cerdas (2nd and 3rd indicators) */}
@@ -1922,7 +1957,7 @@ export default function RaporCetak({
             </div>
 
             {/* Signatures block */}
-            <div className="mt-4">
+                      <div className="mt-auto pt-4">
               <p className="text-[10.5pt] font-semibold text-black text-center mb-4 select-none">
                 Mengetahui,
               </p>
@@ -1943,8 +1978,10 @@ export default function RaporCetak({
                         <div className="h-4"></div>
                       )}
                     </div>
-                    <div className="flex flex-col items-center w-full">
-                      <div className="w-36 border-b-2 border-black pb-0.5"></div>
+                    <div className="flex flex-col items-center w-full font-sans">
+                      <p id="tanda-tangan-wali-murid" className="font-bold text-black text-[10.5pt] text-center leading-tight select-none border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
+{EMPTY_SIGNATURE_PARENT}
+</p>
                       <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none">Tanda Tangan & Nama Terang</p>
                     </div>
                   </div>
@@ -1965,9 +2002,9 @@ export default function RaporCetak({
                       )}
                     </div>
                     <div className="flex flex-col items-center min-w-[160px]">
-                      <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px] whitespace-nowrap">
-                        {kopSekolah.namaKepalaSekolah || '____________________'}
-                      </p>
+                      <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
+{kopSekolah.namaKepalaSekolah || EMPTY_SIGNATURE}
+</p>
                       {kopSekolah.nipKepalaSekolah ? (
                         <p className="text-[8.5pt] text-slate-700 font-mono mt-1 select-all">
                           NIP. {kopSekolah.nipKepalaSekolah}
@@ -1982,9 +2019,9 @@ export default function RaporCetak({
                   <div className="flex flex-col items-center justify-between h-32 relative">
                     <p className="text-[10.5pt] text-black font-bold">Guru Kelas / Wali Kelas</p>
                     <div className="h-16 flex items-center justify-center relative w-full">
-                      {kopSekolah.signatureTeacherUrl ? (
+                      {(waliKelasSignatureUrl || kopSekolah.signatureTeacherUrl) ? (
                         <img
-                          src={kopSekolah.signatureTeacherUrl}
+                          src={(waliKelasSignatureUrl || kopSekolah.signatureTeacherUrl)}
                           alt="Tanda Tangan Guru"
                           className="max-h-16 max-w-[140px] object-contain"
                           referrerPolicy="no-referrer" crossOrigin="anonymous"
@@ -1994,9 +2031,9 @@ export default function RaporCetak({
                       )}
                     </div>
                     <div className="flex flex-col items-center w-full font-sans">
-                      <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px] whitespace-nowrap">
-                        {waliKelasName || '____________________'}
-                      </p>
+                      <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
+{waliKelasName || EMPTY_SIGNATURE}
+</p>
                       {waliKelasNip ? (
                         <p className="text-[8.5pt] text-slate-700 font-mono mt-1 select-all">
                           NIP. {waliKelasNip}
@@ -2024,8 +2061,10 @@ export default function RaporCetak({
                         <div className="h-4"></div>
                       )}
                     </div>
-                    <div className="flex flex-col items-center w-full">
-                      <div className="w-48 border-b-2 border-black pb-0.5"></div>
+                    <div className="flex flex-col items-center w-full font-sans">
+                      <p id="tanda-tangan-wali-murid" className="font-bold text-black text-[10.5pt] text-center leading-tight select-none border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
+{EMPTY_SIGNATURE_PARENT}
+</p>
                       <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none">Tanda Tangan & Nama Terang</p>
                     </div>
                   </div>
@@ -2034,9 +2073,9 @@ export default function RaporCetak({
                   <div className="flex flex-col items-center justify-between h-32 relative">
                     <p className="text-[10.5pt] text-black font-bold">Guru Kelas / Wali Kelas</p>
                     <div className="h-16 flex items-center justify-center relative w-full">
-                      {kopSekolah.signatureTeacherUrl ? (
+                      {(waliKelasSignatureUrl || kopSekolah.signatureTeacherUrl) ? (
                         <img
-                          src={kopSekolah.signatureTeacherUrl}
+                          src={(waliKelasSignatureUrl || kopSekolah.signatureTeacherUrl)}
                           alt="Tanda Tangan Guru"
                           className="max-h-16 max-w-[140px] object-contain"
                           referrerPolicy="no-referrer" crossOrigin="anonymous"
@@ -2046,9 +2085,9 @@ export default function RaporCetak({
                       )}
                     </div>
                     <div className="flex flex-col items-center w-full font-sans">
-                      <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px] whitespace-nowrap">
-                        {waliKelasName || '____________________'}
-                      </p>
+                      <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
+{waliKelasName || EMPTY_SIGNATURE}
+</p>
                       {waliKelasNip ? (
                         <p className="text-[8.5pt] text-slate-700 font-mono mt-1 select-all">
                           NIP. {waliKelasNip}
@@ -2080,18 +2119,14 @@ export default function RaporCetak({
             {pdfRenderStudents.map((selSt) => (
               <div key={selSt.nis} className="student-pdf-group">
                 {/* PRINT PAGE 1 */}
-                <div className="print-page w-[210mm] h-[297mm] max-h-[297mm] overflow-visible p-[12mm_15mm] box-border text-[11pt] leading-relaxed flex flex-col justify-between">
-                  <div>
+                <div className="print-page relative w-[210mm] h-[297mm] max-h-[297mm] overflow-visible p-[12mm_15mm] box-border text-[11pt] leading-relaxed flex flex-col justify-between">
+                  <div className="flex flex-col h-full w-full justify-between">
                     {/* Header, title & info wrapped with avoid-break */}
                     <div className="avoid-break select-none">
                       {/* Header block with organization logo & info */}
                       <div className="flex items-start gap-4 mb-0.5">
                         <div className="h-20 w-20 flex flex-col justify-center items-center flex-none">
-                          {kopSekolah.logoUrl ? (
-                            <img src={kopSekolah.logoUrl} alt="Logo Sekolah" className="max-h-20 max-w-20 object-contain" referrerPolicy="no-referrer" crossOrigin="anonymous" />
-                          ) : (
-                            <KartikaLogo />
-                          )}
+                          {renderKopLogo("max-h-20 max-w-20")}
                         </div>
                         <div className="flex-1 flex flex-col justify-start">
                           <h1 className="font-bold text-[14pt] leading-tight font-sans text-black uppercase">
@@ -2149,12 +2184,12 @@ export default function RaporCetak({
                     {/* Table */}
                     <table className="w-full table-fixed text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
                       <colgroup>
-                        <col style={{ width: '15%' }} />
-                        <col style={{ width: '41%' }} />
-                        <col style={{ width: '11%' }} />
-                        <col style={{ width: '11%' }} />
-                        <col style={{ width: '11%' }} />
-                        <col style={{ width: '11%' }} />
+                        <col style={{ width: '20%' }} />
+                        <col style={{ width: '44%' }} />
+                        <col style={{ width: '9%' }} />
+                        <col style={{ width: '9%' }} />
+                        <col style={{ width: '9%' }} />
+                        <col style={{ width: '9%' }} />
                       </colgroup>
                       <thead>
                         <tr style={{ backgroundColor: '#f1f5f9' }}>
@@ -2318,20 +2353,26 @@ export default function RaporCetak({
                       </tbody>
                     </table>
                   </div>
+                  {/* Page Numbering */}
+                  {(kopSekolah.showPageNumbering ?? true) && (
+                    <div className="absolute bottom-[8mm] right-[15mm] text-[8.5pt] font-mono font-bold text-slate-700 print:text-black select-none pointer-events-none">
+                      Page 1 of 2
+                    </div>
+                  )}
                 </div>
 
                 {/* PRINT PAGE 2 */}
-                <div className="print-page w-[210mm] h-[297mm] max-h-[297mm] overflow-visible p-[12mm_15mm] box-border text-[11pt] leading-relaxed flex flex-col justify-between">
-                  <div className="flex flex-col gap-4">
+                <div className="print-page relative w-[210mm] h-[297mm] max-h-[297mm] overflow-visible p-[12mm_15mm] box-border text-[11pt] leading-relaxed flex flex-col justify-between">
+                  <div className="flex flex-col h-full w-full justify-between gap-4">
                     {/* Table continuation on Page 2 */}
                     <table className="w-full table-fixed text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
                       <colgroup>
-                        <col style={{ width: '15%' }} />
-                        <col style={{ width: '41%' }} />
-                        <col style={{ width: '11%' }} />
-                        <col style={{ width: '11%' }} />
-                        <col style={{ width: '11%' }} />
-                        <col style={{ width: '11%' }} />
+                        <col style={{ width: '20%' }} />
+                        <col style={{ width: '44%' }} />
+                        <col style={{ width: '9%' }} />
+                        <col style={{ width: '9%' }} />
+                        <col style={{ width: '9%' }} />
+                        <col style={{ width: '9%' }} />
                       </colgroup>
                       <tbody>
                         {/* Cerdas (2nd and 3rd indicators) */}
@@ -2443,7 +2484,7 @@ export default function RaporCetak({
                     </div>
 
                     {/* Signatures block */}
-                    <div className="mt-4 avoid-break font-sans">
+                      <div className="mt-auto pt-4 avoid-break font-sans">
                       <p className="text-[10.5pt] font-semibold text-black text-center mb-4 select-none">
                         Mengetahui,
                       </p>
@@ -2464,8 +2505,10 @@ export default function RaporCetak({
                                 <div className="h-4"></div>
                               )}
                             </div>
-                            <div className="flex flex-col items-center w-full">
-                              <div className="w-36 border-b-2 border-black pb-0.5"></div>
+                            <div className="flex flex-col items-center w-full font-sans">
+                              <p id="tanda-tangan-wali-murid" className="font-bold text-black text-[10.5pt] text-center leading-tight select-none border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
+{EMPTY_SIGNATURE_PARENT}
+</p>
                               <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none">Tanda Tangan & Nama Terang</p>
                             </div>
                           </div>
@@ -2486,9 +2529,9 @@ export default function RaporCetak({
                               )}
                             </div>
                             <div className="flex flex-col items-center min-w-[160px]">
-                              <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px] whitespace-nowrap">
-                                {kopSekolah.namaKepalaSekolah || '____________________'}
-                              </p>
+                              <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
+{kopSekolah.namaKepalaSekolah || EMPTY_SIGNATURE}
+</p>
                               {kopSekolah.nipKepalaSekolah ? (
                                 <p className="text-[8.5pt] text-slate-700 font-mono mt-1 select-all">
                                   NIP. {kopSekolah.nipKepalaSekolah}
@@ -2503,9 +2546,9 @@ export default function RaporCetak({
                           <div className="flex flex-col items-center justify-between h-32 relative">
                             <p className="text-[10.5pt] text-black font-bold">Guru Kelas / Wali Kelas</p>
                             <div className="h-16 flex items-center justify-center relative w-full">
-                              {kopSekolah.signatureTeacherUrl ? (
+                              {(waliKelasSignatureUrl || kopSekolah.signatureTeacherUrl) ? (
                                 <img
-                                  src={kopSekolah.signatureTeacherUrl}
+                                  src={(waliKelasSignatureUrl || kopSekolah.signatureTeacherUrl)}
                                   alt="Tanda Tangan Guru"
                                   className="max-h-16 max-w-[140px] object-contain"
                                   referrerPolicy="no-referrer" crossOrigin="anonymous"
@@ -2515,9 +2558,9 @@ export default function RaporCetak({
                               )}
                             </div>
                             <div className="flex flex-col items-center w-full font-sans">
-                              <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px] whitespace-nowrap">
-                                {waliKelasName || '____________________'}
-                              </p>
+                              <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
+{waliKelasName || EMPTY_SIGNATURE}
+</p>
                               {waliKelasNip ? (
                                 <p className="text-[8.5pt] text-slate-700 font-mono mt-1 select-all">
                                   NIP. {waliKelasNip}
@@ -2545,8 +2588,10 @@ export default function RaporCetak({
                                 <div className="h-4"></div>
                               )}
                             </div>
-                            <div className="flex flex-col items-center w-full">
-                              <div className="w-48 border-b-2 border-black pb-0.5"></div>
+                            <div className="flex flex-col items-center w-full font-sans">
+                              <p id="tanda-tangan-wali-murid" className="font-bold text-black text-[10.5pt] text-center leading-tight select-none border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
+{EMPTY_SIGNATURE_PARENT}
+</p>
                               <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none">Tanda Tangan & Nama Terang</p>
                             </div>
                           </div>
@@ -2555,9 +2600,9 @@ export default function RaporCetak({
                           <div className="flex flex-col items-center justify-between h-32 relative">
                             <p className="text-[10.5pt] text-black font-bold">Guru Kelas / Wali Kelas</p>
                             <div className="h-16 flex items-center justify-center relative w-full">
-                              {kopSekolah.signatureTeacherUrl ? (
+                              {(waliKelasSignatureUrl || kopSekolah.signatureTeacherUrl) ? (
                                 <img
-                                  src={kopSekolah.signatureTeacherUrl}
+                                  src={(waliKelasSignatureUrl || kopSekolah.signatureTeacherUrl)}
                                   alt="Tanda Tangan Guru"
                                   className="max-h-16 max-w-[140px] object-contain"
                                   referrerPolicy="no-referrer" crossOrigin="anonymous"
@@ -2567,9 +2612,9 @@ export default function RaporCetak({
                               )}
                             </div>
                             <div className="flex flex-col items-center w-full font-sans">
-                              <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all underline underline-offset-4 decoration-[1.5px] whitespace-nowrap">
-                                {waliKelasName || '____________________'}
-                              </p>
+                              <p className="font-bold text-black text-[10.5pt] text-center leading-tight select-all border-b-[1px] border-black pb-0.5 inline-block min-w-[6.0cm] whitespace-nowrap">
+{waliKelasName || EMPTY_SIGNATURE}
+</p>
                               {waliKelasNip ? (
                                 <p className="text-[8.5pt] text-slate-700 font-mono mt-1 select-all">
                                   NIP. {waliKelasNip}
@@ -2583,6 +2628,12 @@ export default function RaporCetak({
                       )}
                     </div>
                   </div>
+                  {/* Page Numbering */}
+                  {(kopSekolah.showPageNumbering ?? true) && (
+                    <div className="absolute bottom-[8mm] right-[15mm] text-[8.5pt] font-mono font-bold text-slate-700 print:text-black select-none pointer-events-none">
+                      Page 2 of 2
+                    </div>
+                  )}
                 </div>
               </div>
             ))}

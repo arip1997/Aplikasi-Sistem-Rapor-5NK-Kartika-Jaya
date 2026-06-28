@@ -1,7 +1,8 @@
 import { useState, useId, useEffect, useRef, useMemo } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Student, Category, ScoreKey, scoreOptions } from '../types';
 import { ChevronDown, Search, Check, AlertCircle, Sparkles, Filter, FileSpreadsheet, RotateCcw, AlertTriangle, RefreshCw, Printer } from 'lucide-react';
-import { formatProperName } from '../utils';
+import { formatProperName, exportClassToCsv } from '../utils';
 
 interface ExcelGridProps {
   students: Student[];
@@ -14,6 +15,7 @@ interface ExcelGridProps {
   selectedStudent: Student | null;
   dirtyCells?: Record<string, boolean>;
   aiModifiedStudentIds?: string[];
+  onAddExportLog?: (type: 'EXCEL' | 'PDF' | 'CSV', description: string, fileName: string, studentCount: number) => void;
 }
 
 export default function ExcelGrid({
@@ -27,6 +29,7 @@ export default function ExcelGrid({
   selectedStudent,
   dirtyCells = {},
   aiModifiedStudentIds = [],
+  onAddExportLog,
 }: ExcelGridProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [searchNis, setSearchNis] = useState('');
@@ -385,6 +388,26 @@ export default function ExcelGrid({
             <span>{isFocusMode ? 'Edit Fokus: Aktif' : 'Edit Fokus: Pasif'}</span>
           </button>
 
+          {/* Export CSV Button */}
+          <button
+            onClick={() => {
+              exportClassToCsv(students, selectedClass, categories);
+              if (onAddExportLog) {
+                onAddExportLog(
+                  'CSV', 
+                  `Unduh seluruh nilai Kelas ${selectedClass} ke dalam format CSV`, 
+                  `Rekap_5NK_Kelas_${selectedClass}.csv`, 
+                  students.length
+                );
+              }
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg border border-slate-300 text-slate-700 bg-white hover:bg-slate-50 hover:text-emerald-800 hover:border-emerald-300 transition-all cursor-pointer shadow-xs"
+            title="Ekspor data seluruh siswa kelas ini ke file format CSV untuk kebutuhan aplikasi luar"
+          >
+            <span className="text-xs">📄</span>
+            <span>Ekspor CSV</span>
+          </button>
+
           <div className="flex items-center gap-2">
             <div className="relative" title="Cari berdasarkan nama siswa">
               <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-slate-400" />
@@ -579,8 +602,16 @@ export default function ExcelGrid({
           </thead>
 
           {/* Student Grid Roster */}
-          <tbody className="divide-y divide-slate-100 text-xs">
-            {filteredStudents.length > 0 ? (
+          <AnimatePresence mode="wait">
+            <motion.tbody
+              key={selectedClass}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.25, ease: 'easeInOut' }}
+              className="divide-y divide-slate-100 text-xs"
+            >
+              {filteredStudents.length > 0 ? (
               <>
                 {topSpacerHeight > 0 && (
                   <tr style={{ height: `${topSpacerHeight}px` }}>
@@ -751,9 +782,10 @@ export default function ExcelGrid({
                 </td>
               </tr>
             )}
-          </tbody>
-        </table>
-      </div>
+          </motion.tbody>
+        </AnimatePresence>
+      </table>
+    </div>
 
       {/* 4. Excel Workbook Sheet Tabs Bar */}
       <div className="bg-slate-100 border-t border-slate-200 px-3 py-1 flex items-center justify-between text-[11px] text-slate-600 font-sans select-none no-print">
