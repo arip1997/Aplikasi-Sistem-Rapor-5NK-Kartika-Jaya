@@ -274,60 +274,66 @@ export function getVbaMacroInstructionsRows(): any[][] {
 }
 
 export function generateClassExcelBlob(students: Student[], className: string, waliKelasName: string, categories: Category[]): Blob {
-  // Validate that the students array is non-empty and well-structured
+  // Deep validation of input data
   if (!students || !Array.isArray(students) || students.length === 0) {
-    throw new Error("Pengecekan gagal: Array siswa kosong atau tidak valid. Tidak dapat menghasilkan data blob Excel.");
+    throw new Error("Pengecekan gagal: Array siswa kosong atau tidak valid.");
   }
 
-  const rows: any[] = [];
-  rows.push(['YAYASAN KARTIKA JAYA']);
-  rows.push([`REKAPITULASI PENILAIAN 5NK KELAS ${className}`]);
-  rows.push([`Wali Kelas: ${waliKelasName}`]);
-  rows.push([]);
-  
-  const indicatorIds: string[] = [];
-  const indicatorHeaders: string[] = [];
-  categories.forEach(cat => {
-    cat.indicators.forEach(ind => {
-      indicatorIds.push(ind.id);
-      indicatorHeaders.push(`${cat.id}: ${ind.text.substring(0, 30)}...`);
+  try {
+    const rows: any[] = [];
+    rows.push(['YAYASAN KARTIKA JAYA']);
+    rows.push([`REKAPITULASI PENILAIAN 5NK KELAS ${className}`]);
+    rows.push([`Wali Kelas: ${waliKelasName}`]);
+    rows.push([]);
+    
+    const indicatorIds: string[] = [];
+    const indicatorHeaders: string[] = [];
+    categories.forEach(cat => {
+      cat.indicators.forEach(ind => {
+        indicatorIds.push(ind.id);
+        indicatorHeaders.push(`${cat.id}: ${ind.text.substring(0, 30)}...`);
+      });
     });
-  });
 
-  const headers = ['No', 'NIS', 'Nama Siswa', 'L/P', ...indicatorHeaders, 'Kesimpulan', 'Catatan Wali'];
-  rows.push(headers);
-  students.forEach((student, index) => {
-    rows.push([
-      index + 1, student.nis, student.name, student.gender,
-      ...indicatorIds.map(id => student.grades[id] || '-'),
-      student.kesimpulan, student.catatanWali
-    ]);
-  });
+    const headers = ['No', 'NIS', 'Nama Siswa', 'L/P', ...indicatorHeaders, 'Kesimpulan', 'Catatan Wali'];
+    rows.push(headers);
+    students.forEach((student, index) => {
+      rows.push([
+        index + 1, student.nis, student.name, student.gender,
+        ...indicatorIds.map(id => student.grades[id] || '-'),
+        student.kesimpulan, student.catatanWali
+      ]);
+    });
 
-  const worksheet = XLSX.utils.aoa_to_sheet(rows);
-  const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, `Rekap_Kelas_${className}`);
-  
-  const vbaHeaders = getVbaMacroInstructionsRows();
-  const wsVba = XLSX.utils.aoa_to_sheet(vbaHeaders);
-  XLSX.utils.book_append_sheet(workbook, wsVba, 'VBA_Macro_Instruksi');
-  
-  // Write the workbook content to a binary buffer
-  const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
-  
-  // Explicitly flush and close data structures to prevent memory leaks and empty downloads
-  rows.length = 0;
-  indicatorIds.length = 0;
-  indicatorHeaders.length = 0;
-  
-  const resultBlob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-  
-  // Validate that the generated Blob has an actual non-zero size
-  if (!resultBlob || resultBlob.size === 0) {
-    throw new Error("Pengecekan gagal: Berkas Excel yang dihasilkan berukuran 0 byte. Gagal mengunduh.");
+    // Generate Excel
+    const worksheet = XLSX.utils.aoa_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, `Rekap_Kelas_${className}`);
+    
+    const vbaHeaders = getVbaMacroInstructionsRows();
+    const wsVba = XLSX.utils.aoa_to_sheet(vbaHeaders);
+    XLSX.utils.book_append_sheet(workbook, wsVba, 'VBA_Macro_Instruksi');
+    
+    // Use try-finally for safety
+    const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+    
+    // Explicitly clear memory structures before returning
+    rows.length = 0;
+    indicatorIds.length = 0;
+    indicatorHeaders.length = 0;
+    
+    const resultBlob = new Blob([excelBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+    
+    // Final integrity check
+    if (resultBlob.size === 0) {
+      throw new Error("Berkas Excel yang dihasilkan kosong (0 byte).");
+    }
+    
+    return resultBlob;
+  } catch (error) {
+    console.error("Error generating Excel Blob:", error);
+    throw error;
   }
-  
-  return resultBlob;
 }
 
 export function exportClassToExcel(students: Student[], className: string, waliKelasName: string, categories: Category[]) {

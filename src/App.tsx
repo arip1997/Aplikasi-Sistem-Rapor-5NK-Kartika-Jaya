@@ -106,6 +106,19 @@ export default function App() {
     kop: false,
     wipeEmpty: false
   });
+
+  const [showFooterDate, setShowFooterDate] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('rapor_show_footer_date');
+      return saved !== null ? saved === 'true' : true;
+    }
+    return true;
+  });
+
+  const handleUpdateShowFooterDate = (value: boolean) => {
+    setShowFooterDate(value);
+    localStorage.setItem('rapor_show_footer_date', String(value));
+  };
   
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
   const [resetConfirmText, setResetConfirmText] = useState('');
@@ -1024,6 +1037,20 @@ export default function App() {
 
   // Handle custom text box changes
   const handleBatchPrint = (studentIds: string[]) => {
+    const selected = students.filter(s => studentIds.includes(s.id));
+    const invalidStudents = selected.filter(s => {
+        if (!s || typeof s !== 'object') return true;
+        if (s.name === undefined || s.name === null || String(s.name).trim() === "") return true;
+        if (s.nis === undefined || s.nis === null || String(s.nis).trim() === "") return true;
+        if (s.grades === undefined || s.grades === null || typeof s.grades !== 'object') return true;
+        return false;
+    });
+
+    if (invalidStudents.length > 0) {
+      alert(`Peringatan: ${invalidStudents.length} siswa terpilih tidak memiliki data yang valid. Silakan lengkapi data siswa sebelum mencetak.`);
+      return;
+    }
+
     const nisList = studentIds.map(id => students.find(s => s.id === id)?.nis).filter(Boolean) as string[];
     setBatchPrintNisList(nisList);
     
@@ -1588,10 +1615,10 @@ export default function App() {
             filteredStudents.length === 0 ? (
               <motion.div
                 key="empty-spreadsheet"
-                initial={{ opacity: 0, scale: 0.95, filter: "blur(4px)" }}
-                animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
-                exit={{ opacity: 0, scale: 0.95, filter: "blur(4px)" }}
-                transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.3 }}
                 className="w-full bg-white border border-slate-200 rounded-2xl p-8 md:p-12 shadow-xs flex flex-col items-center justify-center text-center max-w-2xl mx-auto my-auto gap-4 min-h-[380px] font-sans no-print"
               >
                 <div className="h-16 w-16 rounded-full bg-amber-50 text-amber-500 border border-amber-100 flex items-center justify-center text-3xl shadow-xs scale-105 animate-bounce">
@@ -1615,10 +1642,10 @@ export default function App() {
             ) : (
               <motion.div
                 key="spreadsheet"
-                initial={{ opacity: 0, x: 30, filter: "blur(4px)" }}
-                animate={{ opacity: 1, x: 0, filter: "blur(0px)" }}
-                exit={{ opacity: 0, x: -30, filter: "blur(4px)" }}
-                transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.3 }}
                 className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6 flex-1 h-auto md:h-full overflow-visible md:overflow-hidden print:overflow-visible no-print"
               >
             
@@ -1855,10 +1882,10 @@ export default function App() {
         {viewMode === 'form_penilaian' && (
           <motion.div
             key="form_penilaian"
-            initial={{ opacity: 0, x: 30, filter: "blur(4px)" }}
-            animate={{ opacity: 1, x: 0, filter: "blur(0px)" }}
-            exit={{ opacity: 0, x: -30, filter: "blur(4px)" }}
-            transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.3 }}
             className="flex-1 h-auto md:h-full overflow-visible md:overflow-hidden no-print"
           >
             <EvaluationForm
@@ -1879,10 +1906,10 @@ export default function App() {
         {viewMode === 'rekap_nilai' && (
           <motion.div
             key="rekap_nilai"
-            initial={{ opacity: 0, x: 30, filter: "blur(4px)" }}
-            animate={{ opacity: 1, x: 0, filter: "blur(0px)" }}
-            exit={{ opacity: 0, x: -30, filter: "blur(4px)" }}
-            transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.3 }}
             className="flex-1 h-auto md:h-full overflow-visible md:overflow-hidden no-print"
           >
             <GradeRecap
@@ -1915,10 +1942,10 @@ export default function App() {
         {viewMode === 'crud_manager' && (
           <motion.div
             key="crud_manager"
-            initial={{ opacity: 0, x: 30, filter: "blur(4px)" }}
-            animate={{ opacity: 1, x: 0, filter: "blur(0px)" }}
-            exit={{ opacity: 0, x: -30, filter: "blur(4px)" }}
-            transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.3 }}
             className="flex-1 h-auto md:h-full overflow-visible md:overflow-hidden no-print"
           >
             <DatabaseCrud
@@ -1933,6 +1960,8 @@ export default function App() {
               selectedClass={selectedClass}
               classes={classes}
               onUpdateClasses={handlePersistClasses}
+              showFooterDate={showFooterDate}
+              onUpdateShowFooterDate={handleUpdateShowFooterDate}
             />
           </motion.div>
         )}
@@ -1941,10 +1970,10 @@ export default function App() {
         {viewMode === 'print' && selectedStudent && (
           <motion.div
             key="print"
-            initial={{ opacity: 0, x: 30, filter: "blur(4px)" }}
-            animate={{ opacity: 1, x: 0, filter: "blur(0px)" }}
-            exit={{ opacity: 0, x: -30, filter: "blur(4px)" }}
-            transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.3 }}
             className="flex-1 overflow-y-auto print:overflow-visible"
           >
             <RaporCetak
@@ -1976,6 +2005,17 @@ export default function App() {
               autoTriggerBatchPdf={autoTriggerBatchPdf}
               autoPrintImmediately={autoPrintImmediately}
               onResetAutoTrigger={() => setAutoTriggerBatchPdf(false)}
+              classes={classes}
+              selectedClass={selectedClass}
+              onClassChange={(nextCls) => {
+                setSelectedClass(nextCls);
+                const firstStud = students.find(s => s.kelas === nextCls);
+                if (firstStud) {
+                  setSelectedStudentId(firstStud.id);
+                }
+              }}
+              showFooterDate={showFooterDate}
+              onUpdateShowFooterDate={handleUpdateShowFooterDate}
             />
           </motion.div>
         )}
