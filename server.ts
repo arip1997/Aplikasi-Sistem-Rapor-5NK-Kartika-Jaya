@@ -61,9 +61,8 @@ function getGeminiClient(): GoogleGenAI {
 
 // REST API endpoint for generating AI Rapor comments
 app.post('/api/generate-comments', async (req, res) => {
+  const { studentName, gender, grades, className, waliKelasName } = req.body;
   try {
-    const { studentName, gender, grades, className, waliKelasName } = req.body;
-
     if (!studentName || !grades) {
       res.status(400).json({ error: 'Missing studentName or grades' });
       return;

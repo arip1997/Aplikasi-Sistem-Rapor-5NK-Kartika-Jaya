@@ -17,6 +17,8 @@ export interface KopSekolah {
   nipKepalaSekolah?: string;
   showPageNumbering?: boolean;
   templateNotes?: string[];
+  customFooterText?: string;
+  enableAutoDate?: boolean;
 }
 
 export interface ScoreOption {

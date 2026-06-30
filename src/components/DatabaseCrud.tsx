@@ -1,5 +1,6 @@
 import { useState, useId, FormEvent, useRef, useEffect, ChangeEvent } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import * as XLSX from 'xlsx';
 import { Student, Teacher, Category, Indicator, ScoreKey, KopSekolah } from '../types';
 import { SCHOOL_CLASSES, DEFAULT_KOP } from '../data';
 import { exportDatabaseBackupConfig, parseExcelDatabase, uploadExcelToGoogleDrive, encryptData, decryptData, addChangeLog, getChangeLogs, clearChangeLogs, deleteChangeLog, exportLocalJsonBackup, ChangeLog, formatProperName } from '../utils';
@@ -27,7 +28,8 @@ import {
   Unlock,
   History,
   RotateCcw,
-  SpellCheck
+  SpellCheck,
+  AlertCircle
 } from 'lucide-react';
 
 interface DatabaseCrudProps {
@@ -46,6 +48,8 @@ interface DatabaseCrudProps {
   onUpdateShowFooterDate?: (value: boolean) => void;
   isHighContrast: boolean;
   setIsHighContrast: (value: boolean) => void;
+  rowHeightMode: 'compact' | 'comfortable';
+  setRowHeightMode: (value: 'compact' | 'comfortable') => void;
 }
 
 export default function DatabaseCrud({
@@ -64,6 +68,8 @@ export default function DatabaseCrud({
   onUpdateShowFooterDate,
   isHighContrast,
   setIsHighContrast,
+  rowHeightMode,
+  setRowHeightMode,
 }: DatabaseCrudProps) {
   const [activeSubTab, setActiveSubTab] = useState<'siswa' | 'guru' | 'indikator' | 'kop' | 'backup' | 'riwayat'>('siswa');
   const [changeLogs, setChangeLogs] = useState<ChangeLog[]>([]);
@@ -100,10 +106,9 @@ export default function DatabaseCrud({
     const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
 
     if (!lastBackupTime || now - parseInt(lastBackupTime) > TWENTY_FOUR_HOURS) {
-      // Trigger backup
-      exportLocalJsonBackup(students, teachers, categories, kopSekolah, classes);
+      // Quietly record backup timestamp to avoid unexpected popups
       localStorage.setItem('rapor_last_backup_time', now.toString());
-      console.log('Automated daily backup triggered.');
+      console.log('Automated daily background backup checkpoint registered.');
     }
   }, []);
 
@@ -297,11 +302,40 @@ export default function DatabaseCrud({
     setEditingSiswa(null);
   };
 
-  const handleDeleteSiswa = (id: string, name: string) => {
-    if (window.confirm(`Apakah Anda yakin ingin menghapus siswa "${name}" dari database? Tindakan ini permanen.`)) {
+  const [deleteConfirm, setDeleteConfirm] = useState<{ type: 'siswa' | 'guru' | 'indikator', id: string, name: string, parentId?: string } | null>(null);
+
+  const confirmDelete = () => {
+    if (!deleteConfirm) return;
+    const { type, id, name, parentId } = deleteConfirm;
+    
+    if (type === 'siswa') {
       onUpdateStudents(students.filter(s => s.id !== id));
       addChangeLog('HAPUS_SISWA', `Menghapus siswa "${name}" (ID: ${id}) dari database`);
+    } else if (type === 'guru') {
+      onUpdateTeachers(teachers.filter(t => t.id !== id));
+      addChangeLog('HAPUS_GURU', `Menghapus guru/staf "${name}" dari database`);
+    } else if (type === 'indikator') {
+      onUpdateCategories(categories.map(c => {
+        if (c.id === parentId) {
+          return { ...c, indicators: c.indicators.filter(ind => ind.id !== id) };
+        }
+        return c;
+      }));
+      // Clean up score records from all students
+      const cleanedStudents = students.map(s => {
+        const nextGrades = { ...s.grades };
+        delete nextGrades[id];
+        return { ...s, grades: nextGrades };
+      });
+      onUpdateStudents(cleanedStudents);
+      addChangeLog('HAPUS_INDIKATOR', `Menghapus indikator: "${name}"`);
     }
+    
+    setDeleteConfirm(null);
+  };
+
+  const handleDeleteSiswa = (id: string, name: string) => {
+    setDeleteConfirm({ type: 'siswa', id, name });
   };
 
   // ----------------- GURU CRUD OPERATIONS -----------------
@@ -406,10 +440,7 @@ export default function DatabaseCrud({
   };
 
   const handleDeleteGuru = (id: string, name: string) => {
-    if (window.confirm(`Apakah Anda yakin ingin menghapus Guru "${name}" dari database?`)) {
-      onUpdateTeachers(teachers.filter(t => t.id !== id));
-      addChangeLog('HAPUS_GURU', `Menghapus guru "${name}" (ID: ${id})`);
-    }
+    setDeleteConfirm({ type: 'guru', id, name });
   };
 
   // ----------------- INDIKATOR CRUD OPERATIONS -----------------
@@ -499,31 +530,7 @@ export default function DatabaseCrud({
   };
 
   const handleDeleteIndicator = (catId: string, indId: string, text: string) => {
-    if (window.confirm(`WASPADA: Menghapus indikator "${indId}" akan menghapus kaitan nilai indikator ini di seluruh rapor siswa. Apakah Anda yakin ingin menghapusnya?\n\nIndikator: "${text}"`)) {
-      // Remove from categories
-      const updatedCategories = categories.map(cat => {
-        if (cat.id === catId) {
-          return {
-            ...cat,
-            indicators: cat.indicators.filter(i => i.id !== indId)
-          };
-        }
-        return cat;
-      });
-      onUpdateCategories(updatedCategories);
-
-      // Clean up score records from all students
-      const cleanedStudents = students.map(s => {
-        const nextGrades = { ...s.grades };
-        delete nextGrades[indId];
-        return {
-          ...s,
-          grades: nextGrades
-        };
-      });
-      onUpdateStudents(cleanedStudents);
-      addChangeLog('HAPUS_INDIKATOR', `Menghapus indikator perilaku "${indId}" ("${text}") dari kategori ${catId}`);
-    }
+    setDeleteConfirm({ type: 'indikator', id: indId, name: text, parentId: catId });
   };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1705,6 +1712,60 @@ export default function DatabaseCrud({
                       </div>
                     </div>
                   </div>
+
+                  {/* Tanda Tangan Orang Tua */}
+                  <div className="bg-white p-4 border border-slate-200 rounded-lg flex flex-col gap-2">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-bold text-slate-600 block">Tanda Tangan Orang Tua / Wali</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {editKop.signatureParentUrl ? (
+                        <div className="relative">
+                          <img src={editKop.signatureParentUrl} alt="Tanda Tangan Orang Tua" className="w-20 h-16 object-contain bg-slate-50 rounded border border-slate-200" />
+                          <button
+                            type="button"
+                            onClick={() => setEditKop({ ...editKop, signatureParentUrl: '' })}
+                            className="absolute -top-1.5 -right-1.5 bg-red-500 text-white rounded-full h-5 w-5 flex items-center justify-center shadow-md hover:scale-105 transition-transform font-bold text-[10px] cursor-pointer"
+                            title="Hapus"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="w-20 h-16 bg-slate-50 border border-dashed border-slate-300 rounded flex items-center justify-center text-[9px] text-slate-400 font-medium">
+                          Belum ada
+                        </div>
+                      )}
+                      
+                      <div className="flex-1">
+                        <input
+                          type="file"
+                          accept="image/png, image/jpeg"
+                          className="block w-full text-xs text-slate-500
+                            file:mr-3 file:py-1.5 file:px-3
+                            file:rounded-md file:border-0
+                            file:text-xs file:font-semibold
+                            file:bg-slate-100 file:text-slate-700
+                            hover:file:bg-slate-200 cursor-pointer"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) {
+                              if (file.size > 500000) {
+                                alert("Ukuran gambar terlalu besar. Maksimal 500KB untuk menjaga ukuran database.");
+                                return;
+                              }
+                              const reader = new FileReader();
+                              reader.onloadend = () => {
+                                setEditKop({ ...editKop, signatureParentUrl: reader.result as string });
+                              };
+                              reader.readAsDataURL(file);
+                            }
+                          }}
+                        />
+                        <span className="text-[10px] text-slate-400 block">PNG transparan direkomendasikan.</span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -1743,6 +1804,40 @@ export default function DatabaseCrud({
               </label>
             </div>
 
+            {/* Row Height Mode */}
+            <div className="mt-4 p-4 bg-white border border-slate-200 rounded-xl flex items-center justify-between">
+              <div>
+                <h5 className="font-bold text-slate-700 text-xs">Jarak Baris Grid (Row Height)</h5>
+                <p className="text-[11px] text-slate-400 mt-0.5">Pilih mode tampilan tabel di area input nilai utama.</p>
+              </div>
+              <div className="flex bg-slate-100 p-1 rounded-lg">
+                <button
+                  onClick={() => setRowHeightMode('compact')}
+                  className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${rowHeightMode === 'compact' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                  Compact
+                </button>
+                <button
+                  onClick={() => setRowHeightMode('comfortable')}
+                  className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${rowHeightMode === 'comfortable' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                  Comfortable
+                </button>
+              </div>
+            </div>
+
+            {/* Custom Footer Text */}
+            <div className="mt-4 p-4 bg-white border border-slate-200 rounded-xl">
+              <h5 className="font-bold text-slate-700 text-xs mb-2">Teks Footer Kustom</h5>
+              <p className="text-[11px] text-slate-400 mb-3">Teks ini akan muncul di bagian bawah setiap lembar rapor yang dicetak.</p>
+              <textarea
+                value={editKop.customFooterText || ''}
+                onChange={(e) => setEditKop({...editKop, customFooterText: e.target.value})}
+                placeholder="Contoh: Dokumen ini diterbitkan secara elektronik..."
+                className="w-full bg-slate-50 border border-slate-300 text-slate-700 text-xs rounded-lg focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 p-3 h-20 outline-none transition-all resize-none"
+              />
+            </div>
+
             {/* Footer Date Display Toggle */}
             <div className="mt-4 p-4 bg-white border border-slate-200 rounded-xl flex items-center justify-between">
               <div>
@@ -1752,8 +1847,8 @@ export default function DatabaseCrud({
               <label className="relative inline-flex items-center cursor-pointer select-none">
                 <input
                   type="checkbox"
-                  checked={showFooterDate}
-                  onChange={(e) => onUpdateShowFooterDate?.(e.target.checked)}
+                  checked={editKop.enableAutoDate ?? true}
+                  onChange={(e) => setEditKop({...editKop, enableAutoDate: e.target.checked})}
                   className="sr-only peer"
                 />
                 <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
@@ -2551,6 +2646,47 @@ export default function DatabaseCrud({
                 className="py-1.5 px-4 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 cursor-pointer flex items-center gap-1"
               >
                 <Check className="h-4 w-4" /> Mulai Impor Siswa
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ----------------- CONFIRM DELETE MODAL ----------------- */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-[99999] animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden flex flex-col p-6 animate-in zoom-in-95 duration-200">
+            <div className="flex items-center gap-3 text-rose-600 mb-4">
+              <div className="p-2 bg-rose-100 rounded-full">
+                <AlertCircle className="h-6 w-6" />
+              </div>
+              <h3 className="text-lg font-bold">Konfirmasi Hapus</h3>
+            </div>
+            
+            <p className="text-sm text-slate-600 mb-6">
+              Apakah Anda yakin ingin menghapus {deleteConfirm.type} <span className="font-semibold">"{deleteConfirm.name}"</span>? 
+              {deleteConfirm.type === 'indikator' && (
+                <span className="block mt-2 font-semibold text-rose-600">
+                  WASPADA: Menghapus indikator akan menghapus kaitan nilai indikator ini di seluruh rapor siswa!
+                </span>
+              )}
+              <span className="block mt-2">Tindakan ini tidak dapat dibatalkan.</span>
+            </p>
+            
+            <div className="flex justify-end gap-2 mt-auto">
+              <button
+                type="button"
+                onClick={() => setDeleteConfirm(null)}
+                className="py-2 px-4 border border-slate-200 text-slate-600 rounded-lg text-xs font-semibold hover:bg-slate-50 cursor-pointer transition-colors"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={confirmDelete}
+                className="py-2 px-4 bg-rose-600 text-white rounded-lg text-xs font-bold hover:bg-rose-700 cursor-pointer flex items-center gap-1 transition-colors"
+              >
+                Ya, Hapus {deleteConfirm.type}
               </button>
             </div>
           </div>

@@ -16,6 +16,7 @@ interface ExcelGridProps {
   dirtyCells?: Record<string, boolean>;
   aiModifiedStudentIds?: string[];
   onAddExportLog?: (type: 'EXCEL' | 'PDF' | 'CSV', description: string, fileName: string, studentCount: number) => void;
+  rowHeightMode?: 'compact' | 'comfortable';
 }
 
 export default function ExcelGrid({
@@ -30,6 +31,7 @@ export default function ExcelGrid({
   dirtyCells = {},
   aiModifiedStudentIds = [],
   onAddExportLog,
+  rowHeightMode = 'comfortable',
 }: ExcelGridProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [searchNis, setSearchNis] = useState('');
@@ -37,6 +39,7 @@ export default function ExcelGrid({
   const [filterCompleted, setFilterCompleted] = useState<'all' | 'completed' | 'pending'>('all');
   const [isBulkEditMode, setIsBulkEditMode] = useState(false);
   const [isFocusMode, setIsFocusMode] = useState(true);
+  const [isSortedAlphabetically, setIsSortedAlphabetically] = useState(true);
   const [checkedStudentIds, setCheckedStudentIds] = useState<Record<string, boolean>>({});
   
   const searchInputId = useId();
@@ -160,14 +163,20 @@ export default function ExcelGrid({
     }))
   ), [categories]);
 
-  // Filter students
-  const filteredStudents = useMemo(() => students.filter(student => {
-    const matchesSearch = student.name.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesNis = student.nis.includes(searchNis);
-    const matchesCompleted = filterCompleted === 'all' ? true :
-                            filterCompleted === 'completed' ? student.completed : !student.completed;
-    return matchesSearch && matchesNis && matchesCompleted;
-  }), [students, searchTerm, searchNis, filterCompleted]);
+  // Filter and sort students
+  const filteredStudents = useMemo(() => {
+    const list = students.filter(student => {
+      const matchesSearch = student.name.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchesNis = student.nis.includes(searchNis);
+      const matchesCompleted = filterCompleted === 'all' ? true :
+                              filterCompleted === 'completed' ? student.completed : !student.completed;
+      return matchesSearch && matchesNis && matchesCompleted;
+    });
+    if (isSortedAlphabetically) {
+      return [...list].sort((a, b) => a.name.localeCompare(b.name, 'id'));
+    }
+    return list;
+  }, [students, searchTerm, searchNis, filterCompleted, isSortedAlphabetically]);
 
   const rowHeight = 48;
   const overscan = 10;
@@ -386,6 +395,20 @@ export default function ExcelGrid({
           >
             <span className="text-sm">🎯</span>
             <span>{isFocusMode ? 'Edit Fokus: Aktif' : 'Edit Fokus: Pasif'}</span>
+          </button>
+
+          {/* Sorting Alphabetical Toggle */}
+          <button
+            onClick={() => setIsSortedAlphabetically(!isSortedAlphabetically)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg border transition-all cursor-pointer ${
+              isSortedAlphabetically
+                ? 'bg-emerald-600 text-white border-emerald-700 shadow-sm'
+                : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+            }`}
+            title="Mengurutkan daftar siswa secara alfabetis dari A ke Z"
+          >
+            <span className="text-sm">🔤</span>
+            <span>{isSortedAlphabetically ? 'Urut Nama: A-Z' : 'Urut Nama: Default'}</span>
           </button>
 
           {/* Export CSV Button */}
@@ -641,7 +664,7 @@ export default function ExcelGrid({
                       className={`hover:bg-slate-50 transition-all duration-300 ${isSelected && !currentlyEditingAnyone ? 'bg-emerald-50/20' : ''} ${rowDimClass}`}
                     >
                       {/* Index / Checkbox Column */}
-                      <td className="border-r border-b border-slate-200 text-center font-mono p-2 sticky left-0 bg-white z-5 font-medium min-w-[55px]">
+                      <td className={`border-r border-b border-slate-200 text-center font-mono ${rowHeightMode === 'compact' ? 'py-1 px-2' : 'p-2'} sticky left-0 bg-white z-5 font-medium min-w-[55px]`}>
                         {isBulkEditMode ? (
                           <input
                             type="checkbox"
@@ -655,7 +678,7 @@ export default function ExcelGrid({
                       </td>
 
                       {/* Student Name Key Column */}
-                      <td className={`border-r border-b border-slate-200 p-2 sticky left-[55px] bg-white z-5 font-semibold min-w-[200px] truncate`}>
+                      <td className={`border-r border-b border-slate-200 ${rowHeightMode === 'compact' ? 'py-1 px-2' : 'p-2'} sticky left-[55px] bg-white z-5 font-semibold min-w-[200px] truncate`}>
                         <button 
                           onClick={() => onSelectStudent(stud)}
                           className="text-left hover:text-emerald-700 hover:underline flex items-center justify-between w-full"
@@ -704,7 +727,7 @@ export default function ExcelGrid({
                           <td 
                             key={ind.id} 
                             onClick={() => handleCellClick(stud.id, ind.id)}
-                            className={`border-r border-b border-slate-200 p-1 text-center font-mono cursor-pointer relative transition-all min-w-[45px] ${
+                            className={`border-r border-b border-slate-200 ${rowHeightMode === 'compact' ? 'p-0.5' : 'p-1'} text-center font-mono cursor-pointer relative transition-all min-w-[45px] ${
                               isCellSelected ? 'ring-2 ring-emerald-500 z-10 bg-emerald-50' : ''
                             }`}
                           >

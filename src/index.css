@@ -55,15 +55,15 @@
   height: 297mm !important; /* A4 height */
   max-height: 297mm !important;
   overflow: hidden !important; /* Prevent any minor overflow spilling into extra pages */
-  padding: 12mm 15mm !important;
   margin: 0 auto !important;
   box-sizing: border-box !important;
   background: white !important;
   box-shadow: none !important;
   border: none !important;
   position: relative !important;
-  display: grid !important;
-  grid-template-rows: auto 1fr auto !important;
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: space-between !important;
   align-items: stretch !important;
   page-break-after: always !important;
   break-after: page !important;
@@ -79,6 +79,12 @@
 @media print {
   body.print-landscape {
     page: landscape-mode;
+  }
+
+  .print-landscape .print-page {
+    width: 297mm !important;
+    height: 209.5mm !important;
+    max-height: 209.5mm !important;
   }
 }
 
@@ -179,6 +185,10 @@
   z-index: -99999 !important;
   pointer-events: none !important;
   opacity: 1 !important;
+}
+
+#rapor-print-section.print-landscape {
+  width: 297mm !important;
 }
 
 @media print {

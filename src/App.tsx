@@ -111,6 +111,11 @@ export default function App() {
     return localStorage.getItem('rapor_high_contrast') === 'true';
   });
 
+  const [rowHeightMode, setRowHeightMode] = useState<'compact' | 'comfortable'>(() => {
+    const saved = localStorage.getItem('rapor_row_height');
+    return (saved === 'compact' || saved === 'comfortable') ? saved : 'comfortable';
+  });
+
   useEffect(() => {
     if (isHighContrast) {
       document.body.classList.add('high-contrast');
@@ -119,6 +124,10 @@ export default function App() {
     }
     localStorage.setItem('rapor_high_contrast', String(isHighContrast));
   }, [isHighContrast]);
+
+  useEffect(() => {
+    localStorage.setItem('rapor_row_height', rowHeightMode);
+  }, [rowHeightMode]);
   
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
   const [resetConfirmText, setResetConfirmText] = useState('');
@@ -1047,7 +1056,10 @@ export default function App() {
     });
 
     if (invalidStudents.length > 0) {
-      alert(`Peringatan: ${invalidStudents.length} siswa terpilih tidak memiliki data yang valid. Silakan lengkapi data siswa sebelum mencetak.`);
+      setAlert({
+        type: 'error',
+        message: `Peringatan: ${invalidStudents.length} siswa terpilih tidak memiliki data yang valid. Silakan lengkapi data siswa sebelum mencetak.`
+      });
       return;
     }
 
@@ -1962,6 +1974,8 @@ export default function App() {
               onUpdateClasses={handlePersistClasses}
               isHighContrast={isHighContrast}
               setIsHighContrast={setIsHighContrast}
+              rowHeightMode={rowHeightMode}
+              setRowHeightMode={setRowHeightMode}
             />
           </motion.div>
         )}
