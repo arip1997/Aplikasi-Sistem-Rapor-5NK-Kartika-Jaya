@@ -403,6 +403,39 @@
 
 /* CSS page counters removed as requested to rely on JavaScript-based page numbers */
 
+.high-contrast {
+  background-color: #000 !important;
+  color: #fff !important;
+}
+
+.high-contrast,
+.high-contrast body,
+.high-contrast .bg-white,
+.high-contrast .bg-slate-50,
+.high-contrast .bg-slate-100 {
+  background-color: #000 !important;
+  border-color: #fff !important;
+  color: #fff !important;
+}
+
+.high-contrast input, 
+.high-contrast select, 
+.high-contrast textarea, 
+.high-contrast button,
+.high-contrast div {
+  background-color: #222 !important;
+  color: #fff !important;
+  border-color: #fff !important;
+}
+
+.high-contrast th, 
+.high-contrast td,
+.high-contrast table {
+  border-color: #fff !important;
+  color: #fff !important;
+  background-color: #000 !important;
+}
+
 /* Indicator predicate header cell styles to prevent wrapping and ensure perfect layout */
 .indicator-predicate-header {
   white-space: nowrap !important;

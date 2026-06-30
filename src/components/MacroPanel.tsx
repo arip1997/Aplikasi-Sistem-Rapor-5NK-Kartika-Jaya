@@ -296,14 +296,15 @@ export default function MacroPanel({
       id="macro-panel" 
       className="flex flex-col gap-5 no-print bg-white p-5 rounded-xl border border-slate-200 shadow-sm h-full overflow-y-auto"
     >
-      <div>
-        <h3 className="text-xs font-bold text-slate-400 font-mono tracking-wider uppercase mb-1">
-          Excel VBA Macro Controller
-        </h3>
-        <h4 className="text-base font-bold text-slate-800 flex items-center gap-2">
-          <Cpu className="h-4 w-4 text-emerald-600 animate-pulse" /> Panel Otomasi Cerdas
-        </h4>
-        <p className="text-xs text-slate-500 mt-1">Esekusi fungsi otomatis (Macro VBA) untuk mempermudah dan mempercepat penyusunan rapor.</p>
+      {/* Ringkasan Data Kosong */}
+      <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs flex flex-col gap-2">
+        <h6 className="font-bold text-slate-700 flex items-center gap-1.5">
+          <AlertTriangle className="h-4 w-4 text-amber-500" />
+          Status Data Kelas
+        </h6>
+        <p className="text-slate-600">
+          Jumlah siswa dengan data belum lengkap: <strong className="text-rose-600">{students.filter(s => Object.keys(s.grades).length < categories.flatMap(c => c.indicators).length).length}</strong>
+        </p>
       </div>
 
       {/* MACRO 1: AI SUGGESTION & AUTOMATED GENERAL REPORT */}
@@ -370,7 +371,7 @@ export default function MacroPanel({
         ) : (
           /* Normal Controls */
           <div className="flex flex-col gap-2.5">
-            {/* Action 1: Selected Student AI */}
+        {/* Action 1: Selected Student AI */}
             <div className="bg-white border border-indigo-100 rounded-lg p-2.5 text-xs">
               <p className="text-slate-400 font-bold mb-1 font-mono text-[9px] uppercase">Pilihan 1: Murid Terpilih</p>
               {selectedStudent ? (
@@ -387,6 +388,17 @@ export default function MacroPanel({
                   >
                     <Play className="h-3 w-3 fill-white animate-pulse" />
                     {runningMacro === 'AI_GENERATOR' ? 'Menjalankan...' : 'Jalankan AI Murid Aktif'}
+                  </button>
+                  <button
+                    onClick={() => {
+                        const incomplete = students.filter(s => Object.keys(s.grades).length < categories.flatMap(c => c.indicators).length);
+                        console.log("Audit Penilaian: Siswa dengan data tidak lengkap", incomplete);
+                        // Add highlighting logic here if UI supports it, for now logging
+                        alert(`Audit Selesai: Terdapat ${incomplete.length} siswa dengan nilai tidak lengkap.`);
+                    }}
+                    className="mt-2 w-full py-2 px-3 rounded-lg text-xs font-bold bg-amber-500 hover:bg-amber-600 text-white flex items-center justify-center gap-2 cursor-pointer transition-all"
+                  >
+                    <AlertTriangle className="h-3 w-3" /> Audit Penilaian
                   </button>
                 </div>
               ) : (

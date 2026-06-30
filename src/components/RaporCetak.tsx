@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { flushSync, createPortal } from 'react-dom';
 import JSZip from 'jszip';
+import { QRCodeSVG } from 'qrcode.react';
 import { Student, Category, KopSekolah, scoreOptions } from '../types';
 import { Printer, Download, Eye, FileSpreadsheet, ArrowLeft, Heart, Award, Sparkles, FileText, Loader2, Archive, Search, Wrench, Sliders, Check, Layers, Cloud } from 'lucide-react';
 import html2pdf from 'html2pdf.js';
@@ -803,7 +804,7 @@ export default function RaporCetak({
           setRenderTrigger(prev => prev + 1);
 
           // Give a solid delay to ensure complete React state hydration and layout paint
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          await new Promise(resolve => setTimeout(resolve, 2000));
 
           const originalElement = document.getElementById('rapor-pdf-content');
           if (!originalElement) {
@@ -2719,7 +2720,7 @@ export default function RaporCetak({
                               )}
                             </div>
                             <div className="flex flex-col items-center w-full font-sans h-[1.2cm] justify-start mt-2">
-                                <div id="tanda-tangan-wali-murid" className="border-b border-black w-full min-h-[1px]"></div>
+                                <p id="tanda-tangan-wali-murid" className="font-bold text-black text-[10.5pt] text-center leading-tight select-none border-b-2 border-black pb-0.5 inline-block min-w-[5.0cm] min-h-[20px] whitespace-nowrap">&nbsp;</p>
                                 <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none whitespace-nowrap">Tanda Tangan & Nama Terang</p>
                               </div>
                           </div>
@@ -2800,7 +2801,7 @@ export default function RaporCetak({
                               )}
                             </div>
                             <div className="flex flex-col items-center w-full font-sans h-[1.2cm] justify-start mt-2">
-                                <div id="tanda-tangan-wali-murid" className="border-b border-black w-full min-h-[1px]"></div>
+                                <p id="tanda-tangan-wali-murid" className="font-bold text-black text-[10.5pt] text-center leading-tight select-none border-b-2 border-black pb-0.5 inline-block min-w-[5.0cm] min-h-[20px] whitespace-nowrap">&nbsp;</p>
                                 <p className="text-[8pt] text-slate-500 font-sans mt-1 italic select-none whitespace-nowrap">Tanda Tangan & Nama Terang</p>
                               </div>
                           </div>

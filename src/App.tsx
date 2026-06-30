@@ -107,18 +107,18 @@ export default function App() {
     wipeEmpty: false
   });
 
-  const [showFooterDate, setShowFooterDate] = useState<boolean>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('rapor_show_footer_date');
-      return saved !== null ? saved === 'true' : true;
-    }
-    return true;
+  const [isHighContrast, setIsHighContrast] = useState(() => {
+    return localStorage.getItem('rapor_high_contrast') === 'true';
   });
 
-  const handleUpdateShowFooterDate = (value: boolean) => {
-    setShowFooterDate(value);
-    localStorage.setItem('rapor_show_footer_date', String(value));
-  };
+  useEffect(() => {
+    if (isHighContrast) {
+      document.body.classList.add('high-contrast');
+    } else {
+      document.body.classList.remove('high-contrast');
+    }
+    localStorage.setItem('rapor_high_contrast', String(isHighContrast));
+  }, [isHighContrast]);
   
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
   const [resetConfirmText, setResetConfirmText] = useState('');
@@ -1960,8 +1960,8 @@ export default function App() {
               selectedClass={selectedClass}
               classes={classes}
               onUpdateClasses={handlePersistClasses}
-              showFooterDate={showFooterDate}
-              onUpdateShowFooterDate={handleUpdateShowFooterDate}
+              isHighContrast={isHighContrast}
+              setIsHighContrast={setIsHighContrast}
             />
           </motion.div>
         )}
@@ -2014,8 +2014,6 @@ export default function App() {
                   setSelectedStudentId(firstStud.id);
                 }
               }}
-              showFooterDate={showFooterDate}
-              onUpdateShowFooterDate={handleUpdateShowFooterDate}
             />
           </motion.div>
         )}

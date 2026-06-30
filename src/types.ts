@@ -16,6 +16,7 @@ export interface KopSekolah {
   namaKepalaSekolah?: string;
   nipKepalaSekolah?: string;
   showPageNumbering?: boolean;
+  templateNotes?: string[];
 }
 
 export interface ScoreOption {

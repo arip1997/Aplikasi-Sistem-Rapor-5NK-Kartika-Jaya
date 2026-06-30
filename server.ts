@@ -156,8 +156,16 @@ Kembalikan HANYA teks JSON murni tanpa menyertakan blok kode markdown seperti \`
       }
     }
   } catch (error: any) {
-    console.error('Error generating AI comments:', error);
-    res.status(500).json({ error: error.message || 'Error occurred during AI generation' });
+    console.error('Error generating AI comments (API failure):', error.message || error);
+    
+    // Fallback gracefully on any error, especially rate limits (429)
+    console.log("Falling back to local rule-based comment generator due to API error.");
+    const local = generateLocalComments(studentName, gender, grades);
+    res.json({
+      ...local,
+      aiError: error.message || 'API Error',
+      aiUsed: false
+    });
   }
 });
 

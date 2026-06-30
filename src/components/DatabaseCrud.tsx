@@ -44,6 +44,8 @@ interface DatabaseCrudProps {
   onUpdateClasses: (classes: string[]) => void;
   showFooterDate?: boolean;
   onUpdateShowFooterDate?: (value: boolean) => void;
+  isHighContrast: boolean;
+  setIsHighContrast: (value: boolean) => void;
 }
 
 export default function DatabaseCrud({
@@ -60,6 +62,8 @@ export default function DatabaseCrud({
   onUpdateClasses,
   showFooterDate = true,
   onUpdateShowFooterDate,
+  isHighContrast,
+  setIsHighContrast,
 }: DatabaseCrudProps) {
   const [activeSubTab, setActiveSubTab] = useState<'siswa' | 'guru' | 'indikator' | 'kop' | 'backup' | 'riwayat'>('siswa');
   const [changeLogs, setChangeLogs] = useState<ChangeLog[]>([]);
@@ -88,6 +92,20 @@ export default function DatabaseCrud({
   const [backupPassword, setBackupPassword] = useState('');
   const [restorePassword, setRestorePassword] = useState('');
   const jsonFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Daily Backup
+  useEffect(() => {
+    const lastBackupTime = localStorage.getItem('rapor_last_backup_time');
+    const now = Date.now();
+    const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
+
+    if (!lastBackupTime || now - parseInt(lastBackupTime) > TWENTY_FOUR_HOURS) {
+      // Trigger backup
+      exportLocalJsonBackup(students, teachers, categories, kopSekolah, classes);
+      localStorage.setItem('rapor_last_backup_time', now.toString());
+      console.log('Automated daily backup triggered.');
+    }
+  }, []);
 
   // Kop Sekolah Edit State
   const [editKop, setEditKop] = useState<KopSekolah>(kopSekolah);
@@ -1516,6 +1534,18 @@ export default function DatabaseCrud({
                 </div>
               </div>
 
+              {/* Template Catatan */}
+              <div className="flex flex-col gap-1.5 text-xs sm:col-span-2 border-t border-slate-200 pt-4 mt-2">
+                <label className="font-bold text-slate-700 uppercase tracking-wider text-xs">Template Catatan (Pisahkan dengan koma)</label>
+                <textarea
+                  value={editKop.templateNotes?.join(', ') || ''}
+                  onChange={(e) => setEditKop({ ...editKop, templateNotes: e.target.value.split(',').map(s => s.trim()) })}
+                  rows={3}
+                  placeholder="Contoh: Sangat Baik, Perlu Bimbingan, Pertahankan Prestasi"
+                  className="bg-white border border-slate-300 rounded-lg p-2.5 font-sans"
+                />
+              </div>
+
               {/* Tanda Tangan Digital Guru / Orang Tua */}
               <div className="flex flex-col gap-1.5 text-xs sm:col-span-2 border-t border-slate-200 pt-4 mt-2">
                 <label className="font-bold text-slate-700 uppercase tracking-wider text-xs">Tanda Tangan Digital (Opsional)</label>
@@ -1690,6 +1720,23 @@ export default function DatabaseCrud({
                   type="checkbox"
                   checked={editKop.showPageNumbering ?? true}
                   onChange={(e) => setEditKop({ ...editKop, showPageNumbering: e.target.checked })}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+              </label>
+            </div>
+
+            {/* High Contrast Theme Toggle */}
+            <div className="mt-4 p-4 bg-white border border-slate-200 rounded-xl flex items-center justify-between">
+              <div>
+                <h5 className="font-bold text-slate-700 text-xs">Tema High Contrast</h5>
+                <p className="text-[11px] text-slate-400 mt-0.5">Meningkatkan keterbacaan teks dan tabel untuk kenyamanan visual.</p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={isHighContrast}
+                  onChange={(e) => setIsHighContrast(e.target.checked)}
                   className="sr-only peer"
                 />
                 <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
