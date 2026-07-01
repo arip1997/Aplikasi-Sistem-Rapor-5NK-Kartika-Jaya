@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import * as XLSX from 'xlsx';
 import { Student, Teacher, Category, Indicator, ScoreKey, KopSekolah } from '../types';
 import { SCHOOL_CLASSES, DEFAULT_KOP } from '../data';
-import { exportDatabaseBackupConfig, parseExcelDatabase, uploadExcelToGoogleDrive, encryptData, decryptData, addChangeLog, getChangeLogs, clearChangeLogs, deleteChangeLog, exportLocalJsonBackup, ChangeLog, formatProperName, runIntegrityCheck, IntegrityReport } from '../utils';
+import { exportDatabaseBackupConfig, parseExcelDatabase, uploadExcelToGoogleDrive, encryptData, decryptData, addChangeLog, getChangeLogs, clearChangeLogs, deleteChangeLog, exportLocalJsonBackup, ChangeLog, formatProperName, runIntegrityCheck, IntegrityReport, fixIntegrity, exportAllStudentsToCsv } from '../utils';
 import { normalizeAllData, hasValidAcademicTitle } from '../normalization';
 import { initAuth, googleSignIn, getAccessToken, logout } from '../firebase';
 import { 
@@ -29,7 +29,9 @@ import {
   History,
   RotateCcw,
   SpellCheck,
-  AlertCircle
+  AlertCircle,
+  Camera,
+  Database
 } from 'lucide-react';
 
 interface DatabaseCrudProps {
@@ -88,6 +90,7 @@ export default function DatabaseCrud({
 
   const [yayasanWaliFilter, setYayasanWaliFilter] = useState('');
   const [yayasanCabangFilter, setYayasanCabangFilter] = useState(kopSekolah.cabang || '');
+  const [repairLogs, setRepairLogs] = useState<string[] | null>(null);
 
   const handleCreateSnapshot = () => {
     if (!snapshotLabel.trim()) {
@@ -117,6 +120,18 @@ export default function DatabaseCrud({
       `Membuat snapshot manual: "${newSnap.label}" dengan ${newSnap.studentsCount} siswa`
     );
     alert(`Snapshot "${newSnap.label}" berhasil dibuat secara lokal!`);
+  };
+
+  const handleExecuteProactiveRepair = () => {
+    const res = fixIntegrity(students, teachers, categories, classes);
+    onUpdateStudents(res.fixedStudents);
+    onUpdateTeachers(res.fixedTeachers);
+    onUpdateClasses(res.fixedClasses);
+    setRepairLogs(res.repairLogs);
+    addChangeLog(
+      'PERBAIKI INTEGRITAS',
+      `Menjalankan pembersihan integritas database: berhasil memproses tindakan perbaikan secara cerdas.`
+    );
   };
 
   const handleRestoreSnapshot = (snap: any) => {
@@ -401,6 +416,15 @@ export default function DatabaseCrud({
 
     // 🛡   Integritas Data: NIS wajib diisi
     const normalizedNis = (newSiswa.nis || '').trim();
+    
+    // 🛡 Validasi duplikat NIS
+    if (normalizedNis && normalizedNis !== '-') {
+      const isDuplicate = students.some(s => s.nis === normalizedNis && (!editingSiswa || s.id !== editingSiswa.id));
+      if (isDuplicate) {
+        alert(`Gagal menyimpan data! NIS "${normalizedNis}" sudah terdaftar pada siswa lain di database.\nSetiap murid harus memiliki NIS unik.`);
+        return;
+      }
+    }
 
     if (editingSiswa) {
       // Update existing
@@ -544,6 +568,15 @@ export default function DatabaseCrud({
     if (cleanedNip && cleanedNip !== '-' && !/^\d{18}$/.test(cleanedNip)) {
       alert('VALIDASI GAGAL:\nFormat NIP Guru salah! Nomor Induk Pegawai (NIP) bagi PNS di Indonesia harus tepat terdiri dari 18 digit angka.\n\nContoh format baku: 198203112009121002\n(Arti: Lahir 11-03-1982, Pengangkatan 12-2009, Gender Laki-laki [1], Nomor Urut 002)');
       return;
+    }
+    
+    // 🛡 Validasi duplikat NIP
+    if (cleanedNip && cleanedNip !== '-') {
+      const isDuplicate = teachers.some(t => t.nip?.replace(/\s+/g, '') === cleanedNip && (!editingGuru || t.id !== editingGuru.id));
+      if (isDuplicate) {
+        alert(`Gagal menyimpan data! NIP "${cleanedNip}" sudah digunakan oleh guru lain di database.\nSetiap NIP harus bersifat unik.`);
+        return;
+      }
     }
 
     if (editingGuru) {
@@ -1208,12 +1241,20 @@ export default function DatabaseCrud({
 
           <span className="text-[10px] font-bold text-slate-400 mr-1 hidden sm:inline">BACKUP:</span>
 
-          <button 
+           <button 
             onClick={handleExportDatabase}
             className="flex items-center gap-1 text-[11px] font-bold bg-indigo-50 border border-indigo-200 text-indigo-700 px-2.5 py-1.5 rounded-lg hover:bg-indigo-100 transition-colors shadow-xs cursor-pointer"
             title="Download Master database rekap dalam format Excel"
           >
             <Download className="h-3 w-3" /> Backup Lokal
+          </button>
+          
+          <button 
+            onClick={() => exportAllStudentsToCsv(students, categories)}
+            className="flex items-center gap-1 text-[11px] font-bold bg-teal-50 border border-teal-200 text-teal-850 px-2.5 py-1.5 rounded-lg hover:bg-teal-100 transition-colors shadow-xs cursor-pointer"
+            title="Download rekap data mentah seluruh siswa ke format CSV untuk aplikasi pihak ketiga"
+          >
+            <Download className="h-3 w-3 text-teal-600" /> Ekspor CSV
           </button>
           
           <button 
@@ -1273,6 +1314,30 @@ export default function DatabaseCrud({
               >
                 <Building2 className="h-4 w-4" /> Tambah Kelas
               </button>
+            </div>
+          </div>
+          
+          {/* INFO GRAPHIC / GUIDE FOR SISWA */}
+          <div className="mx-4 mt-3 bg-gradient-to-r from-indigo-50/70 to-blue-50/40 border border-indigo-100 rounded-xl p-3 flex gap-3 items-start no-print text-xs text-indigo-950 leading-relaxed shadow-2xs">
+            <div className="bg-indigo-600 text-white p-1.5 rounded-lg shrink-0">
+              <Users className="h-4 w-4" />
+            </div>
+            <div>
+              <span className="font-extrabold text-indigo-950 block text-[11px] uppercase tracking-wider">💡 PANDUAN MANAJEMEN SISWA KELAS {selectedClass}</span>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-1.5 font-medium text-slate-600 text-[11px]">
+                <div>
+                  <span className="font-bold text-indigo-800 block">1. TAMBAH / EDIT DATA ✏️</span>
+                  Klik <strong className="text-indigo-950">"Tambah Siswa"</strong> untuk murid tunggal. Untuk mengubah data (NIS, Nama, L/P), silakan klik tombol edit di sebelah kanan baris siswa bersangkutan.
+                </div>
+                <div>
+                  <span className="font-bold text-indigo-800 block">2. RAPIKAN NAMA ⚡</span>
+                  Gunakan tombol <strong className="text-indigo-950">"Batch Normalization"</strong> untuk mengoreksi penulisan nama massal menjadi format huruf kapital kata depan yang formal secara otomatis.
+                </div>
+                <div>
+                  <span className="font-bold text-indigo-800 block">3. HAPUS MASSAL 🗑️</span>
+                  Centang nama siswa pada tabel, lalu klik <strong className="text-indigo-950">"Hapus Terpilih"</strong> untuk membersihkan data beberapa siswa sekaligus dengan cepat.
+                </div>
+              </div>
             </div>
           </div>
           
@@ -1427,6 +1492,30 @@ export default function DatabaseCrud({
               </button>
             </div>
           </div>
+          
+          {/* INFO GRAPHIC / GUIDE FOR GURU */}
+          <div className="mx-4 mt-3 bg-gradient-to-r from-emerald-50/70 to-teal-50/40 border border-emerald-100 rounded-xl p-3 flex gap-3 items-start no-print text-xs text-emerald-950 leading-relaxed shadow-2xs">
+            <div className="bg-emerald-600 text-white p-1.5 rounded-lg shrink-0">
+              <Users className="h-4 w-4" />
+            </div>
+            <div>
+              <span className="font-extrabold text-emerald-950 block text-[11px] uppercase tracking-wider">💡 PANDUAN MANAJEMEN GURU & STAF</span>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-1.5 font-medium text-slate-600 text-[11px]">
+                <div>
+                  <span className="font-bold text-emerald-800 block">1. ROLE WALI KELAS 👩‍🏫</span>
+                  Guru yang memegang peran <strong className="text-emerald-950">"Wali Kelas"</strong> wajib diisi kolom alokasi kelasnya (misal: "X-1") agar sinkron dengan daftar murid yang mereka ampu.
+                </div>
+                <div>
+                  <span className="font-bold text-emerald-800 block">2. INFORMASI NIP 📝</span>
+                  Pastikan NIP diisi dengan benar karena NIP guru akan secara otomatis ditarik dan dicetak pada bagian tanda tangan lembar Rapor cetak siswa.
+                </div>
+                <div>
+                  <span className="font-bold text-emerald-800 block">3. FILTER & CARI 🔍</span>
+                  Gunakan kolom pencarian di sebelah kanan atas untuk memfilter daftar guru berdasarkan Nama atau NIP secara seketika ketika database semakin membesar.
+                </div>
+              </div>
+            </div>
+          </div>
 
           <div className="flex-1 overflow-auto max-h-[450px]">
             <table className="w-full text-left text-xs border-collapse">
@@ -1507,6 +1596,30 @@ export default function DatabaseCrud({
             </h4>
             <p className="text-xs text-slate-400 mt-0.5">Edit kalimat deskripsi penilaian atau tambahkan kriteria baru untuk dicetak di Rapor 5NK</p>
           </div>
+          
+          {/* INFO GRAPHIC / GUIDE FOR INDIKATOR */}
+          <div className="mb-6 bg-gradient-to-r from-amber-50/70 to-orange-50/40 border border-amber-200 rounded-xl p-3 flex gap-3 items-start no-print text-xs text-amber-950 leading-relaxed shadow-2xs max-w-4xl">
+            <div className="bg-amber-600 text-white p-1.5 rounded-lg shrink-0">
+              <Award className="h-4 w-4" />
+            </div>
+            <div>
+              <span className="font-extrabold text-amber-950 block text-[11px] uppercase tracking-wider">💡 PANDUAN PENGATURAN RUBRIK KARAKTER 5NK</span>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-1.5 font-medium text-slate-600 text-[11px]">
+                <div>
+                  <span className="font-bold text-amber-800 block">1. PILAR KARAKTER (KARTIKA) 🌟</span>
+                  Terdapat 5 Nilai Utama (Cinta Tanah Air, Disiplin, Berbudi Luhur, Cerdas, Terampil). Masing-masing memiliki sub-indikator tersendiri untuk dinilai di Rapor.
+                </div>
+                <div>
+                  <span className="font-bold text-amber-800 block">2. MENYESUAIKAN KALIMAT ✍️</span>
+                  Klik tombol ✏️ di sebelah kanan baris sub-indikator untuk mengubah kalimat deskripsi agar sesuai dengan indikator pencapaian kurikulum terbaru.
+                </div>
+                <div>
+                  <span className="font-bold text-amber-800 block">3. NILAI YANG DIDUKUNG 📊</span>
+                  Setiap indikator akan dinilai menggunakan predikat standar: <strong className="text-amber-950">BSB</strong> (Berkembang Sangat Baik), <strong className="text-amber-950">BHD</strong> (Berkembang), <strong className="text-amber-950">MB</strong> (Mulai Berkembang), atau <strong className="text-amber-950">BB</strong> (Belum Berkembang).
+                </div>
+              </div>
+            </div>
+          </div>
 
           <div className="flex flex-col gap-8">
             {categories.map((cat) => (
@@ -1572,6 +1685,30 @@ export default function DatabaseCrud({
               Pengaturan Profil & Kop Sekolah
             </h4>
             <p className="text-xs text-slate-400 mt-0.5">Informasi di bawah ini akan memengaruhi kop/header hasil cetak rapor 5NK.</p>
+          </div>
+          
+          {/* INFO GRAPHIC / GUIDE FOR KOP */}
+          <div className="mb-6 bg-gradient-to-r from-blue-50/70 to-indigo-50/40 border border-blue-200 rounded-xl p-3 flex gap-3 items-start no-print text-xs text-blue-950 leading-relaxed shadow-2xs max-w-2xl">
+            <div className="bg-blue-600 text-white p-1.5 rounded-lg shrink-0">
+              <Building2 className="h-4 w-4" />
+            </div>
+            <div>
+              <span className="font-extrabold text-blue-955 block text-[11px] uppercase tracking-wider">💡 PANDUAN PENGATURAN PROFIL & KOP SEKOLAH</span>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-1.5 font-medium text-slate-600 text-[11px]">
+                <div>
+                  <span className="font-bold text-blue-800 block">1. IDENTITAS SEKOLAH 🏢</span>
+                  Masukkan nama yayasan, nama sekolah, kota koordinator pelaksana, dan alamat lengkap untuk kop hasil cetak rapor resmi.
+                </div>
+                <div>
+                  <span className="font-bold text-blue-800 block">2. TANDA TANGAN DIGITAL ✍️</span>
+                  Sediakan URL gambar tanda tangan transparan untuk Wali Kelas, Kepala Sekolah, dan Orang Tua agar langsung tersemat di berkas PDF.
+                </div>
+                <div>
+                  <span className="font-bold text-blue-800 block">3. LOGO SEKOLAH 🎨</span>
+                  Tempelkan URL gambar logo sekolah (format PNG transparan direkomendasikan) agar terpasang secara simetris di sisi kiri kop surat.
+                </div>
+              </div>
+            </div>
           </div>
 
           <form onSubmit={(e) => {
@@ -2080,15 +2217,44 @@ export default function DatabaseCrud({
       {/* -------------------- SUBTAB 5: BACKUP & ENKRIPSI -------------------- */}
       {activeSubTab === 'backup' && (
         <div className="flex-1 overflow-y-auto p-6 max-h-[500px]">
-          <div className="mb-6">
-            <h4 className="font-bold text-slate-800 text-sm flex items-center gap-2">
-              <Lock className="h-4 w-4 text-emerald-600" />
-              Keamanan Data Offline & Encrypted JSON Backup
-            </h4>
-            <p className="text-xs text-slate-400 mt-0.5">Guru dapat mengunduh seluruh data aplikasi (Siswa, Guru, Nilai, Kategori) dalam format JSON terenkripsi agar aman disimpan secara fisik/perangkat offline.</p>
+          {/* INFO GRAPHIC / GUIDE FOR BACKUP & SECURITY */}
+          <div className="mb-6 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100 rounded-2xl p-5 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+            <div className="flex items-start gap-4">
+              <div className="bg-indigo-600 text-white p-3 rounded-xl shadow-md shrink-0">
+                <Lock className="h-6 w-6 animate-pulse" />
+              </div>
+              <div>
+                <h5 className="font-extrabold text-indigo-950 text-xs uppercase tracking-wider">Keamanan & Panduan Backup Sistem Rapor 5NK</h5>
+                <p className="text-xs text-indigo-850 leading-relaxed max-w-3xl mt-1">
+                  Database Rapor 5NK tersimpan seutuhnya dalam memori internal browser Anda secara luring. Untuk menjaga agar kerja keras Anda tidak hilang akibat terhapusnya cache browser, biasakan melakukan pencadangan secara berkala.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4 text-[11px] text-indigo-900 font-semibold">
+                  <div className="bg-white/70 p-2.5 rounded-xl border border-indigo-200/50">
+                    <span className="text-indigo-850 block font-black mb-0.5">🔐 BACKUP TERENKRIPSI</span>
+                    Sandi rahasia mengunci berkas JSON agar data pribadi murid aman dari pihak yang tidak bertanggung jawab.
+                  </div>
+                  <div className="bg-white/70 p-2.5 rounded-xl border border-indigo-200/50">
+                    <span className="text-indigo-850 block font-black mb-0.5">📂 REKAP CSV MENTAH</span>
+                    Ekspor dalam format Comma-Separated (.csv) agar mudah diolah di Excel, Google Sheets, atau aplikasi Dapodik.
+                  </div>
+                  <div className="bg-white/70 p-2.5 rounded-xl border border-indigo-200/50">
+                    <span className="text-indigo-850 block font-black mb-0.5">⚡ RESTORASI INSTAN</span>
+                    Cukup unggah file backup JSON Anda dan masukkan sandi pemulihan untuk memulihkan seluruh sistem seketika.
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl">
+          <div className="mb-6">
+            <h4 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+              <Lock className="h-4 w-4 text-indigo-600" />
+              Keamanan Data Offline & Multi-Format Backup
+            </h4>
+            <p className="text-xs text-slate-400 mt-0.5">Guru dapat mengunduh seluruh data aplikasi (Siswa, Guru, Nilai, Kategori) dalam format terenkripsi atau data rekap mentah (.csv) untuk keperluan pengolahan data eksternal.</p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-6xl">
             {/* CARD 1: EXPORT ENCRYPTED BACKUP */}
             <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 flex flex-col justify-between">
               <div>
@@ -2264,6 +2430,33 @@ export default function DatabaseCrud({
                 </button>
               </div>
             </div>
+
+            {/* CARD 3: EXPORT RAW CSV */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-5 flex flex-col justify-between">
+              <div>
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="bg-teal-50 p-1.5 rounded-lg border border-teal-200">
+                    <Download className="h-4 w-4 text-teal-700" />
+                  </div>
+                  <h5 className="font-bold text-slate-700 text-xs font-black uppercase">Ekspor Rekap CSV Mentah</h5>
+                </div>
+                <p className="text-[11px] text-slate-500 leading-relaxed mb-4">
+                  Unduh rekapitulasi data mentah seluruh siswa dari semua kelas dalam format <strong>CSV (Comma-Separated Values)</strong> yang terstandar. Sangat kompatibel untuk diintegrasikan dengan aplikasi pihak ketiga seperti sistem dapodik, spreadsheet eksternal, atau analisis nilai yayasan.
+                </p>
+                <div className="p-2.5 bg-teal-50/50 border border-teal-100 rounded-lg text-[10px] text-teal-850 font-bold mb-4">
+                  📌 Format ini menggunakan pemisah koma (,) dan dilengkapi penanda UTF-8 BOM untuk kompatibilitas penuh saat dibuka di Microsoft Excel maupun Google Sheets.
+                </div>
+              </div>
+
+              <div>
+                <button
+                  onClick={() => exportAllStudentsToCsv(students, categories)}
+                  className="w-full py-2 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-lg text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors shadow-xs"
+                >
+                  <Download className="h-3.5 w-3.5" /> Ekspor Seluruh Siswa (.csv)
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -2382,6 +2575,35 @@ export default function DatabaseCrud({
       {/* -------------------- SUBTAB 7: SNAPSHOT MANUAL & EKSPOR YAYASAN -------------------- */}
       {activeSubTab === 'snapshot' && (
         <div className="flex-1 overflow-y-auto p-6 max-h-[500px]">
+          {/* INFOGRAFIS PANDUAN SNAPSHOT MANUAL */}
+          <div className="mb-6 bg-gradient-to-r from-teal-50 to-emerald-50 border border-emerald-200 rounded-2xl p-5 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+            <div className="flex items-start gap-4">
+              <div className="bg-emerald-600 text-white p-3 rounded-xl shadow-md shrink-0">
+                <Camera className="h-6 w-6 animate-pulse" />
+              </div>
+              <div>
+                <h5 className="font-extrabold text-emerald-950 text-xs uppercase tracking-wider">Panduan Snapshot Manual (Cadangan Titik Waktu Seketika)</h5>
+                <p className="text-xs text-emerald-800 leading-relaxed max-w-3xl mt-1">
+                  Fitur <strong>Snapshot</strong> bertindak seperti mesin waktu lokal untuk seluruh database Rapor 5NK Anda. Sistem menyimpan "titik pemulihan" aman di dalam memori luring browser Anda secara instan tanpa membutuhkan koneksi internet.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4 text-[11px] text-emerald-900 font-semibold">
+                  <div className="bg-white/70 p-2.5 rounded-xl border border-emerald-200/50">
+                    <span className="text-emerald-700 block font-black mb-0.5">1. AMBIL CAPTURE 📸</span>
+                    Ketik label penanda (contoh: "Sebelum Generate Deskripsi AI") lalu klik tombol Ambil Snapshot.
+                  </div>
+                  <div className="bg-white/70 p-2.5 rounded-xl border border-emerald-200/50">
+                    <span className="text-emerald-700 block font-black mb-0.5">2. AMAN BEREKSPERIMEN 🧪</span>
+                    Silakan melakukan edit massal, impor data excel baru, atau uji coba ulasan AI dengan ketenangan penuh.
+                  </div>
+                  <div className="bg-white/70 p-2.5 rounded-xl border border-emerald-200/50">
+                    <span className="text-emerald-700 block font-black mb-0.5">3. PULIHKAN SEKETIKA ⏱️</span>
+                    Jika terjadi kesalahan entri data, cukup klik tombol "Pulihkan" untuk mengembalikan database seperti semula.
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             
             {/* Kiri: Buat Snapshot Baru */}
@@ -2514,15 +2736,82 @@ export default function DatabaseCrud({
         return (
           <div className="flex-1 overflow-y-auto p-6 max-h-[500px]">
             <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col gap-6">
-              <div>
-                <h4 className="font-extrabold text-slate-800 text-xs uppercase tracking-wider text-slate-700 mb-1 flex items-center gap-2">
-                  🔍 Laporan Integritas & Validasi Konsistensi Data
-                </h4>
-                <p className="text-xs text-slate-400">
-                  Sistem memeriksa konsistensi rujukan data secara mendalam antara Daftar Siswa, Data Guru / Wali Kelas, dan Kategori Indikator Penilaian.
-                </p>
+              
+              {/* Header Tab */}
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-slate-100 pb-5">
+                <div>
+                  <h4 className="font-extrabold text-slate-800 text-sm uppercase tracking-wider text-emerald-800 mb-1 flex items-center gap-2">
+                    🔍 Cek & Bersihkan Integritas Database Rapor
+                  </h4>
+                  <p className="text-xs text-slate-400">
+                    Sistem mendeteksi, menormalkan, dan menyambungkan kembali hubungan data yang terputus antara tabel Siswa, Wali Kelas, dan indikator penilaian secara otomatis.
+                  </p>
+                </div>
+
+                <div className="flex-none">
+                  <button
+                    onClick={handleExecuteProactiveRepair}
+                    className="w-full md:w-auto bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold px-4 py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 shadow-xs transition-all active:scale-95 cursor-pointer"
+                  >
+                    ⚡ Jalankan Pembersihan & Perbaikan Otomatis
+                  </button>
+                </div>
               </div>
 
+              {/* PANDUAN INFOGRAFIS UNTUK GURU */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="bg-emerald-50/50 border border-emerald-100 rounded-2xl p-4 flex flex-col gap-2">
+                  <div className="text-emerald-700 text-xs font-bold flex items-center gap-1.5">
+                    💡 Cara Kerja Relasi Data
+                  </div>
+                  <p className="text-[11px] text-slate-600 leading-relaxed">
+                    Setiap murid merujuk ke suatu <strong>Nama Kelas</strong>. Supaya tanda tangan wali kelas muncul otomatis di lembar cetak, nama kelas murid harus cocok persis dengan kelas yang diampu guru Wali Kelas.
+                  </p>
+                </div>
+                <div className="bg-blue-50/50 border border-blue-100 rounded-2xl p-4 flex flex-col gap-2">
+                  <div className="text-blue-700 text-xs font-bold flex items-center gap-1.5">
+                    ⚙️ Apa yang Diperbaiki?
+                  </div>
+                  <p className="text-[11px] text-slate-600 leading-relaxed">
+                    Fitur perbaikan otomatis akan <strong>menormalkan ejaan kelas</strong>, menugaskan wali kelas kosong untuk murid tanpa wali, membuat guru wali kelas bayangan (placeholder) jika belum ada, serta membersihkan nilai sampah.
+                  </p>
+                </div>
+                <div className="bg-purple-50/50 border border-purple-100 rounded-2xl p-4 flex flex-col gap-2">
+                  <div className="text-purple-700 text-xs font-bold flex items-center gap-1.5">
+                    🛡️ Keamanan Snapshot
+                  </div>
+                  <p className="text-[11px] text-slate-600 leading-relaxed">
+                    Kami merekomendasikan guru membuat <strong>Snapshot Manual</strong> di tab sebelah sebelum melakukan operasi pembersihan massal, sebagai titik restorasi instan jika ada kesalahan pengerjaan.
+                  </p>
+                </div>
+              </div>
+
+              {/* Hasil Eksekusi Perbaikan Terakhir */}
+              {repairLogs && (
+                <div className="bg-slate-50 border border-slate-200 p-5 rounded-2xl flex flex-col gap-3">
+                  <div className="flex items-center justify-between">
+                    <h5 className="font-extrabold text-slate-800 text-xs uppercase tracking-wider flex items-center gap-1.5 text-emerald-800">
+                      🛠️ Hasil Pembersihan Database Terakhir
+                    </h5>
+                    <button 
+                      onClick={() => setRepairLogs(null)} 
+                      className="text-[10px] text-slate-400 hover:text-slate-600 font-bold cursor-pointer"
+                    >
+                      Sembunyikan Log
+                    </button>
+                  </div>
+                  <div className="space-y-1.5 max-h-[150px] overflow-y-auto bg-white border border-slate-200/80 p-3 rounded-xl font-mono text-[10px] text-slate-600">
+                    {repairLogs.map((log, idx) => (
+                      <div key={idx} className="flex items-start gap-1.5 border-b border-slate-50 pb-1 last:border-0 last:pb-0">
+                        <span className="text-emerald-500 flex-none">[SUCCESS]</span>
+                        <span>{log}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Status Ringkasan */}
               {report.isValid ? (
                 <div className="bg-emerald-50 border border-emerald-200 p-5 rounded-2xl flex items-start gap-4">
                   <div className="bg-emerald-500 text-white p-2 rounded-xl flex-none">
@@ -2542,8 +2831,8 @@ export default function DatabaseCrud({
                   </div>
                   <div className="flex-1">
                     <h5 className="font-extrabold text-amber-800 text-xs uppercase tracking-wider mb-1">⚠️ Ditemukan Masalah Konsistensi Data ({report.brokenStudentClasses.length + report.brokenGradeIndicators.length + report.unassignedClasses.length} konflik)</h5>
-                    <p className="text-xs text-amber-700 leading-relaxed font-semibold">
-                      Harap perbaiki beberapa referensi di bawah ini untuk memastikan tidak terjadi malfungsi ketika mencetak atau melakukan ekspor rapor.
+                    <p className="text-xs text-amber-700 leading-relaxed font-semibold mb-2">
+                      Daftar rujukan di bawah ini terputus. Anda bisa memperbaikinya satu per satu atau klik tombol perbaikan otomatis di kanan atas untuk menyelesaikannya dalam 1 detik.
                     </p>
                   </div>
                 </div>
@@ -2564,7 +2853,7 @@ export default function DatabaseCrud({
                         {report.brokenStudentClasses.map((item, idx) => (
                           <div key={idx} className="p-2.5 bg-white border border-slate-200 rounded-xl text-[11px] leading-relaxed">
                             <p className="font-extrabold text-slate-800">{item.studentName}</p>
-                            <p className="text-slate-400 font-mono">ID: {item.studentId}</p>
+                            <p className="text-slate-400 font-mono text-[10px]">ID: {item.studentId}</p>
                             <div className="mt-1 flex items-center justify-between">
                               <span className="text-[10px] bg-rose-50 text-rose-700 font-bold px-1.5 py-0.5 rounded-md">
                                 Kelas: {item.class}
@@ -2589,7 +2878,7 @@ export default function DatabaseCrud({
                         {report.brokenGradeIndicators.map((item, idx) => (
                           <div key={idx} className="p-2.5 bg-white border border-slate-200 rounded-xl text-[11px] leading-relaxed">
                             <p className="font-extrabold text-slate-800">{item.studentName}</p>
-                            <p className="text-slate-400 font-mono">Indikator ID: <strong className="text-rose-600 font-mono">{item.indicatorId}</strong></p>
+                            <p className="text-slate-400 font-mono text-[10px]">Indikator ID: <strong className="text-rose-600 font-mono">{item.indicatorId}</strong></p>
                             <p className="text-[10px] text-slate-400 leading-snug mt-1 italic">Indikator tidak ada di Kategori 5NK.</p>
                           </div>
                         ))}

@@ -240,7 +240,7 @@ export default function UserGuideModal({ isOpen, onClose }: UserGuideModalProps)
                 </div>
                 <div className="p-3 bg-white border border-slate-150 rounded-xl flex items-center justify-between">
                   <div>
-                    <p className="text-[10px] text-slate-400 font-bold uppercase">Admin Operator</p>
+                    <p className="text-[10px] text-slate-400 font-bold uppercase">ADMIN RAPOR 5NK</p>
                     <p className="text-xs font-extrabold text-slate-800">+62 895-3666-08358</p>
                   </div>
                   <span className="text-[9px] bg-emerald-100 text-emerald-800 font-extrabold px-2 py-0.5 rounded-md">Jam Kerja</span>

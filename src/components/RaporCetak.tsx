@@ -92,6 +92,29 @@ export default function RaporCetak({
   const [marginRight, setMarginRight] = useState(15);
   const [showAutoTimeFooter, setShowAutoTimeFooter] = useState(showFooterDate);
 
+  const [paperSize, setPaperSize] = useState<'A4' | 'F4'>(() => {
+    const saved = localStorage.getItem('rapor_5nk_paper_size');
+    return (saved as 'A4' | 'F4') || 'A4';
+  });
+
+  const handleUpdatePaperSize = (size: 'A4' | 'F4') => {
+    setPaperSize(size);
+    localStorage.setItem('rapor_5nk_paper_size', size);
+  };
+
+  const totalIndicators = categories.reduce((sum, cat) => sum + cat.indicators.length, 0);
+
+  const getInitialLandscape = () => {
+    if (kopSekolah.forcedOrientation === 'portrait') return false;
+    if (kopSekolah.forcedOrientation === 'landscape') return true;
+    return totalIndicators > 6;
+  };
+
+  const [isLandscape, setIsLandscape] = useState(getInitialLandscape());
+
+  const paperWidth = paperSize === 'F4' ? (isLandscape ? 330 : 215) : (isLandscape ? 297 : 210);
+  const paperHeight = paperSize === 'F4' ? (isLandscape ? 215 : 330) : (isLandscape ? 210 : 297);
+
   useEffect(() => {
     setShowAutoTimeFooter(showFooterDate);
   }, [showFooterDate]);
@@ -109,16 +132,6 @@ export default function RaporCetak({
   const [selectedNisList, setSelectedNisList] = useState<string[]>([student.nis]);
   // Currently displayed student in on-screen Mock Preview
   const [previewNis, setPreviewNis] = useState<string>(student.nis);
-
-  const totalIndicators = categories.reduce((sum, cat) => sum + cat.indicators.length, 0);
-  
-  const getInitialLandscape = () => {
-    if (kopSekolah.forcedOrientation === 'portrait') return false;
-    if (kopSekolah.forcedOrientation === 'landscape') return true;
-    return totalIndicators > 6;
-  };
-
-  const [isLandscape, setIsLandscape] = useState(getInitialLandscape());
 
   useEffect(() => {
     if (kopSekolah.forcedOrientation === 'portrait') {
@@ -672,7 +685,7 @@ export default function RaporCetak({
           : defaultFilename;
 
         console.log(`[PDF Generator] Starting iframe-based html2pdf with filename: "${filename}"`);
-        await generatePdfIframe(isLandscape, originalElement, filename, true, { top: 10, bottom: 10, left: 10, right: 10 });
+        await generatePdfIframe(isLandscape, originalElement, filename, true, { top: 10, bottom: 10, left: 10, right: 10 }, paperSize);
         console.log("[PDF Generator] File generated via iframe and download triggered successfully.");
 
         if (onMarkAsPrinted && selectedStudents.length > 0) {
@@ -802,7 +815,7 @@ export default function RaporCetak({
             const filename = `Rapor_5NK_${cleanStudentName}_${curStudent.nis}.pdf`;
 
             console.log(` - Generating iframe-based pdf blob for ${curStudent.name}...`);
-            const pdfBlob = await generatePdfIframe(isLandscape, originalElement, filename, false, { top: 10, bottom: 10, left: 10, right: 10 }) as Blob;
+            const pdfBlob = await generatePdfIframe(isLandscape, originalElement, filename, false, { top: 10, bottom: 10, left: 10, right: 10 }, paperSize) as Blob;
             
             if (pdfBlob && pdfBlob.size > 0) {
               await uploadFileToDrive(token, pdfBlob, filename);
@@ -941,7 +954,7 @@ export default function RaporCetak({
             
             // Generate Blob directly from the iframe element
             console.log(` - Generating iframe-based pdf blob for ${curStudent.name}...`);
-            const pdfBlob = await generatePdfIframe(isLandscape, originalElement, safeFilename, false, { top: 10, bottom: 10, left: 10, right: 10 }) as Blob;
+            const pdfBlob = await generatePdfIframe(isLandscape, originalElement, safeFilename, false, { top: 10, bottom: 10, left: 10, right: 10 }, paperSize) as Blob;
             
             if (pdfBlob && pdfBlob.size > 0) {
               console.log(` ✅ Blob generated successfully: ${pdfBlob.size} bytes. MIME: ${pdfBlob.type}`);
@@ -1237,6 +1250,34 @@ export default function RaporCetak({
                       <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-indigo-600"></div>
                     </label>
                   </div>
+                  
+                  <div className="col-span-2 pt-2 border-t border-slate-100">
+                    <span className="text-xs font-semibold text-slate-700 block mb-2">Ukuran Kertas Rapor</span>
+                    <div className="flex gap-4">
+                      <label className="flex items-center gap-2 text-xs text-slate-600 font-medium cursor-pointer">
+                        <input
+                          type="radio"
+                          name="paper_size"
+                          value="A4"
+                          checked={paperSize === 'A4'}
+                          onChange={() => handleUpdatePaperSize('A4')}
+                          className="text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
+                        />
+                        A4 (210 x 297 mm)
+                      </label>
+                      <label className="flex items-center gap-2 text-xs text-slate-600 font-medium cursor-pointer">
+                        <input
+                          type="radio"
+                          name="paper_size"
+                          value="F4"
+                          checked={paperSize === 'F4'}
+                          onChange={() => handleUpdatePaperSize('F4')}
+                          className="text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
+                        />
+                        F4 / Folio (215 x 330 mm)
+                      </label>
+                    </div>
+                  </div>
                 </div>
                 <div className="p-4 bg-slate-50 border-t border-slate-100 flex justify-end gap-2">
                   <button onClick={() => { setMarginTop(12); setMarginBottom(12); setMarginLeft(15); setMarginRight(15); }} className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-200 rounded-lg transition-colors">
@@ -1454,7 +1495,12 @@ export default function RaporCetak({
                   
                   {/* PRINT PAGE 1 SIMULATION */}
                   <div className="print-page relative group"
-                       style={{ padding: `${pageMargin.top}mm ${pageMargin.right}mm ${pageMargin.bottom}mm ${pageMargin.left}mm` }}>
+                       style={{ 
+                         width: `${paperWidth}mm`, 
+                         height: `${paperHeight}mm`, 
+                         maxHeight: `${paperHeight}mm`, 
+                         padding: `${pageMargin.top}mm ${pageMargin.right}mm ${pageMargin.bottom}mm ${pageMargin.left}mm` 
+                       }}>
                     <div className="flex flex-col h-full w-full justify-between">
                       {/* Header, title & info */}
                       <div className="avoid-break select-none relative">
@@ -1687,7 +1733,7 @@ export default function RaporCetak({
                     <div className="absolute bottom-[8mm] left-[15mm] right-[15mm] flex justify-between items-center text-[8.5pt] font-mono font-bold text-slate-700 print:text-black select-none pointer-events-none">
                       <div className="flex flex-col gap-0.5">
                         {kopSekolah.customFooterText && <span>{kopSekolah.customFooterText}</span>}
-                        {(kopSekolah.enableAutoDate ?? true) && <span>Dicetak: {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}</span>}
+                        {showAutoTimeFooter && <span>Dicetak: {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}</span>}
                       </div>
                       {(kopSekolah.showPageNumbering ?? true) && (
                         <span>Halaman 1 dari 2</span>
@@ -1697,7 +1743,12 @@ export default function RaporCetak({
 
                   {/* PRINT PAGE 2 SIMULATION */}
                   <div className="print-page relative group"
-                       style={{ padding: `${pageMargin.top}mm ${pageMargin.right}mm ${pageMargin.bottom}mm ${pageMargin.left}mm` }}>
+                       style={{ 
+                         width: `${paperWidth}mm`, 
+                         height: `${paperHeight}mm`, 
+                         maxHeight: `${paperHeight}mm`, 
+                         padding: `${pageMargin.top}mm ${pageMargin.right}mm ${pageMargin.bottom}mm ${pageMargin.left}mm` 
+                       }}>
                     <div className="flex flex-col h-full w-full justify-between gap-4">
                       <div className="flex flex-col gap-4">
                         {/* Table continuation on Page 2 */}
@@ -1954,7 +2005,7 @@ export default function RaporCetak({
                     <div className="absolute bottom-[8mm] left-[15mm] right-[15mm] flex justify-between items-center text-[8.5pt] font-mono font-bold text-slate-700 print:text-black select-none pointer-events-none">
                       <div className="flex flex-col gap-0.5">
                         {kopSekolah.customFooterText && <span>{kopSekolah.customFooterText}</span>}
-                        {(kopSekolah.enableAutoDate ?? true) && <span>Dicetak: {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}</span>}
+                        {showAutoTimeFooter && <span>Dicetak: {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}</span>}
                       </div>
                       {(kopSekolah.showPageNumbering ?? true) && (
                         <span>Halaman 2 dari 2</span>
@@ -2484,8 +2535,14 @@ export default function RaporCetak({
             {pdfRenderStudents.map((selSt) => (
               <div key={selSt.nis} className="student-pdf-group">
                 {/* PRINT PAGE 1 */}
-                <div className={`print-page relative overflow-visible box-border text-[11pt] leading-relaxed flex flex-col justify-between group ${isLandscape ? 'w-[297mm] min-h-[210mm]' : 'w-[210mm] min-h-[297mm]'}`}
-                     style={{ padding: `${pageMargin.top}mm ${pageMargin.right}mm ${pageMargin.bottom}mm ${pageMargin.left}mm` }}>
+                <div className="print-page relative overflow-visible box-border text-[11pt] leading-relaxed flex flex-col justify-between group"
+                     style={{ 
+                       width: `${paperWidth}mm`, 
+                       height: `${paperHeight}mm`, 
+                       minHeight: `${paperHeight}mm`, 
+                       maxHeight: `${paperHeight}mm`, 
+                       padding: `${pageMargin.top}mm ${pageMargin.right}mm ${pageMargin.bottom}mm ${pageMargin.left}mm` 
+                     }}>
                   <div className="flex flex-col h-full w-full justify-between">
                     {/* Header, title & info wrapped with avoid-break */}
                     <div className="avoid-break select-none relative">
@@ -2720,7 +2777,7 @@ export default function RaporCetak({
                   <div className="absolute bottom-[8mm] left-[15mm] right-[15mm] flex justify-between items-center text-[8.5pt] font-mono font-bold text-slate-700 print:text-black select-none pointer-events-none">
                     <div className="flex flex-col gap-0.5">
                       {kopSekolah.customFooterText && <span>{kopSekolah.customFooterText}</span>}
-                      {(kopSekolah.enableAutoDate ?? true) && <span>Dicetak: {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}</span>}
+                      {showAutoTimeFooter && <span>Dicetak: {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}</span>}
                     </div>
                     {(kopSekolah.showPageNumbering ?? true) && (
                       <span className="page-number-display">Halaman 1 dari 2</span>
@@ -2729,8 +2786,14 @@ export default function RaporCetak({
                 </div>
 
                 {/* PRINT PAGE 2 */}
-                <div className={`print-page relative overflow-visible box-border text-[11pt] leading-relaxed flex flex-col justify-between group ${isLandscape ? 'w-[297mm] min-h-[210mm]' : 'w-[210mm] min-h-[297mm]'}`}
-                     style={{ padding: `${pageMargin.top}mm ${pageMargin.right}mm ${pageMargin.bottom}mm ${pageMargin.left}mm` }}>
+                <div className="print-page relative overflow-visible box-border text-[11pt] leading-relaxed flex flex-col justify-between group"
+                     style={{ 
+                       width: `${paperWidth}mm`, 
+                       height: `${paperHeight}mm`, 
+                       minHeight: `${paperHeight}mm`, 
+                       maxHeight: `${paperHeight}mm`, 
+                       padding: `${pageMargin.top}mm ${pageMargin.right}mm ${pageMargin.bottom}mm ${pageMargin.left}mm` 
+                     }}>
                   <div className="flex flex-col h-full w-full justify-between gap-4">
                     <div className="flex flex-col gap-4">
                       {/* Table continuation on Page 2 */}
@@ -2989,7 +3052,7 @@ export default function RaporCetak({
                   <div className="absolute bottom-[8mm] left-[15mm] right-[15mm] flex justify-between items-center text-[8.5pt] font-mono font-bold text-slate-700 print:text-black select-none pointer-events-none">
                     <div className="flex flex-col gap-0.5">
                       {kopSekolah.customFooterText && <span>{kopSekolah.customFooterText}</span>}
-                      {(kopSekolah.enableAutoDate ?? true) && <span>Dicetak: {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}</span>}
+                      {showAutoTimeFooter && <span>Dicetak: {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}</span>}
                     </div>
                     {(kopSekolah.showPageNumbering ?? true) && (
                       <span className="page-number-display">Halaman 2 dari 2</span>
@@ -3034,10 +3097,12 @@ export default function RaporCetak({
       <style>{`
         @media print {
           @page {
-            size: A4 ${isLandscape ? 'landscape' : 'portrait'} !important;
+            size: ${paperSize === 'F4' ? (isLandscape ? '330mm 215mm' : '215mm 330mm') : 'A4 ' + (isLandscape ? 'landscape' : 'portrait')} !important;
             margin: 0 !important;
           }
           .print-page {
+            width: ${paperWidth}mm !important;
+            height: ${paperHeight}mm !important;
             padding: ${pageMargin.top}mm ${pageMargin.right}mm ${pageMargin.bottom}mm ${pageMargin.left}mm !important;
           }
         }
@@ -3281,11 +3346,12 @@ function loadIndexCssSynchronously(): string {
 function applyStrictPrintMargins(
   clonedDoc: Document,
   isLandscape: boolean,
-  pageMargin: { top: number; bottom: number; left: number; right: number } = { top: 10, bottom: 10, left: 10, right: 10 }
+  pageMargin: { top: number; bottom: number; left: number; right: number } = { top: 10, bottom: 10, left: 10, right: 10 },
+  paperSize: 'A4' | 'F4' = 'A4'
 ) {
   try {
-    const totalWidthMm = isLandscape ? 297 : 210;
-    const totalHeightMm = isLandscape ? 210 : 297;
+    const totalWidthMm = paperSize === 'F4' ? (isLandscape ? 330 : 215) : (isLandscape ? 297 : 210);
+    const totalHeightMm = paperSize === 'F4' ? (isLandscape ? 215 : 330) : (isLandscape ? 210 : 297);
 
     const contentWidthMm = totalWidthMm - pageMargin.left - pageMargin.right;
     const contentHeightMm = totalHeightMm - pageMargin.top - pageMargin.bottom;
@@ -3293,7 +3359,7 @@ function applyStrictPrintMargins(
     const styleTag = clonedDoc.createElement('style');
     styleTag.innerHTML = `
       @page {
-        size: A4 ${isLandscape ? 'landscape' : 'portrait'} !important;
+        size: ${paperSize === 'F4' ? (isLandscape ? '330mm 215mm' : '215mm 330mm') : 'A4 ' + (isLandscape ? 'landscape' : 'portrait')} !important;
         margin: ${pageMargin.top}mm ${pageMargin.right}mm ${pageMargin.bottom}mm ${pageMargin.left}mm !important;
       }
       body {
@@ -3333,7 +3399,7 @@ function applyStrictPrintMargins(
   }
 }
 
-function injectPrintStyles(clonedDoc: Document, isLandscape: boolean, pageMargin?: { top: number; bottom: number; left: number; right: number }) {
+function injectPrintStyles(clonedDoc: Document, isLandscape: boolean, pageMargin?: { top: number; bottom: number; left: number; right: number }, paperSize: 'A4' | 'F4' = 'A4') {
   try {
     // 1. Load index.css synchronously to guarantee fonts, margins, and borders
     const indexCss = loadIndexCssSynchronously();
@@ -3357,8 +3423,8 @@ function injectPrintStyles(clonedDoc: Document, isLandscape: boolean, pageMargin
       clonedDoc.head.appendChild(clonedLink);
     });
 
-    // 3. Inject strict A4 margins based on the content width calculation
-    applyStrictPrintMargins(clonedDoc, isLandscape, pageMargin);
+    // 3. Inject strict margins based on the content width calculation and paper size
+    applyStrictPrintMargins(clonedDoc, isLandscape, pageMargin, paperSize);
 
     // 4. Inject explicit table, border, and color styles
     const explicitStyle = clonedDoc.createElement('style');
@@ -3437,20 +3503,24 @@ async function generatePdfIframe(
   originalElement: HTMLElement,
   filename: string,
   isDownload: boolean,
-  pageMargin = { top: 10, bottom: 10, left: 10, right: 10 }
+  pageMargin = { top: 10, bottom: 10, left: 10, right: 10 },
+  paperSize: 'A4' | 'F4' = 'A4'
 ): Promise<Blob | void> {
   const html2pdfFn = typeof html2pdf === 'function' ? html2pdf : (html2pdf as any).default;
   if (!html2pdfFn) {
     throw new Error("html2pdf library is not loaded in window scope.");
   }
 
+  const paperWidth = paperSize === 'F4' ? (isLandscape ? 330 : 215) : (isLandscape ? 297 : 210);
+  const paperHeight = paperSize === 'F4' ? (isLandscape ? 215 : 330) : (isLandscape ? 210 : 297);
+
   // Create temporary iframe
   const iframe = document.createElement('iframe');
   iframe.style.position = 'fixed';
   iframe.style.left = '-9999px';
   iframe.style.top = '0';
-  iframe.style.width = isLandscape ? '297mm' : '210mm';
-  iframe.style.height = isLandscape ? '210mm' : '297mm';
+  iframe.style.width = `${paperWidth}mm`;
+  iframe.style.height = `${paperHeight}mm`;
   iframe.style.border = 'none';
   document.body.appendChild(iframe);
 
@@ -3481,24 +3551,24 @@ async function generatePdfIframe(
     iframeDoc.close();
 
     // Call injectPrintStyles to load index.css synchronously and handle all margins & styling
-    injectPrintStyles(iframeDoc, isLandscape, pageMargin);
+    injectPrintStyles(iframeDoc, isLandscape, pageMargin, paperSize);
 
-    // Override styles inside the iframe to ensure perfect 1-to-1 canvas compilation of A4 sheet
+    // Override styles inside the iframe to ensure perfect 1-to-1 canvas compilation of paper sheet
     const pdfStyle = iframeDoc.createElement('style');
     pdfStyle.innerHTML = `
       @page {
-        size: A4 ${isLandscape ? 'landscape' : 'portrait'} !important;
+        size: ${paperSize === 'F4' ? (isLandscape ? '330mm 215mm' : '215mm 330mm') : 'A4 ' + (isLandscape ? 'landscape' : 'portrait')} !important;
         margin: 0 !important;
       }
       #rapor-pdf-content {
-        width: ${isLandscape ? 297 : 210}mm !important;
+        width: ${paperWidth}mm !important;
         margin: 0 !important;
         padding: 0 !important;
         background-color: #ffffff !important;
       }
       .print-page {
-        width: ${isLandscape ? 297 : 210}mm !important;
-        height: ${isLandscape ? 210 : 297}mm !important;
+        width: ${paperWidth}mm !important;
+        height: ${paperHeight}mm !important;
         padding: ${pageMargin.top}mm ${pageMargin.right}mm ${pageMargin.bottom}mm ${pageMargin.left}mm !important;
         box-sizing: border-box !important;
         margin: 0 !important;
@@ -3548,7 +3618,7 @@ async function generatePdfIframe(
         logging: false,
         backgroundColor: '#ffffff'
       },
-      jsPDF:        { unit: 'mm', format: 'a4', orientation: isLandscape ? 'landscape' : 'portrait' }
+      jsPDF:        { unit: 'mm', format: paperSize === 'F4' ? (isLandscape ? [330, 215] : [215, 330]) : 'a4', orientation: isLandscape ? 'landscape' : 'portrait' }
     };
 
     if (isDownload) {

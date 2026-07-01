@@ -264,6 +264,17 @@ export default function App() {
   const [recentSearches, setRecentSearches] = useState<Student[]>([]);
   const [hoveredStudent, setHoveredStudent] = useState<Student | null>(null);
 
+  // Footer date configuration shared between CRUD and RaporCetak
+  const [showFooterDate, setShowFooterDate] = useState<boolean>(() => {
+    const saved = localStorage.getItem('rapor_5nk_show_footer_date');
+    return saved !== null ? saved === 'true' : true;
+  });
+
+  const handleUpdateShowFooterDate = (val: boolean) => {
+    setShowFooterDate(val);
+    localStorage.setItem('rapor_5nk_show_footer_date', String(val));
+  };
+
   // Undo / Redo History States
   const [studentsHistory, setStudentsHistory] = useState<Student[][]>([]);
   const [historyPointer, setHistoryPointer] = useState<number>(-1);
@@ -1279,7 +1290,7 @@ export default function App() {
             </div>
             <div>
               <h1 id="app-heading" className="text-sm md:text-base font-extrabold tracking-tight flex items-center gap-1.5 text-emerald-950">
-                Sistem Rapor 5NK <span className="text-[9px] bg-emerald-100 border border-emerald-200/60 px-2 py-0.5 rounded-lg text-emerald-800 font-mono font-bold">v1.2 - PRO</span>
+                Sistem Rapor 5NK <span className="text-[9px] bg-emerald-100 border border-emerald-200/60 px-2 py-0.5 rounded-lg text-emerald-800 font-mono font-bold">Versi SMA</span>
               </h1>
               <p className="text-[10px] text-emerald-700 font-semibold">
                 {kopSekolah.yayasan} • {kopSekolah.namaSekolah}
@@ -1472,62 +1483,89 @@ export default function App() {
       </div>
 
       {/* 3. Primary View Mode Selection Panels (Sub navigation tabs deck) */}
-      <div className="bg-white border-b border-slate-200 px-4 py-1.5 flex gap-1.5 flex-wrap no-print overflow-x-auto select-none">
-        <div className="max-w-7xl mx-auto w-full flex flex-wrap gap-1 items-center">
-          <button
-            onClick={() => setViewMode('spreadsheet')}
-            className={`px-3 py-2 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
-              viewMode === 'spreadsheet' 
-                ? 'bg-emerald-600 text-white shadow-xs' 
-                : 'text-slate-600 hover:bg-slate-100 border border-transparent'
-            }`}
-          >
-            <FileSpreadsheet className="h-4 w-4" /> Lembar Konsol Grid & VBA
-          </button>
+      <div className="bg-white border-b border-slate-200 px-4 py-2 flex gap-2 flex-wrap no-print select-none shadow-sm">
+        <div className="max-w-7xl mx-auto w-full flex flex-col lg:flex-row gap-3 items-stretch lg:items-center justify-between">
+          
+          {/* Elegant Rounded Navigation Pills */}
+          <div className="flex flex-wrap gap-1 bg-slate-50 p-1 rounded-xl border border-slate-200">
+            <button
+              onClick={() => setViewMode('spreadsheet')}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all duration-200 cursor-pointer ${
+                viewMode === 'spreadsheet' 
+                  ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20 scale-[1.02]' 
+                  : 'text-slate-600 hover:text-emerald-700 hover:bg-slate-100'
+              }`}
+              title="Spreadsheet Cepat (Alt+1)"
+            >
+              <FileSpreadsheet className="h-3.5 w-3.5" /> 
+              <span>Grid Cepat</span>
+              <kbd className="hidden md:inline px-1 bg-white border border-slate-200 rounded text-[9px] font-mono text-slate-400">Alt+1</kbd>
+            </button>
 
-          <button
-            onClick={() => {
-              if (filteredStudents.length > 0) {
-                if (!selectedStudentId) {
-                  setSelectedStudentId(filteredStudents[0].id);
+            <button
+              onClick={() => {
+                if (filteredStudents.length > 0) {
+                  if (!selectedStudentId) {
+                    setSelectedStudentId(filteredStudents[0].id);
+                  }
+                  setViewMode('form_penilaian');
+                } else {
+                  triggerAlert('info', 'Harap isi murid di kelas ini terlebih dahulu.');
                 }
-                setViewMode('form_penilaian');
-              } else {
-                triggerAlert('info', 'Harap isi murid di kelas ini terlebih dahulu.');
-              }
-            }}
-            className={`px-3 py-2 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
-              viewMode === 'form_penilaian' 
-                ? 'bg-emerald-600 text-white shadow-xs' 
-                : 'text-slate-600 hover:bg-slate-100 border border-transparent'
-            }`}
-          >
-            <ClipboardList className="h-4 w-4" /> Formulir Penilaian Utama
-          </button>
+              }}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all duration-200 cursor-pointer ${
+                viewMode === 'form_penilaian' 
+                  ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20 scale-[1.02]' 
+                  : 'text-slate-600 hover:text-emerald-700 hover:bg-slate-100'
+              }`}
+              title="Formulir Penilaian (Alt+2)"
+            >
+              <ClipboardList className="h-3.5 w-3.5" /> 
+              <span>Form Penilaian</span>
+              <kbd className="hidden md:inline px-1 bg-white border border-slate-200 rounded text-[9px] font-mono text-slate-400">Alt+2</kbd>
+            </button>
 
-          <button
-            onClick={() => setViewMode('rekap_nilai')}
-            className={`px-3 py-2 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
-              viewMode === 'rekap_nilai' 
-                ? 'bg-emerald-600 text-white shadow-xs' 
-                : 'text-slate-600 hover:bg-slate-100 border border-transparent'
-            }`}
-          >
-            <BarChart3 className="h-4 w-4" /> Lembar Rekap Nilai & Sebaran
-          </button>
+            <button
+              onClick={() => setViewMode('rekap_nilai')}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all duration-200 cursor-pointer ${
+                viewMode === 'rekap_nilai' 
+                  ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20 scale-[1.02]' 
+                  : 'text-slate-600 hover:text-emerald-700 hover:bg-slate-100'
+              }`}
+              title="Rekap Nilai & Analisis (Alt+3)"
+            >
+              <BarChart3 className="h-3.5 w-3.5" /> 
+              <span>Rekap & Sebaran</span>
+              <kbd className="hidden md:inline px-1 bg-white border border-slate-200 rounded text-[9px] font-mono text-slate-400">Alt+3</kbd>
+            </button>
 
-          <button
-            onClick={() => setViewMode('crud_manager')}
-            className={`px-3 py-2 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
-              viewMode === 'crud_manager' 
-                ? 'bg-emerald-600 text-white shadow-xs' 
-                : 'text-slate-600 hover:bg-slate-100 border border-transparent'
-            }`}
-          >
-            <Database className="h-4 w-4" /> Pengaturan Database (CRUD)
-          </button>
+            <button
+              onClick={() => setViewMode('crud_manager')}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all duration-200 cursor-pointer ${
+                viewMode === 'crud_manager' 
+                  ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20 scale-[1.02]' 
+                  : 'text-slate-600 hover:text-emerald-700 hover:bg-slate-100'
+              }`}
+              title="Master Database CRUD (Alt+4)"
+            >
+              <Database className="h-3.5 w-3.5" /> 
+              <span>Pengaturan CRUD</span>
+              <kbd className="hidden md:inline px-1 bg-white border border-slate-200 rounded text-[9px] font-mono text-slate-400">Alt+4</kbd>
+            </button>
+          </div>
 
-          <div className="ml-auto flex items-center gap-2">
+          {/* SNEAK-PEEK QUICK SHORTCUTS GRAPHIC LEGEND */}
+          <div className="hidden lg:flex items-center gap-2 px-3 py-1 bg-indigo-50/50 rounded-xl border border-indigo-100 text-[10px] text-slate-500 font-semibold shadow-2xs leading-none">
+            <span className="text-indigo-600 font-black tracking-wider uppercase bg-white px-1.5 py-0.5 rounded text-[8px] border border-indigo-200">SHORTCUTS</span>
+            <div className="flex gap-3 items-center divide-x divide-indigo-100 text-slate-500">
+              <span className="pl-2">🖱️ <b className="text-slate-700">Ctrl+J</b>: Tab Berikutnya</span>
+              <span className="pl-2">🔍 <b className="text-slate-700">Ctrl+K</b>: Cari Siswa</span>
+              <span className="pl-2">💾 <b className="text-slate-700">Ctrl+S</b>: Simpan / Sync</span>
+              <span className="pl-2">⏪ <b className="text-slate-700">Ctrl+Z</b>: Undo</span>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => {
                 if (filteredStudents.length > 0) {
@@ -1555,25 +1593,26 @@ export default function App() {
                   triggerAlert('info', 'Tidak ada murid di kelas ini untuk dicetak.');
                 }
               }}
-              className="px-4 py-2 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer bg-amber-500 hover:bg-amber-600 text-white shadow-xs border border-amber-600"
+              className="px-3.5 py-1.5 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all duration-200 cursor-pointer bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white shadow-md shadow-amber-900/10 border border-amber-600"
             >
-              <Download className="h-4 w-4" /> Unduh Rekap Semua
+              <Download className="h-3.5 w-3.5" /> Unduh Rekap Semua
             </button>
-            <label className="flex items-center gap-1.5 cursor-pointer no-print ml-2 mr-2">
-              <input type="checkbox" checked={autoPrintImmediately} onChange={(e) => setAutoPrintImmediately(e.target.checked)} className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer" />
-              <span className="text-xs font-semibold text-slate-700">Print Immediately</span>
+            
+            <label className="flex items-center gap-1.5 cursor-pointer no-print ml-1 text-slate-600 hover:text-slate-800 select-none">
+              <input type="checkbox" checked={autoPrintImmediately} onChange={(e) => setAutoPrintImmediately(e.target.checked)} className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 h-3.5 w-3.5 cursor-pointer" />
+              <span className="text-[11px] font-semibold">Print Direct</span>
             </label>
 
             {selectedStudent && (
               <button
                 onClick={() => { setBatchPrintNisList([]); setViewMode('print'); }}
-                className={`px-4 py-2 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
+                className={`px-3.5 py-1.5 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all duration-200 cursor-pointer ${
                   viewMode === 'print' 
-                    ? 'bg-indigo-600 text-white shadow-xs' 
-                    : 'text-indigo-600 hover:bg-indigo-50 border border-indigo-100'
+                    ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-950/20' 
+                    : 'bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-50'
                 }`}
               >
-                <Printer className="h-4 w-4" /> Cetak Rapor {selectedStudent.name.split(' ')[0]}
+                <Printer className="h-3.5 w-3.5 text-indigo-500" /> Cetak Rapor {selectedStudent.name.split(' ')[0]}
               </button>
             )}
           </div>
@@ -1951,6 +1990,8 @@ export default function App() {
               setIsHighContrast={setIsHighContrast}
               rowHeightMode={rowHeightMode}
               setRowHeightMode={setRowHeightMode}
+              showFooterDate={showFooterDate}
+              onUpdateShowFooterDate={handleUpdateShowFooterDate}
             />
           </motion.div>
         )}
@@ -2011,6 +2052,8 @@ export default function App() {
                   setSelectedStudentId(firstStud.id);
                 }
               }}
+              showFooterDate={showFooterDate}
+              onUpdateShowFooterDate={handleUpdateShowFooterDate}
             />
           </motion.div>
         )}

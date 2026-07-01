@@ -408,6 +408,63 @@ export function exportClassToCsv(students: Student[], className: string, categor
   window.URL.revokeObjectURL(url);
 }
 
+export function exportAllStudentsToCsv(students: Student[], categories: Category[]) {
+  const indicatorIds: string[] = [];
+  categories.forEach(cat => {
+    cat.indicators.forEach(ind => {
+      indicatorIds.push(ind.id);
+    });
+  });
+
+  // Construct CSV Header
+  const headers = ['No', 'NIS', 'Nama Siswa', 'Kelas', 'L/P', ...indicatorIds, 'Kesimpulan', 'Catatan Wali', 'Status Selesai'];
+  
+  // Helper to escape CSV values according to RFC 4180 rules
+  const escapeCsv = (val: any) => {
+    if (val === undefined || val === null) return '""';
+    const str = String(val).trim();
+    if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return `"${str}"`;
+  };
+
+  const csvRows = [headers.map(escapeCsv).join(',')];
+
+  // Sort by class, then by name
+  const sortedStudents = [...students].sort((a, b) => {
+    const classComp = a.kelas.localeCompare(b.kelas);
+    if (classComp !== 0) return classComp;
+    return a.name.localeCompare(b.name);
+  });
+
+  sortedStudents.forEach((student, index) => {
+    const row = [
+      index + 1,
+      student.nis,
+      student.name,
+      student.kelas,
+      student.gender,
+      ...indicatorIds.map(id => student.grades[id] || '-'),
+      student.kesimpulan || '',
+      student.catatanWali || '',
+      student.completed ? 'SELESAI' : 'BELUM_LENGKAP'
+    ];
+    csvRows.push(row.map(escapeCsv).join(','));
+  });
+
+  const csvContent = "\uFEFF" + csvRows.join('\r\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `REKAP_MASTER_DATABASE_5NK_${new Date().toISOString().split('T')[0]}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.URL.revokeObjectURL(url);
+}
+
 // -------------------------------------------------------------
 // Excel Bulk Import Functions
 // -------------------------------------------------------------
@@ -787,6 +844,159 @@ export function runIntegrityCheck(
     brokenStudentClasses,
     brokenGradeIndicators,
     unassignedClasses,
+  };
+}
+
+export function fixIntegrity(
+  students: Student[],
+  teachers: Teacher[],
+  categories: Category[],
+  classes: string[]
+): {
+  fixedStudents: Student[];
+  fixedTeachers: Teacher[];
+  fixedClasses: string[];
+  repairLogs: string[];
+} {
+  const repairLogs: string[] = [];
+  const fixedStudents = JSON.parse(JSON.stringify(students)) as Student[];
+  const fixedTeachers = JSON.parse(JSON.stringify(teachers)) as Teacher[];
+  const fixedClasses = [...classes];
+
+  // 1. Collect all valid class names from teachers & classes list
+  const validClasses = new Set<string>();
+  classes.forEach(c => validClasses.add(c));
+  teachers.forEach(t => {
+    if (t.role === 'Wali Kelas' && t.classAssigned) {
+      validClasses.add(t.classAssigned);
+    }
+  });
+
+  // Ensure all these valid classes are in the classes list
+  validClasses.forEach(cls => {
+    if (!fixedClasses.includes(cls)) {
+      fixedClasses.push(cls);
+      repairLogs.push(`🏢 Menambahkan kelas '${cls}' ke daftar kelas karena dirujuk oleh Wali Kelas.`);
+    }
+  });
+
+  // 2. Normalize student class names (e.g. solve typos and casing issues)
+  fixedStudents.forEach((student) => {
+    const origClass = student.kelas;
+    if (!validClasses.has(origClass)) {
+      // Look for a close match (case-insensitive, ignore extra spacing/punctuation)
+      const cleanClass = origClass.toUpperCase().replace(/[\s-]/g, '');
+      const matchedClass = Array.from(validClasses).find((cls) => {
+        return cls.toUpperCase().replace(/[\s-]/g, '') === cleanClass;
+      });
+
+      if (matchedClass && matchedClass !== origClass) {
+        student.kelas = matchedClass;
+        repairLogs.push(`✍️ Memperbaiki penamaan kelas siswa "${student.name}": '${origClass}' ➔ '${matchedClass}' (Normalisasi Casing/Tanda Baca).`);
+      }
+    }
+  });
+
+  // 3. Collect active student classes
+  const activeStudentClasses = new Set<string>();
+  fixedStudents.forEach(s => {
+    if (s.kelas) activeStudentClasses.add(s.kelas);
+  });
+
+  // 4. Ensure every active student class has a Wali Kelas
+  activeStudentClasses.forEach((studentClass) => {
+    const hasWali = fixedTeachers.some(
+      (t) => t.role === 'Wali Kelas' && t.classAssigned === studentClass
+    );
+
+    if (!hasWali) {
+      // Find an existing "Wali Kelas" teacher who currently doesn't have an assigned class
+      const freeWali = fixedTeachers.find(
+        (t) => t.role === 'Wali Kelas' && (!t.classAssigned || t.classAssigned === '' || t.classAssigned === '-')
+      );
+
+      if (freeWali) {
+        freeWali.classAssigned = studentClass;
+        repairLogs.push(`🧑‍🏫 Menugaskan Wali Kelas ${freeWali.name} untuk memegang Kelas '${studentClass}' yang sebelumnya tidak memiliki wali.`);
+      } else {
+        // Create a new placeholder Wali Kelas for this class
+        const randomId = `teacher_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+        const placeholderName = `Wali Kelas ${studentClass}, S.Pd.`;
+        fixedTeachers.push({
+          id: randomId,
+          name: placeholderName,
+          role: 'Wali Kelas',
+          classAssigned: studentClass,
+          nip: '-',
+          signatureUrl: '',
+        });
+        repairLogs.push(`➕ Membuat akun Guru Wali Kelas baru '${placeholderName}' untuk Kelas '${studentClass}' agar data siswa terhubung sempurna.`);
+      }
+    }
+  });
+
+  // 5. Ensure all classes in classes list have a Wali Kelas as well
+  fixedClasses.forEach((cls) => {
+    const hasWali = fixedTeachers.some(
+      (t) => t.role === 'Wali Kelas' && t.classAssigned === cls
+    );
+
+    if (!hasWali) {
+      const freeWali = fixedTeachers.find(
+        (t) => t.role === 'Wali Kelas' && (!t.classAssigned || t.classAssigned === '' || t.classAssigned === '-')
+      );
+
+      if (freeWali) {
+        freeWali.classAssigned = cls;
+        repairLogs.push(`🏢 Menugaskan Guru '${freeWali.name}' sebagai Wali Kelas untuk kelas '${cls}' yang belum berpemilik.`);
+      } else {
+        const randomId = `teacher_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+        const placeholderName = `Wali Kelas ${cls}, S.Pd.`;
+        fixedTeachers.push({
+          id: randomId,
+          name: placeholderName,
+          role: 'Wali Kelas',
+          classAssigned: cls,
+          nip: '-',
+          signatureUrl: '',
+        });
+        repairLogs.push(`➕ Membuat Wali Kelas baru '${placeholderName}' untuk Kelas '${cls}' (Daftar Kelas).`);
+      }
+    }
+  });
+
+  // 6. Fix broken grades indicator references
+  const allIndicatorIds = new Set<string>();
+  categories.forEach((cat) => {
+    cat.indicators.forEach((ind) => {
+      allIndicatorIds.add(ind.id);
+    });
+  });
+
+  fixedStudents.forEach((student) => {
+    if (student.grades) {
+      let cleanedCount = 0;
+      Object.keys(student.grades).forEach((indicatorId) => {
+        if (!allIndicatorIds.has(indicatorId)) {
+          delete student.grades[indicatorId];
+          cleanedCount++;
+        }
+      });
+      if (cleanedCount > 0) {
+        repairLogs.push(`🧹 Membersihkan ${cleanedCount} nilai indikator lama/sampah yang tidak dikenal milik "${student.name}".`);
+      }
+    }
+  });
+
+  if (repairLogs.length === 0) {
+    repairLogs.push("Database diperiksa: Tidak ada konflik hubungan tabel yang perlu diperbaiki.");
+  }
+
+  return {
+    fixedStudents,
+    fixedTeachers,
+    fixedClasses,
+    repairLogs,
   };
 }
 
