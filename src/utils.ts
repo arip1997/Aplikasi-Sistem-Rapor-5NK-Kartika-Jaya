@@ -712,4 +712,83 @@ export function exportLocalJsonBackup(students: Student[], teachers: Teacher[]) 
   URL.revokeObjectURL(url);
 }
 
+export interface IntegrityReport {
+  isValid: boolean;
+  brokenStudentClasses: Array<{ studentId: string; studentName: string; class: string }>;
+  brokenGradeIndicators: Array<{ studentId: string; studentName: string; indicatorId: string }>;
+  unassignedClasses: string[];
+}
+
+export function runIntegrityCheck(
+  students: Student[],
+  teachers: Teacher[],
+  categories: Category[],
+  classes: string[]
+): IntegrityReport {
+  const brokenStudentClasses: Array<{ studentId: string; studentName: string; class: string }> = [];
+  const brokenGradeIndicators: Array<{ studentId: string; studentName: string; indicatorId: string }> = [];
+  const unassignedClasses: string[] = [];
+
+  // Create a set of all valid class names assigned to some teacher who is a "Wali Kelas"
+  const waliClasses = new Set(
+    teachers
+      .filter((t) => t.role === 'Wali Kelas' && t.classAssigned)
+      .map((t) => t.classAssigned)
+  );
+
+  // Collect all valid indicator IDs
+  const allIndicatorIds = new Set<string>();
+  categories.forEach((cat) => {
+    cat.indicators.forEach((ind) => {
+      allIndicatorIds.add(ind.id);
+    });
+  });
+
+  // Check each student
+  students.forEach((student) => {
+    // 1. Check if the class assigned to student has a Wali Kelas
+    const studentClass = student.kelas;
+    if (studentClass && !waliClasses.has(studentClass)) {
+      brokenStudentClasses.push({
+        studentId: student.id,
+        studentName: student.name,
+        class: studentClass,
+      });
+    }
+
+    // 2. Check if student grades reference non-existing indicator IDs
+    if (student.grades) {
+      Object.keys(student.grades).forEach((indicatorId) => {
+        if (!allIndicatorIds.has(indicatorId)) {
+          brokenGradeIndicators.push({
+            studentId: student.id,
+            studentName: student.name,
+            indicatorId,
+          });
+        }
+      });
+    }
+  });
+
+  // 3. Find classes from the classes list that have NO assigned Wali Kelas
+  classes.forEach((cls) => {
+    if (!waliClasses.has(cls)) {
+      unassignedClasses.push(cls);
+    }
+  });
+
+  const isValid =
+    brokenStudentClasses.length === 0 &&
+    brokenGradeIndicators.length === 0 &&
+    unassignedClasses.length === 0;
+
+  return {
+    isValid,
+    brokenStudentClasses,
+    brokenGradeIndicators,
+    unassignedClasses,
+  };
+}
+
+
 

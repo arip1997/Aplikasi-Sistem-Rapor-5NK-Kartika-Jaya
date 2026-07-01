@@ -1,4 +1,4 @@
-import { useState, useEffect, useId, useRef } from 'react';
+import { useState, useEffect, useId, useRef, startTransition, useTransition, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Student, ScoreKey, Category, Teacher, KopSekolah } from './types';
 import { normalizeAllData } from './normalization';
@@ -26,6 +26,7 @@ import EvaluationForm from './components/EvaluationForm';
 import DatabaseCrud from './components/DatabaseCrud';
 import UserGuideModal from './components/UserGuideModal';
 import { HighlightText } from './components/HighlightText';
+import ClassSelectorDropdown from './components/ClassSelectorDropdown';
 import { exportClassToExcel, generateClassExcelBlob, exportSingleStudentToExcel, addChangeLog } from './utils';
 import { getAccessToken, initAuth, auth, db } from './firebase';
 import { doc, setDoc } from 'firebase/firestore';
@@ -67,15 +68,30 @@ import {
   History,
   Keyboard,
   DownloadCloud,
-  Download
+  Download,
+  Loader2
 } from 'lucide-react';
 
 export default function App() {
+  const [isPending, startTransition] = useTransition();
   const [students, setStudents] = useState<Student[]>(() => getSavedStudents());
   const [teachers, setTeachers] = useState<Teacher[]>(() => getSavedTeachers());
   const [categories, setCategories] = useState<Category[]>(() => getSavedCategories());
   const [kopSekolah, setKopSekolah] = useState<KopSekolah>(() => getSavedKopSekolah());
   const [classes, setClasses] = useState<string[]>(() => getSavedClasses());
+  
+  const latestStudentsRef = useRef<Student[]>(students);
+  const latestTeachersRef = useRef<Teacher[]>(teachers);
+  const latestCategoriesRef = useRef<Category[]>(categories);
+  const latestKopRef = useRef<KopSekolah>(kopSekolah);
+  const latestClassesRef = useRef<string[]>(classes);
+
+  useEffect(() => { latestStudentsRef.current = students; }, [students]);
+  useEffect(() => { latestTeachersRef.current = teachers; }, [teachers]);
+  useEffect(() => { latestCategoriesRef.current = categories; }, [categories]);
+  useEffect(() => { latestKopRef.current = kopSekolah; }, [kopSekolah]);
+  useEffect(() => { latestClassesRef.current = classes; }, [classes]);
+
   const [selectedClass, setSelectedClass] = useState<string>('X-A');
   const [selectedStudentId, setSelectedStudentId] = useState<string>('');
   const [autoTriggerBatchPdf, setAutoTriggerBatchPdf] = useState<boolean>(false);
@@ -402,24 +418,40 @@ export default function App() {
   const isSyncRunningRef = useRef<boolean>(false);
 
   const triggerCloudAndFirebaseSync = (
-    nextStudents = students,
-    nextTeachers = teachers,
-    nextCategories = categories,
-    nextKop = kopSekolah,
-    nextClasses = classes
+    nextStudents?: Student[],
+    nextTeachers?: Teacher[],
+    nextCategories?: Category[],
+    nextKop?: KopSekolah,
+    nextClasses?: string[]
   ) => {
-    // Record the latest cumulative state snapshot
+    // Record the latest cumulative state snapshot securely with fallback check
+    const valStudents = nextStudents || students || [];
+    const valTeachers = nextTeachers || teachers || [];
+    const valCategories = nextCategories || categories || [];
+    const valKop = nextKop || kopSekolah;
+    const valClasses = nextClasses || classes || [];
+
     lastSyncPayloadRef.current = {
-      students: nextStudents,
-      teachers: nextTeachers,
-      categories: nextCategories,
-      kopSekolah: nextKop,
-      classes: nextClasses
+      students: valStudents,
+      teachers: valTeachers,
+      categories: valCategories,
+      kopSekolah: valKop,
+      classes: valClasses
     };
 
     // Trigger sequential queue processing loop
     if (!isSyncRunningRef.current) {
       processSyncQueue();
+    }
+  };
+
+  const forceCloudAndFirebaseSync = async (): Promise<void> => {
+    // Record and run immediately
+    triggerCloudAndFirebaseSync(students, teachers, categories, kopSekolah, classes);
+    let attempts = 0;
+    while ((isSyncRunningRef.current || lastSyncPayloadRef.current !== null) && attempts < 50) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+      attempts++;
     }
   };
 
@@ -429,23 +461,29 @@ export default function App() {
 
     try {
       while (lastSyncPayloadRef.current !== null) {
-        // Dequeue latest cumulative payload snapshot
+        // Dequeue latest cumulative payload snapshot safely
         const payload = lastSyncPayloadRef.current;
         lastSyncPayloadRef.current = null;
 
-        // Execute actual upload and write operations sequentially
-        await executeActualSync(
-          payload.students,
-          payload.teachers,
-          payload.categories,
-          payload.kopSekolah,
-          payload.classes
-        );
+        if (payload) {
+          const s = payload.students || students || [];
+          const t = payload.teachers || teachers || [];
+          const cat = payload.categories || categories || [];
+          const kop = payload.kopSekolah || kopSekolah;
+          const cls = payload.classes || classes || [];
+
+          // Execute actual upload and write operations sequentially
+          await executeActualSync(s, t, cat, kop, cls);
+        }
       }
     } catch (queueErr) {
       console.error('[Sync Queue] Sequential queue loop error:', queueErr);
     } finally {
       isSyncRunningRef.current = false;
+      // Re-trigger if new data came in during execution
+      if (lastSyncPayloadRef.current !== null) {
+        processSyncQueue();
+      }
     }
   };
 
@@ -463,141 +501,51 @@ export default function App() {
     const uid = currentUser.uid;
     if (!userEmail) return;
 
+    // Deep sanitize and prepare atomic payload
+    const sanitize = (data: any) => JSON.parse(JSON.stringify(data, (_, val) => val === undefined ? null : val));
+    
+    const finalPayload = sanitize({
+      students: nextStudents,
+      teachers: nextTeachers,
+      categories: nextCategories,
+      kopSekolah: nextKop,
+      classes: nextClasses
+    });
+
     setCloudSyncState({ status: 'syncing', provider: 'Firebase & Cloud SQL' });
-    let isSuccess = true;
-    let syncedProviders: string[] = [];
-
-    let firebaseStatus: 'success' | 'failed' | 'skipped' = 'skipped';
-    let sqlStatus: 'success' | 'failed' | 'skipped' = 'skipped';
-    let driveStatus: 'success' | 'failed' | 'skipped' = 'skipped';
-    let diagnosisDetails: string[] = [];
-
-    // 1. Sync to Firebase Firestore!
+    
     try {
-      const { doc, setDoc } = await import('firebase/firestore');
-      const docRef = doc(db, 'workspaces', uid);
-      await setDoc(docRef, {
-        email: userEmail,
-        students: JSON.stringify(nextStudents),
-        teachers: JSON.stringify(nextTeachers),
-        categories: JSON.stringify(nextCategories),
-        kopSekolah: JSON.stringify(nextKop),
-        classes: JSON.stringify(nextClasses),
-        updatedAt: new Date().toISOString()
-      }, { merge: true });
-      syncedProviders.push('Firestore');
-      firebaseStatus = 'success';
-      diagnosisDetails.push('Firebase: Sukses menulis dokumen ke Firestore.');
-      console.log('[Cloud Sync] Firestore write succeeded.');
-    } catch (fireErr: any) {
-      console.error('[Cloud Sync] Firestore write failed:', fireErr);
-      isSuccess = false;
-      firebaseStatus = 'failed';
-      diagnosisDetails.push(`Firebase: Gagal (${fireErr.message || fireErr})`);
-    }
+      // Execute as a single atomic transaction attempt
+      await Promise.all([
+        (async () => {
+          const { doc, setDoc } = await import('firebase/firestore');
+          await setDoc(doc(db, 'workspaces', uid), {
+            ...finalPayload,
+            email: userEmail,
+            updatedAt: new Date().toISOString()
+          }, { merge: true });
+        })(),
+        (async () => {
+          const res = await fetch('/api/save-workspace', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: userEmail, ...finalPayload })
+          });
+          if (!res.ok) throw new Error(`Cloud SQL sync failed: ${res.status}`);
+        })()
+      ]);
 
-    // 2. Sync to Cloud SQL Backend
-    try {
-      const res = await fetch('/api/save-workspace', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          email: userEmail,
-          students: nextStudents,
-          teachers: nextTeachers,
-          categories: nextCategories,
-          kopSekolah: nextKop,
-          classes: nextClasses
-        })
-      });
-      if (res.ok) {
-        const metadata = await res.json();
-        if (metadata.savedToSql) {
-          syncedProviders.push('Cloud SQL');
-          sqlStatus = 'success';
-          diagnosisDetails.push('Cloud SQL: Sinkron Relasional Postgres berhasil.');
-        } else if (metadata.savedToFile) {
-          syncedProviders.push('Backend File');
-          sqlStatus = 'success';
-          diagnosisDetails.push('Backend File: Sukses tersimpan (SQL standby/off).');
-        } else {
-          sqlStatus = 'success';
-          diagnosisDetails.push('Backend: Disimpan di server fallback.');
-        }
-      } else {
-        isSuccess = false;
-        sqlStatus = 'failed';
-        diagnosisDetails.push(`Cloud SQL: HTTP Error status ${res.status}`);
-      }
-    } catch (saveErr: any) {
-      console.error('[Cloud Sync] Server save failed:', saveErr);
-      isSuccess = false;
-      sqlStatus = 'failed';
-      diagnosisDetails.push(`Cloud SQL: Koneksi terputus (${saveErr.message || saveErr})`);
-    }
+      setCloudSyncState({ status: 'success', provider: 'Firebase & Cloud SQL', lastSaved: new Date() });
+      setSyncLogs(prev => [{
+        timestamp: new Date(),
+        firebaseStatus: 'success' as 'success' | 'failed' | 'skipped',
+        sqlStatus: 'success' as 'success' | 'failed' | 'skipped',
+        driveStatus: 'skipped' as 'success' | 'failed' | 'skipped',
+        details: 'Sinkronisasi atomik berhasil.'
+      }, ...prev].slice(0, 10));
 
-    // 3. Sync JSON state file to Google Drive if token is available
-    if (googleToken) {
-      try {
-        const timestampStr = new Date().toISOString()
-          .replace(/T/, '_')
-          .replace(/:/g, '-')
-          .split('.')[0];
-        const filename = `AUTOSAVE_5NK_Kelas_${selectedClass}_${timestampStr}.json`;
-        const payload = {
-          students: nextStudents,
-          teachers: nextTeachers,
-          categories: nextCategories,
-          kopSekolah: nextKop,
-          timestamp: new Date().toISOString(),
-          type: 'AUTO_BACKUP_5NK'
-        };
-        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
-        const folderId = await getOrCreateFolder(googleToken, 'Backup Rapor 5NK');
-        await uploadFileToDrive(googleToken, blob, filename, folderId);
-        
-        // Asynchronously upload excel as well without awaiting, to save time
-        const activeWaliKelasLoop = teachers.find(t => t.classAssigned === selectedClass) || { name: 'Guru', nip: '-', role: '-' };
-        const excelBlob = generateClassExcelBlob(nextStudents.filter(s => s.kelas === selectedClass), selectedClass, activeWaliKelasLoop.name, nextCategories);
-        uploadFileToDrive(googleToken, excelBlob, `REKAP_EXCEL_5NK_Kelas_${selectedClass}_${timestampStr}.xlsx`, folderId).catch(err => {
-          console.warn('[Cloud Sync] Background Excel Drive upload warning:', err);
-        });
-
-        syncedProviders.push('Google Drive');
-        setWasUploadedToDrive(true);
-        driveStatus = 'success';
-        diagnosisDetails.push('Google Drive: Upload cadangan otomatis (JSON & Excel) berhasil.');
-      } catch (driveErr: any) {
-        console.error('[Cloud Sync] Google Drive backup file upload failed:', driveErr);
-        setWasUploadedToDrive(false);
-        driveStatus = 'failed';
-        diagnosisDetails.push(`Google Drive: Gagal upload (${driveErr.message || driveErr})`);
-      }
-    } else {
-      driveStatus = 'skipped';
-      diagnosisDetails.push('Google Drive: Diabaikan (Belum masuk akun Google).');
-    }
-
-    // Record the sync diagnostic log
-    const newLog = {
-      timestamp: new Date(),
-      firebaseStatus,
-      sqlStatus,
-      driveStatus,
-      details: diagnosisDetails.join(' | ')
-    };
-    setSyncLogs(prev => [newLog, ...prev].slice(0, 10));
-
-    if (isSuccess) {
-      setCloudSyncState({
-        status: 'success',
-        provider: syncedProviders.join(' & '),
-        lastSaved: new Date()
-      });
-      setDirtyCells({});
-    } else {
+    } catch (err) {
+      console.error('[Cloud Sync] Atomic transaction failed:', err);
       setCloudSyncState(prev => ({ ...prev, status: 'error' }));
     }
   };
@@ -616,12 +564,18 @@ export default function App() {
         const docSnap = await getDoc(docRef);
         if (docSnap.exists()) {
           const fsData = docSnap.data();
+          const safeParse = (val: any) => {
+            if (typeof val === 'string') {
+              try { return JSON.parse(val); } catch(e) { return val; }
+            }
+            return val;
+          };
           cloudState = {
-            students: JSON.parse(fsData.students),
-            teachers: JSON.parse(fsData.teachers),
-            categories: JSON.parse(fsData.categories),
-            kopSekolah: JSON.parse(fsData.kopSekolah),
-            classes: JSON.parse(fsData.classes),
+            students: safeParse(fsData.students),
+            teachers: safeParse(fsData.teachers),
+            categories: safeParse(fsData.categories),
+            kopSekolah: safeParse(fsData.kopSekolah),
+            classes: safeParse(fsData.classes),
           };
           console.log('[Cloud Load] Found backup in Firebase Firestore!');
         }
@@ -855,21 +809,72 @@ export default function App() {
     }
   }, [students, selectedStudentId]);
 
+  // Google Drive Background Backup (Checks every 5 seconds, uploads only if data changed)
+  useEffect(() => {
+    if (!googleToken || students.length === 0 || !isAutoBackupEnabled) return;
+
+    const intervalId = setInterval(async () => {
+      const lastBackupTimestamp = Number(localStorage.getItem('last_drive_backup_timestamp') || '0');
+      const currentSavedTime = lastSavedTime.getTime();
+
+      // Only backup if current data's save timestamp is newer than the last uploaded backup
+      if (currentSavedTime > lastBackupTimestamp) {
+        try {
+          console.log('[Drive Backup] Memulai backup otomatis 5 detik ke Google Drive...');
+          const timestampStr = new Date().toISOString()
+            .replace(/T/, '_')
+            .replace(/:/g, '-')
+            .split('.')[0];
+            
+          const folderId = await getOrCreateFolder(googleToken, 'Backup Rapor 5NK');
+          
+          // Mempersiapkan ZIP
+          const JSZip = (await import('jszip')).default;
+          const zip = new JSZip();
+          
+          const payload = {
+            students,
+            teachers,
+            categories,
+            kopSekolah,
+            classes,
+            timestamp: new Date().toISOString(),
+            type: 'AUTO_BACKUP_5NK_5S'
+          };
+          
+          zip.file(`backup_data.json`, JSON.stringify(payload, null, 2));
+          const zipBlob = await zip.generateAsync({ type: 'blob' });
+          
+          const filename = `AUTO_BACKUP_5NK_${timestampStr}.zip`;
+          await uploadFileToDrive(googleToken, zipBlob, filename, folderId);
+          
+          localStorage.setItem('last_drive_backup_timestamp', String(currentSavedTime));
+          triggerAlert('success', `Backup otomatis ke Google Drive berhasil: ${filename}`);
+          console.log('[Drive Backup] Backup otomatis 5 detik selesai.');
+        } catch (err) {
+          console.error('[Drive Backup] Gagal melakukan backup otomatis ke Google Drive:', err);
+        }
+      }
+    }, 5000);
+
+    return () => clearInterval(intervalId);
+  }, [googleToken, students, teachers, categories, kopSekolah, classes, isAutoBackupEnabled, lastSavedTime]);
+
   // Save changes to local storage helpers
   const cloudSyncTimeoutRef = useRef<any>(null);
 
-  const handlePersistCloudAndFirestore = (
-    nextStudents = students,
-    nextTeachers = teachers,
-    nextCategories = categories,
-    nextKop = kopSekolah,
-    nextClasses = classes
-  ) => {
+  const handlePersistCloudAndFirestore = () => {
     if (cloudSyncTimeoutRef.current) {
       clearTimeout(cloudSyncTimeoutRef.current);
     }
     cloudSyncTimeoutRef.current = setTimeout(() => {
-      triggerCloudAndFirebaseSync(nextStudents, nextTeachers, nextCategories, nextKop, nextClasses);
+      triggerCloudAndFirebaseSync(
+        latestStudentsRef.current,
+        latestTeachersRef.current,
+        latestCategoriesRef.current,
+        latestKopRef.current,
+        latestClassesRef.current
+      );
     }, 2500); // Debounce saves by 2.5 seconds
   };
 
@@ -882,10 +887,14 @@ export default function App() {
       if (clsA > clsB) return 1;
       return (a.name || '').toLowerCase().localeCompare((b.name || '').toLowerCase());
     });
+    
+    // Sync ref synchronously to prevent race conditions in subsequent triggers
+    latestStudentsRef.current = sortedStudents;
+    
     setStudents(sortedStudents);
     saveStudentsList(sortedStudents);
     setLastSavedTime(new Date());
-    handlePersistCloudAndFirestore(sortedStudents, teachers, categories, kopSekolah, classes);
+    handlePersistCloudAndFirestore();
     
     if (!skipHistoryUpdate) {
        setStudentsHistory(prev => {
@@ -897,32 +906,36 @@ export default function App() {
   };
 
   const handlePersistTeachers = (nextTeachers: Teacher[]) => {
+    latestTeachersRef.current = nextTeachers;
     setTeachers(nextTeachers);
     saveTeachersList(nextTeachers);
     setLastSavedTime(new Date());
-    handlePersistCloudAndFirestore(students, nextTeachers, categories, kopSekolah, classes);
+    handlePersistCloudAndFirestore();
   };
 
   const handlePersistCategories = (nextCats: Category[]) => {
+    latestCategoriesRef.current = nextCats;
     setCategories(nextCats);
     saveCategoriesList(nextCats);
     setLastSavedTime(new Date());
-    handlePersistCloudAndFirestore(students, teachers, nextCats, kopSekolah, classes);
+    handlePersistCloudAndFirestore();
   };
 
   const handlePersistKopSekolah = (nextKop: KopSekolah) => {
+    latestKopRef.current = nextKop;
     setKopSekolah(nextKop);
     saveKopSekolah(nextKop);
     setLastSavedTime(new Date());
-    handlePersistCloudAndFirestore(students, teachers, categories, nextKop, classes);
+    handlePersistCloudAndFirestore();
   };
 
   const handlePersistClasses = (nextClasses: string[]) => {
     const sorted = sortClasses(nextClasses);
+    latestClassesRef.current = sorted;
     setClasses(sorted);
     saveClassesList(sorted);
     setLastSavedTime(new Date());
-    handlePersistCloudAndFirestore(students, teachers, categories, kopSekolah, sorted);
+    handlePersistCloudAndFirestore();
   };
 
   // Get current active Wali Kelas (Teacher) info
@@ -1237,186 +1250,148 @@ export default function App() {
   const totalCompletedCount = students.filter(s => s.completed).length;
   const totalPercentage = students.length > 0 ? Math.round((totalCompletedCount / students.length) * 100) : 0;
 
+  const handleClassChange = useCallback((nextCls: string) => {
+    if (!nextCls || nextCls === selectedClass) return;
+    startTransition(() => {
+      setSelectedClass(nextCls);
+      const firstStud = students.find(s => s.kelas === nextCls);
+      if (firstStud) {
+        setSelectedStudentId(firstStud.id);
+      }
+      // Keep the active viewing view to prevent jarring changes
+      if (viewMode === 'print' && !firstStud) {
+        setViewMode('spreadsheet');
+      }
+    });
+  }, [selectedClass, students, viewMode]);
+
   return (
     <div id="main-app-container" className="min-h-screen bg-slate-100 font-sans flex flex-col selection:bg-emerald-100 select-none pb-[40px]">
       
       {/* 1. Global Navigation Navbar */}
-      <header className="bg-emerald-800 text-white shadow-md border-b-4 border-emerald-950 px-4 py-3 sticky top-0 z-40 no-print">
-        <div className="max-w-7xl mx-auto flex flex-wrap gap-4 items-center justify-between">
+      <header className="bg-emerald-50 text-slate-800 border-b border-emerald-200 px-4 py-2.5 sticky top-0 z-40 no-print backdrop-blur-md bg-opacity-95 shadow-xs">
+        <div className="max-w-7xl mx-auto flex flex-col lg:flex-row gap-3 items-center justify-between">
+          
+          {/* Logo & School Branding */}
           <div className="flex items-center gap-3">
-            <div className="bg-white p-2 rounded-lg text-emerald-800 shadow-inner">
-              <GraduationCap className="h-6 w-6" />
+            <div className="bg-gradient-to-tr from-emerald-600 to-teal-500 p-2 rounded-xl text-white shadow-xs">
+              <GraduationCap className="h-5 w-5 font-black" />
             </div>
             <div>
-              <h1 id="app-heading" className="text-base md:text-lg font-bold font-display tracking-tight flex items-center gap-2">
-                Sistem Konsol Rapor 5NK <span className="text-[10px] bg-emerald-900 border border-emerald-700 px-2.5 py-0.5 rounded-full font-mono">v1.2 - VBA Sim</span>
+              <h1 id="app-heading" className="text-sm md:text-base font-extrabold tracking-tight flex items-center gap-1.5 text-emerald-950">
+                Sistem Rapor 5NK <span className="text-[9px] bg-emerald-100 border border-emerald-200/60 px-2 py-0.5 rounded-lg text-emerald-800 font-mono font-bold">v1.2 - PRO</span>
               </h1>
-              <p className="text-[11px] text-emerald-100/85 uppercase">
-                {kopSekolah.yayasan} KOORDINATOR {kopSekolah.koordinator} CABANG {kopSekolah.cabang} - {kopSekolah.namaSekolah}
+              <p className="text-[10px] text-emerald-700 font-semibold">
+                {kopSekolah.yayasan} • {kopSekolah.namaSekolah}
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-4 text-xs">
-            {/* Auto-Save & Cloud Sync Indicators */}
-            <div className="hidden lg:flex flex-col items-end text-right">
-              <div className="flex items-center gap-1.5 text-emerald-200/70" title={`Penyimpanan lokal terakhir diperbarui: ${lastSavedTime.toLocaleTimeString()}`}>
-                <Cloud className="h-4 w-4 text-emerald-300" />
-                <span className="text-[10px] uppercase tracking-wider font-bold">Auto-Save Lokal Aktif</span>
+          {/* Interaction & Status Hub */}
+          <div className="flex flex-wrap items-center justify-center lg:justify-end gap-3 text-xs w-full lg:w-auto">
+            
+            {/* Realtime Syncer & Auto-Save Badge */}
+            <div className="flex items-center gap-2 bg-emerald-100/50 border border-emerald-200/80 px-2.5 py-1.5 rounded-xl">
+              <span className="relative flex h-1.5 w-1.5">
+                <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${cloudSyncState.status === 'syncing' ? 'bg-amber-400' : 'bg-emerald-400'}`}></span>
+                <span className={`relative inline-flex rounded-full h-1.5 w-1.5 ${cloudSyncState.status === 'syncing' ? 'bg-amber-500' : 'bg-emerald-500'}`}></span>
+              </span>
+              <div className="text-left leading-none">
+                <p className="text-[9px] font-bold text-emerald-900 uppercase tracking-wide">
+                  {cloudSyncState.status === 'syncing' ? 'Sinkron Cloud...' : 'Auto-Save Aktif'}
+                </p>
+                <p className="text-[8px] text-emerald-600 font-mono mt-0.5">
+                  {cloudSyncState.status === 'success' ? `Terakhir: ${cloudSyncState.lastSaved ? cloudSyncState.lastSaved.toLocaleTimeString() : 'Tersimpan'}` : 'Local Safe'}
+                </p>
               </div>
-              {currentUser && (
-                <div className="text-[9px] text-teal-300 font-mono mt-0.5">
-                  {cloudSyncState.status === 'syncing' && '⚡ Mengunggah ke Cloud...'}
-                  {cloudSyncState.status === 'success' && `✓ Sinkron Cloud (${cloudSyncState.lastSaved ? cloudSyncState.lastSaved.toLocaleTimeString() : ''})`}
-                  {cloudSyncState.status === 'error' && '✗ Sinkron Cloud Gagal'}
-                  {cloudSyncState.status === 'idle' && '✔ Cloud Standby'}
-                </div>
-              )}
             </div>
 
             {/* Undo / Redo Global Toolbars */}
-            <div className="flex items-center gap-1 bg-[#0a251b] px-2.5 py-1 rounded-xl border border-emerald-700/55 shadow-[inset_0_2px_4px_rgba(0,0,0,0.3)]">
+            <div className="flex items-center gap-1 bg-white px-2 py-0.5 rounded-xl border border-emerald-200 shadow-xs">
                <button
                   onClick={handleUndo}
                   disabled={historyPointer <= 0}
-                  className="p-1.5 rounded-lg hover:bg-emerald-900/80 hover:text-emerald-50 text-white transition-all cursor-pointer active:scale-90 disabled:opacity-25"
-                  title="Undo Perubahan (Ctrl+Z)"
-                  aria-label="Batal input / Undo"
+                  className="p-1.5 rounded-lg hover:bg-emerald-50 text-emerald-700 hover:text-emerald-900 transition-all cursor-pointer disabled:opacity-20 disabled:pointer-events-none"
+                  title="Batal perubahan (Ctrl+Z)"
+                  aria-label="Undo"
                >
-                  <Undo className="h-4 w-4 text-emerald-100" />
+                  <Undo className="h-3.5 w-3.5" />
                </button>
                <button
                   onClick={handleRedo}
                   disabled={historyPointer < 0 || historyPointer >= studentsHistory.length - 1}
-                  className="p-1.5 rounded-lg hover:bg-emerald-900/80 hover:text-emerald-50 text-white transition-all cursor-pointer active:scale-90 disabled:opacity-25"
-                  title="Redo Perubahan (Ctrl+Y)"
-                  aria-label="Kembalikan input / Redo"
+                  className="p-1.5 rounded-lg hover:bg-emerald-50 text-emerald-700 hover:text-emerald-900 transition-all cursor-pointer disabled:opacity-20 disabled:pointer-events-none"
+                  title="Ulangi perubahan (Ctrl+Y)"
+                  aria-label="Redo"
                >
-                  <Redo className="h-4 w-4 text-emerald-100" />
+                  <Redo className="h-3.5 w-3.5" />
                </button>
             </div>
 
-            {/* Google Drive Status Indicator */}
-            {googleToken ? (
-              <div className="hidden lg:flex items-center gap-1.5 text-teal-300 bg-emerald-900/45 px-2.5 py-1 rounded-lg border border-teal-500/25 animate-pulse" title="Google Drive sinkronisasi aktif: Cadangan otomatis JSON diunggah secara real-time ke folder 'Backup Rapor 5NK'">
-                <Cloud className="h-4 w-4 text-teal-400" />
-                <span className="text-[10px] uppercase tracking-wider font-bold font-mono">Drive Terhubung</span>
-              </div>
-            ) : (
-              <div className="hidden lg:flex items-center gap-1.5 text-emerald-400/55 bg-emerald-950/20 px-2.5 py-1 rounded-lg border border-emerald-900/40" title="Google Drive belum terhubung untuk auto-backup. Masuk/Sign In di menu kelola Database.">
-                <Cloud className="h-4 w-4 opacity-50" />
-                <span className="text-[10px] uppercase tracking-wider font-bold font-mono">Drive Off</span>
-              </div>
-            )}
-
-            {/* Auto-Backup Toggle */}
+            {/* Auto-Backup Toggle Button */}
             <button
               onClick={() => {
                 const nextVal = !isAutoBackupEnabled;
                 setIsAutoBackupEnabled(nextVal);
                 localStorage.setItem('rapor_5nk_auto_backup_enabled', String(nextVal));
               }}
-              className={`hidden md:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[10px] uppercase font-bold tracking-wider transition-all duration-200 cursor-pointer ${
+              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl border text-[10px] uppercase font-bold tracking-wide transition-all duration-200 cursor-pointer shadow-xs ${
                 isAutoBackupEnabled
-                  ? 'bg-emerald-900/60 border-amber-500/30 text-amber-300 hover:bg-emerald-900'
-                  : 'bg-emerald-950/40 border-emerald-900 text-emerald-400/60 hover:text-emerald-300 hover:bg-emerald-900/20'
+                  ? 'bg-emerald-600 border-emerald-700 text-white hover:bg-emerald-700'
+                  : 'bg-white border-emerald-200 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50'
               }`}
-              title={isAutoBackupEnabled ? "Cadangan otomatis menyala (data akan terunduh sebagai file JSON 15 detik setelah edit)" : "Pencadangan otomatis mati (klik untuk menyalakan)"}
+              title="Cadangan otomatis lokal berupa unduhan file JSON berkala"
             >
-              <span className={`relative flex h-2 w-2 ${isAutoBackupEnabled ? 'inline-block' : 'hidden'}`}>
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
-              </span>
-              <span>Backup Otomatis: {isAutoBackupEnabled ? 'Aktif' : 'Mati'}</span>
+              <span>Auto-Backup: {isAutoBackupEnabled ? 'On' : 'Off'}</span>
             </button>
-            
-            {/* Global Progress counters */}
-            <div className="hidden sm:flex items-center gap-3 bg-emerald-900/60 py-1.5 px-3 rounded-lg border border-emerald-700/50">
-              <CheckCircle className="h-4 w-4 text-emerald-400" />
-              <div>
-                <p className="text-[10.5px] text-emerald-200 font-semibold font-mono leading-tight">Progress Total: {totalCompletedCount} / {students.length} Siswa</p>
-                <div className="w-28 bg-emerald-950 h-1.5 rounded-full mt-1 overflow-hidden">
-                  <div className="bg-emerald-400 h-full transition-all duration-500" style={{ width: `${totalPercentage}%` }}></div>
+
+            {/* Progress Bar */}
+            <div className="hidden sm:flex items-center gap-2 bg-emerald-100/40 px-3 py-1.5 rounded-xl border border-emerald-200/80">
+              <CheckCircle className="h-3.5 w-3.5 text-emerald-600" />
+              <div className="text-left">
+                <p className="text-[9px] text-emerald-800 font-bold leading-none">Rapor Selesai: {totalCompletedCount}/{students.length}</p>
+                <div className="w-16 bg-emerald-200/50 h-1 rounded-full mt-1 overflow-hidden">
+                  <div className="bg-emerald-600 h-full transition-all duration-500" style={{ width: `${totalPercentage}%` }}></div>
                 </div>
               </div>
             </div>
 
+            {/* Riwayat Ekspor */}
             <button
               onClick={() => setIsExportHistoryOpen(true)}
-              className="bg-[#122c22] hover:bg-emerald-900 border border-emerald-800 hover:border-emerald-700 font-semibold px-3 py-2 rounded-lg text-emerald-100 hover:text-white flex items-center gap-1.5 transition-all text-xs cursor-pointer shadow-xs relative"
-              title="Perlihatkan Riwayat Ekspor Terakhir (Excel/PDF)"
+              className="bg-white hover:bg-emerald-50 border border-emerald-200 font-bold px-3 py-1.5 rounded-xl text-emerald-700 hover:text-emerald-900 flex items-center gap-1.5 transition-all text-[11px] cursor-pointer relative shadow-xs"
+              title="Riwayat Ekspor"
             >
-              <History className="h-3.5 w-3.5 text-emerald-400" />
-              <span>Riwayat Ekspor</span>
+              <History className="h-3.5 w-3.5 text-emerald-500" />
+              <span className="hidden sm:inline">Riwayat</span>
               {exportHistory.length > 0 && (
-                <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[9px] font-extrabold text-slate-950 border border-emerald-950 shadow-sm animate-pulse">
+                <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[9px] font-extrabold text-slate-950 border border-white shadow-xs">
                   {exportHistory.length}
                 </span>
               )}
             </button>
 
+            {/* Panduan Button */}
             <button
               onClick={() => setIsGuideOpen(true)}
-              className="bg-emerald-700 hover:bg-emerald-600 border border-emerald-600 font-semibold px-3 py-2 rounded-lg text-emerald-50 hover:text-white flex items-center gap-1.5 transition-all text-xs cursor-pointer shadow-xs"
-              title="Panduan Lengkap Penggunaan"
+              className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3.5 py-1.5 rounded-xl flex items-center gap-1.5 transition-all text-[11px] cursor-pointer shadow-xs active:scale-95 border border-emerald-700"
+              title="Panduan Guru & Helpdesk"
             >
-              <Info className="h-3.5 w-3.5" /> Panduan
+              <Info className="h-3.5 w-3.5" />
+              <span>Panduan</span>
             </button>
 
-            {/* Shortcut Legend Tooltip */}
-            <div className="relative group hidden md:block">
-              <button className="bg-emerald-800 hover:bg-emerald-700 border border-emerald-600/50 font-semibold px-3 py-2 rounded-lg text-emerald-100 hover:text-white flex items-center gap-1.5 transition-all text-xs cursor-help shadow-xs">
-                <Keyboard className="h-3.5 w-3.5" /> Shortcuts
-              </button>
-              <div className="absolute right-0 top-full mt-2 w-64 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl p-4 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 z-50">
-                <div className="text-white font-bold text-sm mb-3 border-b border-slate-700 pb-2">Keyboard Shortcuts</div>
-                <div className="space-y-2 text-xs">
-                  <div className="flex justify-between items-center text-slate-300">
-                    <span>Simpan / Sinkron Data</span>
-                    <kbd className="px-1.5 py-0.5 bg-slate-800 text-slate-100 rounded border border-slate-600 font-mono text-[10px]">Ctrl+S</kbd>
-                  </div>
-                  <div className="flex justify-between items-center text-slate-300">
-                    <span>Print Preview</span>
-                    <kbd className="px-1.5 py-0.5 bg-slate-800 text-slate-100 rounded border border-slate-600 font-mono text-[10px]">Ctrl+P</kbd>
-                  </div>
-                  <div className="flex justify-between items-center text-slate-300">
-                    <span>Pencarian Cepat</span>
-                    <kbd className="px-1.5 py-0.5 bg-slate-800 text-slate-100 rounded border border-slate-600 font-mono text-[10px]">Ctrl+K</kbd>
-                  </div>
-                  <div className="flex justify-between items-center text-slate-300">
-                    <span>Undo / Redo</span>
-                    <kbd className="px-1.5 py-0.5 bg-slate-800 text-slate-100 rounded border border-slate-600 font-mono text-[10px]">Ctrl+Z/Y</kbd>
-                  </div>
-                  <div className="pt-2 mt-2 border-t border-slate-700/50">
-                    <div className="flex justify-between items-center text-slate-400">
-                      <span>Grid Cepat</span>
-                      <kbd className="px-1.5 py-0.5 bg-slate-800 text-slate-100 rounded border border-slate-600 font-mono text-[10px]">Alt+1</kbd>
-                    </div>
-                    <div className="flex justify-between items-center text-slate-400 mt-1.5">
-                      <span>Form Penilaian</span>
-                      <kbd className="px-1.5 py-0.5 bg-slate-800 text-slate-100 rounded border border-slate-600 font-mono text-[10px]">Alt+2</kbd>
-                    </div>
-                    <div className="flex justify-between items-center text-slate-400 mt-1.5">
-                      <span>Rekap Nilai</span>
-                      <kbd className="px-1.5 py-0.5 bg-slate-800 text-slate-100 rounded border border-slate-600 font-mono text-[10px]">Alt+3</kbd>
-                    </div>
-                    <div className="flex justify-between items-center text-slate-400 mt-1.5">
-                      <span>Kelola Database</span>
-                      <kbd className="px-1.5 py-0.5 bg-slate-800 text-slate-100 rounded border border-slate-600 font-mono text-[10px]">Alt+4</kbd>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
+            {/* Reset Database */}
             <button
               onClick={handleResetToDefault}
-              className="bg-emerald-900 hover:bg-emerald-950 border border-emerald-700 hover:border-emerald-600 font-semibold px-3 py-2 rounded-lg text-emerald-100 hover:text-white flex items-center gap-1.5 transition-all text-xs cursor-pointer"
-              title="Setel Ulang Data Kelas ke Default"
+              className="bg-white hover:bg-rose-50 border border-emerald-200 hover:border-rose-200 text-emerald-700 hover:text-rose-600 font-bold px-2.5 py-1.5 rounded-xl transition-all text-[11px] cursor-pointer shadow-xs"
+              title="Reset data ke default"
             >
-              <RefreshCw className="h-3.5 w-3.5" /> Reset DB
+              <RefreshCw className="h-3.5 w-3.5" />
+              <span className="hidden md:inline ml-1">Reset DB</span>
             </button>
           </div>
+
         </div>
       </header>
 
@@ -1439,31 +1414,18 @@ export default function App() {
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row gap-4 items-stretch md:items-center justify-between">
           <div className="flex flex-wrap gap-4 items-center">
             {/* Filter Class */}
-            <div className="flex items-center gap-1.5">
-              <label htmlFor={filterClassSelectId} className="text-xs font-bold text-slate-500 flex items-center gap-1">
+            <div className="flex items-center gap-1.5 w-full sm:w-auto">
+              <label htmlFor={filterClassSelectId} className="text-xs font-bold text-slate-500 flex items-center gap-1 flex-none">
                 <Settings2 className="h-3.5 w-3.5" /> Pilih Kelas :
               </label>
-              <select
-                id={filterClassSelectId}
-                value={selectedClass}
-                onChange={(e) => {
-                  const nextCls = e.target.value;
-                  setSelectedClass(nextCls);
-                  const firstStud = students.find(s => s.kelas === nextCls);
-                  if (firstStud) {
-                    setSelectedStudentId(firstStud.id);
-                  }
-                  // Keep the active viewing view to prevent jarring changes
-                  if (viewMode === 'print' && !firstStud) {
-                    setViewMode('spreadsheet');
-                  }
-                }}
-                className="border border-slate-200 bg-slate-50 hover:bg-slate-100 rounded-lg px-2.5 py-1.5 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500 transition-colors"
-              >
-                {classes.map(cls => (
-                  <option key={cls} value={cls}>Kelas {cls}</option>
-                ))}
-              </select>
+              <div id={filterClassSelectId}>
+                <ClassSelectorDropdown
+                  classes={classes}
+                  selectedClass={selectedClass}
+                  onChange={handleClassChange}
+                  disabled={isPending}
+                />
+              </div>
             </div>
 
             {/* Pencarian Cepat Siswa button */}
@@ -1619,11 +1581,24 @@ export default function App() {
       </div>
 
       {/* 4. Main Workspace Area */}
-      <main className="flex-1 max-w-7xl mx-auto w-full p-2.5 md:p-4 flex flex-col h-auto md:h-[calc(100vh-180px)] print:h-auto print:p-0 overflow-y-auto md:overflow-hidden print:overflow-visible">
+      <main className="flex-1 max-w-7xl mx-auto w-full p-2.5 md:p-4 flex flex-col h-auto md:h-[calc(100vh-180px)] print:h-auto print:p-0 overflow-y-auto md:overflow-hidden print:overflow-visible relative">
         
         <AnimatePresence mode="wait">
-          {/* TAB VIEW 1: EXCEL SHEET GRID WORKSPACE */}
-          {viewMode === 'spreadsheet' && (
+          {isPending ? (
+            <motion.div
+              key="loading-skeleton"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-white/80 backdrop-blur-sm rounded-xl m-2.5 md:m-4 no-print"
+            >
+              <div className="flex flex-col items-center justify-center gap-4">
+                <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
+                <p className="text-sm font-semibold text-slate-600">Memuat Data Kelas {selectedClass}...</p>
+              </div>
+            </motion.div>
+          ) : viewMode === 'spreadsheet' ? (
             filteredStudents.length === 0 ? (
               <motion.div
                 key="empty-spreadsheet"
@@ -1888,7 +1863,7 @@ export default function App() {
             </div>
           </motion.div>
             )
-          )}
+          ) : null}
 
         {/* TAB VIEW 2: FORM PENILAIAN WIZARD */}
         {viewMode === 'form_penilaian' && (
@@ -2009,12 +1984,20 @@ export default function App() {
                 addExportLog('EXCEL', `Unduh nilai siswa ${selectedStudent.name} ke Excel`, `Rapor_${selectedStudent.name.replace(/\s+/g, '_')}.xlsx`, 1);
               }}
               onAddExportLog={addExportLog}
+              onForceSync={forceCloudAndFirebaseSync}
               teachers={teachers}
               onMarkAsPrinted={(studentIds) => {
                 const next = students.map(s => 
                   studentIds.includes(s.id) ? { ...s, printStatus: true } : s
                 );
                 handlePersistStudents(next);
+              }}
+              onResetPrintStatus={() => {
+                const next = students.map(s => 
+                  s.kelas === selectedClass ? { ...s, printStatus: false } : s
+                );
+                handlePersistStudents(next);
+                triggerAlert('success', `Status cetak seluruh siswa kelas ${selectedClass} berhasil direset.`);
               }}
               autoTriggerBatchPdf={autoTriggerBatchPdf}
               autoPrintImmediately={autoPrintImmediately}

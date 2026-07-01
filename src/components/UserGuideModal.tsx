@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { X, CheckCircle2, Compass, BookOpen, Heart, Info, ArrowRight, Printer, Save, FileSpreadsheet, Wand2 } from 'lucide-react';
+import { useState } from 'react';
+import { X, Compass, BookOpen, Info, ArrowRight, Printer, Save, FileSpreadsheet, Wand2, Search, HelpCircle, MessageSquare } from 'lucide-react';
 
 interface UserGuideModalProps {
   isOpen: boolean;
@@ -7,166 +7,247 @@ interface UserGuideModalProps {
 }
 
 export default function UserGuideModal({ isOpen, onClose }: UserGuideModalProps) {
-  const [activeTab, setActiveTab] = useState<'panduan' | 'faq'>('panduan');
+  const [activeTab, setActiveTab] = useState<'panduan' | 'faq' | 'hub'>('panduan');
+  const [faqSearch, setFaqSearch] = useState('');
+  const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
 
   if (!isOpen) return null;
 
+  const faqs = [
+    {
+      q: "Bagaimana cara mencadangkan (backup) nilai siswa?",
+      a: "Data Anda tersimpan secara aman di browser lokal. Untuk proteksi ekstra, masuk ke menu 'Kelola Database' (ikon gir di baris tab) -> pilih tab 'Backup & Enkripsi'. Di sana Anda dapat mengunduh database dalam format murni .json atau terenkripsi dengan password khusus."
+    },
+    {
+      q: "Apakah data saya otomatis disinkronkan ke cloud?",
+      a: "Ya! Jika Anda terhubung dengan akun sekolah Anda (setelah login Firebase / Google di menu Kelola Database), sistem akan otomatis mengunggah perubahan ke Firestore dan Cloud SQL dalam bentuk antrean sinkronisasi atomik latar belakang."
+    },
+    {
+      q: "Apa fungsi fitur 'Snapshot Manual'?",
+      a: "Snapshot Manual adalah backup poin instan di dalam browser. Jika Anda hendak mengimpor data besar atau bereksperimen dengan AI, buatlah snapshot terlebih dahulu. Jika terjadi kesalahan input masal, Anda dapat memulihkannya ke waktu presisi tersebut dalam hitungan milidetik."
+    },
+    {
+      q: "Bagaimana cara menyusun Kop Surat Sekolah?",
+      a: "Masuk ke menu 'Kelola Database' -> pilih tab 'Profil & Kop Surat'. Anda bisa menyesuaikan Nama Yayasan, Cabang Koordinator, Nama Sekolah, Identitas Kepala Sekolah, NIP, serta tanggal tanda tangan rapor."
+    },
+    {
+      q: "Hasil cetak PDF terpotong, bagaimana solusinya?",
+      a: "Gunakan peramban Google Chrome atau Microsoft Edge untuk hasil optimal. Di menu cetak browser, pastikan ukuran kertas diatur ke A4, margin diatur ke 'None' atau 'Default', dan centang opsi 'Background graphics' agar garis tabel tercetak sempurna."
+    }
+  ];
+
+  const filteredFaqs = faqs.filter(f => 
+    f.q.toLowerCase().includes(faqSearch.toLowerCase()) || 
+    f.a.toLowerCase().includes(faqSearch.toLowerCase())
+  );
+
   return (
-    <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md flex items-center justify-center z-[9999] p-4 animate-in fade-in duration-300 no-print">
-      <div className="bg-slate-50 border border-slate-200 rounded-3xl w-full max-w-4xl h-[85vh] flex flex-col shadow-2xl overflow-hidden relative font-sans">
+    <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-md flex items-center justify-center z-[9999] p-4 animate-in fade-in duration-300 no-print">
+      <div className="bg-white border border-slate-200/80 rounded-3xl w-full max-w-4xl h-[80vh] flex flex-col shadow-2xl overflow-hidden relative font-sans">
         
-        {/* Header Ribbon */}
-        <div className="bg-gradient-to-r from-emerald-800 via-teal-800 to-indigo-900 text-white p-5 md:px-8 md:py-6 flex justify-between items-center flex-none relative overflow-hidden border-b border-emerald-900">
-          <div className="flex items-center gap-4 relative z-10">
-            <div className="bg-white/10 p-2.5 rounded-2xl backdrop-blur-md border border-white/20 shadow-inner flex items-center justify-center">
-              <Compass className="h-6 w-6 text-emerald-300 animate-spin-slow" />
+        {/* Sleek Minimalist Header */}
+        <div className="bg-slate-900 text-white p-5 md:px-8 md:py-6 flex justify-between items-center flex-none border-b border-slate-800">
+          <div className="flex items-center gap-3">
+            <div className="bg-emerald-500/10 p-2 rounded-xl border border-emerald-500/25 flex items-center justify-center">
+              <Compass className="h-5 w-5 text-emerald-400 animate-spin-slow" />
             </div>
             <div>
-              <h2 className="text-lg md:text-xl font-black tracking-tight flex items-center gap-2">
-                Panduan Penggunaan Rapor 5NK
+              <h2 className="text-base md:text-lg font-extrabold tracking-tight">
+                Pusat Bantuan & Panduan Guru
               </h2>
-              <p className="text-emerald-100/90 text-[11px] md:text-xs font-semibold mt-0.5 max-w-md md:max-w-xl truncate leading-relaxed">
-                Cara menggunakan fitur, input nilai, dan cetak rapor dengan mudah.
+              <p className="text-slate-400 text-xs font-medium mt-0.5">
+                Solusi cepat, petunjuk pengisian, dan tips optimalisasi Rapor 5NK.
               </p>
             </div>
           </div>
 
           <button 
             onClick={onClose}
-            className="relative z-10 text-emerald-100 hover:text-white bg-white/10 hover:bg-white/20 p-2.5 rounded-full transition-all cursor-pointer shadow-sm hover:shadow active:scale-95"
+            className="text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 p-2 rounded-full transition-all cursor-pointer"
             title="Tutup Panduan"
           >
-            <X className="h-5 w-5" />
+            <X className="h-4 w-4" />
           </button>
         </div>
 
-        {/* Inner Tabs Menu */}
-        <div className="bg-white border-b border-slate-200 px-4 md:px-8 flex flex-row items-center gap-2 flex-none py-3">
-          <button
-            onClick={() => setActiveTab('panduan')}
-            className={`px-5 py-2.5 rounded-xl text-sm font-bold transition-all duration-200 cursor-pointer flex items-center gap-2 border ${
-              activeTab === 'panduan'
-                ? 'bg-emerald-50 text-emerald-800 border-emerald-200 shadow-sm'
-                : 'text-slate-500 border-transparent hover:bg-slate-50 hover:text-slate-800'
-            }`}
-          >
-            <BookOpen className="h-4 w-4" /> Panduan Lengkap
-          </button>
-          <button
-            onClick={() => setActiveTab('faq')}
-            className={`px-5 py-2.5 rounded-xl text-sm font-bold transition-all duration-200 cursor-pointer flex items-center gap-2 border ${
-              activeTab === 'faq'
-                ? 'bg-emerald-50 text-emerald-800 border-emerald-200 shadow-sm'
-                : 'text-slate-500 border-transparent hover:bg-slate-50 hover:text-slate-800'
-            }`}
-          >
-            <Info className="h-4 w-4" /> Tanya Jawab (FAQ)
-          </button>
+        {/* Tab Selector */}
+        <div className="bg-slate-50 border-b border-slate-100 px-6 py-2 flex flex-wrap gap-2 items-center justify-between flex-none">
+          <div className="flex gap-1">
+            <button
+              onClick={() => setActiveTab('panduan')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer flex items-center gap-1.5 border ${
+                activeTab === 'panduan'
+                  ? 'bg-white text-slate-900 border-slate-200 shadow-xs'
+                  : 'text-slate-500 border-transparent hover:text-slate-800'
+              }`}
+            >
+              <BookOpen className="h-3.5 w-3.5" /> Panduan Penggunaan
+            </button>
+            <button
+              onClick={() => setActiveTab('faq')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer flex items-center gap-1.5 border ${
+                activeTab === 'faq'
+                  ? 'bg-white text-slate-900 border-slate-200 shadow-xs'
+                  : 'text-slate-500 border-transparent hover:text-slate-800'
+              }`}
+            >
+              <HelpCircle className="h-3.5 w-3.5" /> Tanya Jawab (FAQ)
+            </button>
+            <button
+              onClick={() => setActiveTab('hub')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer flex items-center gap-1.5 border ${
+                activeTab === 'hub'
+                  ? 'bg-white text-slate-900 border-slate-200 shadow-xs'
+                  : 'text-slate-500 border-transparent hover:text-slate-800'
+              }`}
+            >
+              <MessageSquare className="h-3.5 w-3.5" /> Hubungi Bantuan Cepat
+            </button>
+          </div>
+          <span className="text-[10px] bg-emerald-100 text-emerald-800 font-extrabold px-2.5 py-1 rounded-full font-mono uppercase tracking-wide">
+            RAPOR KARTIKA JAYA 5NK
+          </span>
         </div>
 
         {/* Scrollable Content Body */}
-        <div className="overflow-y-auto flex-1 bg-slate-50 p-5 md:p-8">
+        <div className="overflow-y-auto flex-1 bg-white p-6 md:p-8">
           
+          {/* TAB 1: PANDUAN PENGGUNAAN */}
           {activeTab === 'panduan' && (
-            <div className="max-w-3xl mx-auto flex flex-col gap-8 animate-in fade-in duration-350">
+            <div className="max-w-3xl mx-auto flex flex-col gap-6 animate-in fade-in duration-200">
               
-              {/* Langkah 1 */}
-              <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex flex-col gap-3 relative overflow-hidden">
-                <div className="absolute top-0 left-0 w-2 h-full bg-indigo-500"></div>
-                <h3 className="font-black text-slate-800 text-lg flex items-center gap-2">
-                  <span className="bg-indigo-100 text-indigo-700 h-8 w-8 rounded-full flex items-center justify-center font-black text-sm">1</span>
-                  Menambahkan Siswa & Memilih Kelas
-                </h3>
-                <div className="pl-10 text-slate-600 text-sm leading-relaxed space-y-2">
-                  <p>Langkah pertama adalah memastikan Anda berada di kelas yang benar dan data siswa sudah lengkap.</p>
-                  <ul className="list-disc pl-5 space-y-1">
-                    <li>Gunakan <strong>Dropdown Kelas</strong> di bagian atas (navbar) untuk berpindah antar kelas.</li>
-                    <li>Untuk menambah siswa baru, buka tab <strong>Database CRUD</strong>, pilih tab "Siswa", lalu klik "Tambah Siswa".</li>
-                    <li>Anda juga bisa melakukan <strong>Impor Massal</strong> dari file Excel di tab Database CRUD untuk mempercepat pengisian data.</li>
-                  </ul>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                
+                {/* Langkah 1 */}
+                <div className="bg-slate-50 hover:bg-slate-50/50 border border-slate-100 hover:border-slate-200 rounded-2xl p-5 transition-all flex flex-col gap-2">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="h-6 w-6 rounded-lg bg-emerald-100 text-emerald-800 text-xs font-extrabold flex items-center justify-center font-mono">1</span>
+                    <FileSpreadsheet className="h-4 w-4 text-slate-400" />
+                  </div>
+                  <h3 className="font-extrabold text-slate-800 text-sm">Pilih Kelas & Siswa</h3>
+                  <p className="text-slate-500 text-xs leading-relaxed">
+                    Berpindah kelas di dropdown subbar kelas. Untuk penambahan murid, hapus, atau edit identitas, gunakan menu <strong>Kelola Database</strong> di tab utama.
+                  </p>
                 </div>
-              </div>
 
-              {/* Langkah 2 */}
-              <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex flex-col gap-3 relative overflow-hidden">
-                <div className="absolute top-0 left-0 w-2 h-full bg-emerald-500"></div>
-                <h3 className="font-black text-slate-800 text-lg flex items-center gap-2">
-                  <span className="bg-emerald-100 text-emerald-700 h-8 w-8 rounded-full flex items-center justify-center font-black text-sm">2</span>
-                  Mengisi Nilai Karakter (5NK)
-                </h3>
-                <div className="pl-10 text-slate-600 text-sm leading-relaxed space-y-2">
-                  <p>Input nilai bisa dilakukan melalui dua cara: Tabel Excel (Grid) atau Form per Siswa.</p>
-                  <ul className="list-disc pl-5 space-y-1">
-                    <li><strong>Tab Rekap Nilai (Grid):</strong> Klik pada kotak kosong di bawah nama siswa untuk memberikan predikat (BSB / BSH / MB / BB). Judul kolom akan tetap terlihat saat Anda scroll ke bawah.</li>
-                    <li><strong>Panel Makro Kanan:</strong> Gunakan panel ini untuk mengisi nilai seluruh siswa dalam satu kelas sekaligus secara otomatis (Misal: Set semua nilai ke BSH).</li>
-                  </ul>
+                {/* Langkah 2 */}
+                <div className="bg-slate-50 hover:bg-slate-50/50 border border-slate-100 hover:border-slate-200 rounded-2xl p-5 transition-all flex flex-col gap-2">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="h-6 w-6 rounded-lg bg-indigo-100 text-indigo-800 text-xs font-extrabold flex items-center justify-center font-mono">2</span>
+                    <Wand2 className="h-4 w-4 text-indigo-400 animate-pulse" />
+                  </div>
+                  <h3 className="font-extrabold text-slate-800 text-sm">Input Nilai & Deskripsi AI</h3>
+                  <p className="text-slate-500 text-xs leading-relaxed">
+                    Beri predikat karakter (BSB / BSH / MB / BB) di menu <strong>Rekap Nilai</strong>. Di panel samping, pakai <strong>AI Generator</strong> untuk men-draft kata-kata ulasan otomatis.
+                  </p>
                 </div>
-              </div>
 
-              {/* Langkah 3 */}
-              <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex flex-col gap-3 relative overflow-hidden">
-                <div className="absolute top-0 left-0 w-2 h-full bg-purple-500"></div>
-                <h3 className="font-black text-slate-800 text-lg flex items-center gap-2">
-                  <span className="bg-purple-100 text-purple-700 h-8 w-8 rounded-full flex items-center justify-center font-black text-sm">3</span>
-                  Generate Ulasan Otomatis dengan AI Gemini
-                </h3>
-                <div className="pl-10 text-slate-600 text-sm leading-relaxed space-y-2">
-                  <p>Hemat waktu Anda dengan menggunakan kecerdasan buatan untuk menyusun deskripsi perkembangan anak.</p>
-                  <ul className="list-disc pl-5 space-y-1">
-                    <li>Buka panel kanan (Macro), lalu klik tombol <strong>Generate Laporan Otomatis (AI)</strong>.</li>
-                    <li>AI akan membaca nilai siswa dan merangkai kata-kata apresiasi serta saran pengembangan yang positif.</li>
-                    <li>Anda selalu bisa mengubah teks hasil buatan AI tersebut sebelum dicetak.</li>
-                  </ul>
+                {/* Langkah 3 */}
+                <div className="bg-slate-50 hover:bg-slate-50/50 border border-slate-100 hover:border-slate-200 rounded-2xl p-5 transition-all flex flex-col gap-2">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="h-6 w-6 rounded-lg bg-amber-100 text-amber-800 text-xs font-extrabold flex items-center justify-center font-mono">3</span>
+                    <Save className="h-4 w-4 text-amber-500" />
+                  </div>
+                  <h3 className="font-extrabold text-slate-800 text-sm">Backup Latar Belakang</h3>
+                  <p className="text-slate-500 text-xs leading-relaxed">
+                    Aplikasi merekam perubahan ke memori lokal secara otomatis. Disarankan membuat <strong>Snapshot Manual</strong> di tab database sebelum merombak nilai murid sekelas.
+                  </p>
                 </div>
-              </div>
 
-              {/* Langkah 4 */}
-              <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm flex flex-col gap-3 relative overflow-hidden">
-                <div className="absolute top-0 left-0 w-2 h-full bg-rose-500"></div>
-                <h3 className="font-black text-slate-800 text-lg flex items-center gap-2">
-                  <span className="bg-rose-100 text-rose-700 h-8 w-8 rounded-full flex items-center justify-center font-black text-sm">4</span>
-                  Mencetak dan Mengekspor PDF Rapor
-                </h3>
-                <div className="pl-10 text-slate-600 text-sm leading-relaxed space-y-2">
-                  <p>Fitur cetak dirancang secara khusus untuk menghasilkan dokumen PDF A4 siap edar.</p>
-                  <ul className="list-disc pl-5 space-y-1">
-                    <li>Buka tab <strong>Cetak Rapor</strong>. Di sidebar kiri, Anda bisa memilih siswa mana saja yang ingin dicetak.</li>
-                    <li>Pilih tombol <strong>Simpan Sebagai PDF</strong> untuk mengunduh dokumen satuan.</li>
-                    <li>Gunakan tombol <strong>Cetak Massal (Semua Siswa)</strong> jika Anda ingin mengunduh rapor 1 kelas sekaligus ke dalam bentuk file ZIP atau mencetaknya langsung.</li>
-                  </ul>
+                {/* Langkah 4 */}
+                <div className="bg-slate-50 hover:bg-slate-50/50 border border-slate-100 hover:border-slate-200 rounded-2xl p-5 transition-all flex flex-col gap-2">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="h-6 w-6 rounded-lg bg-blue-100 text-blue-800 text-xs font-extrabold flex items-center justify-center font-mono">4</span>
+                    <Printer className="h-4 w-4 text-blue-500" />
+                  </div>
+                  <h3 className="font-extrabold text-slate-800 text-sm">Cetak Rapor Massal</h3>
+                  <p className="text-slate-500 text-xs leading-relaxed">
+                    Gunakan tab <strong>Cetak Rapor</strong> untuk meninjau pratinjau A4, mencetak langsung, atau mengunduh arsip ZIP berisi PDF individu siswa secara mandiri.
+                  </p>
                 </div>
+
               </div>
 
             </div>
           )}
 
+          {/* TAB 2: TANYA JAWAB (FAQ) */}
           {activeTab === 'faq' && (
-            <div className="max-w-3xl mx-auto flex flex-col gap-4 animate-in fade-in duration-350">
+            <div className="max-w-2xl mx-auto flex flex-col gap-4 animate-in fade-in duration-200">
               
-              <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
-                <h4 className="font-bold text-slate-800 text-sm mb-2">Q: Bagaimana cara backup / menyelamatkan data nilai saya?</h4>
-                <p className="text-slate-600 text-sm leading-relaxed">
-                  Aplikasi ini menyimpan data secara lokal di browser Anda. Sangat disarankan untuk masuk ke tab <strong>Database CRUD</strong>, lalu masuk ke bagian <strong>Backup & Enkripsi</strong> untuk mendownload file cadangan <code className="bg-slate-100 px-1 rounded">.json</code> agar data Anda tidak hilang saat menghapus cache browser.
-                </p>
+              {/* Search Bar */}
+              <div className="relative mb-2">
+                <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Cari pertanyaan bantuan..."
+                  value={faqSearch}
+                  onChange={(e) => setFaqSearch(e.target.value)}
+                  className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:border-slate-400 focus:bg-white text-slate-700 transition-all placeholder:text-slate-400"
+                />
               </div>
 
-              <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
-                <h4 className="font-bold text-slate-800 text-sm mb-2">Q: Apakah saya bisa merubah Kop Surat (Nama Kepala Sekolah / Identitas Sekolah)?</h4>
-                <p className="text-slate-600 text-sm leading-relaxed">
-                  Bisa. Masuk ke tab <strong>Database CRUD</strong>, lalu pilih sub-tab <strong>Profil & Kop Surat</strong>. Anda dapat mengedit identitas sekolah, nama kepala sekolah, NIP, serta tanggal cetak rapor yang akan diaplikasikan ke semua dokumen cetak secara otomatis.
-                </p>
+              {filteredFaqs.length === 0 ? (
+                <p className="text-center py-8 text-xs text-slate-400 font-medium">Pertanyaan tidak ditemukan.</p>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {filteredFaqs.map((faq, idx) => {
+                    const isOpen = openFaqIndex === idx;
+                    return (
+                      <div 
+                        key={idx}
+                        className="border border-slate-100 rounded-xl bg-slate-50 overflow-hidden transition-all"
+                      >
+                        <button
+                          onClick={() => setOpenFaqIndex(isOpen ? null : idx)}
+                          className="w-full text-left p-4 flex justify-between items-center gap-3 hover:bg-slate-100/50 transition-colors cursor-pointer"
+                        >
+                          <span className="font-extrabold text-slate-800 text-xs">{faq.q}</span>
+                          <ArrowRight className={`h-3 w-3 text-slate-400 transition-transform duration-200 flex-none ${isOpen ? 'rotate-90 text-slate-800' : ''}`} />
+                        </button>
+                        {isOpen && (
+                          <div className="px-4 pb-4 pt-1 border-t border-slate-100 text-slate-600 text-xs leading-relaxed animate-in slide-in-from-top-1 duration-150">
+                            {faq.a}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+            </div>
+          )}
+
+          {/* TAB 3: HUBUNGI BANTUAN CEPAT */}
+          {activeTab === 'hub' && (
+            <div className="max-w-md mx-auto flex flex-col items-center justify-center text-center p-6 bg-slate-50 border border-slate-100 rounded-3xl animate-in scale-in duration-200">
+              <div className="bg-emerald-500 text-slate-950 p-3.5 rounded-full mb-4 shadow-md">
+                <MessageSquare className="h-6 w-6" />
+              </div>
+              <h3 className="font-extrabold text-slate-800 text-base mb-1">Butuh Bantuan Lebih Lanjut?</h3>
+              <p className="text-xs text-slate-500 max-w-sm leading-relaxed mb-6">
+                Hubungi tim pengembang atau administrator sekolah untuk mendapatkan bantuan teknis, perbaikan data, atau lisensi sistem.
+              </p>
+
+              <div className="w-full space-y-2 text-left mb-4">
+                <div className="p-3 bg-white border border-slate-150 rounded-xl flex items-center justify-between">
+                  <div>
+                    <p className="text-[10px] text-slate-400 font-bold uppercase">Email Pengembang</p>
+                    <p className="text-xs font-extrabold text-slate-800">smakartikasby@gmail.com</p>
+                  </div>
+                  <span className="text-[9px] bg-slate-100 text-slate-600 font-bold px-2 py-0.5 rounded-md">Standby 24/7</span>
+                </div>
+                <div className="p-3 bg-white border border-slate-150 rounded-xl flex items-center justify-between">
+                  <div>
+                    <p className="text-[10px] text-slate-400 font-bold uppercase">Admin Operator</p>
+                    <p className="text-xs font-extrabold text-slate-800">+62 895-3666-08358</p>
+                  </div>
+                  <span className="text-[9px] bg-emerald-100 text-emerald-800 font-extrabold px-2 py-0.5 rounded-md">Jam Kerja</span>
+                </div>
               </div>
 
-              <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
-                <h4 className="font-bold text-slate-800 text-sm mb-2">Q: Saat ekspor PDF gabungan 1 kelas, prosesnya berhenti atau gagal. Apa solusinya?</h4>
-                <p className="text-slate-600 text-sm leading-relaxed">
-                  Mencetak banyak siswa sekaligus memakan banyak memori perangkat. Solusinya:
-                  1) Pastikan Anda tidak membuka tab browser lain yang berat. 
-                  2) Coba gunakan opsi unduhan terpisah (.ZIP) daripada PDF Gabungan. 
-                  3) Atau cetak rapor secara manual dengan memilih sebagian murid agar memori tidak penuh.
-                </p>
-              </div>
-
+              <p className="text-[9px] text-slate-400 font-medium">Sistem Konsol Rapor Karakter 5NK v1.2 © SMAKAPATGA.</p>
             </div>
           )}
 

@@ -19,6 +19,7 @@ export interface KopSekolah {
   templateNotes?: string[];
   customFooterText?: string;
   enableAutoDate?: boolean;
+  forcedOrientation?: 'auto' | 'portrait' | 'landscape';
 }
 
 export interface ScoreOption {

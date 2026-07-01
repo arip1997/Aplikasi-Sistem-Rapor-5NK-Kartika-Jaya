@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import * as XLSX from 'xlsx';
 import { Student, Teacher, Category, Indicator, ScoreKey, KopSekolah } from '../types';
 import { SCHOOL_CLASSES, DEFAULT_KOP } from '../data';
-import { exportDatabaseBackupConfig, parseExcelDatabase, uploadExcelToGoogleDrive, encryptData, decryptData, addChangeLog, getChangeLogs, clearChangeLogs, deleteChangeLog, exportLocalJsonBackup, ChangeLog, formatProperName } from '../utils';
+import { exportDatabaseBackupConfig, parseExcelDatabase, uploadExcelToGoogleDrive, encryptData, decryptData, addChangeLog, getChangeLogs, clearChangeLogs, deleteChangeLog, exportLocalJsonBackup, ChangeLog, formatProperName, runIntegrityCheck, IntegrityReport } from '../utils';
 import { normalizeAllData, hasValidAcademicTitle } from '../normalization';
 import { initAuth, googleSignIn, getAccessToken, logout } from '../firebase';
 import { 
@@ -71,9 +71,151 @@ export default function DatabaseCrud({
   rowHeightMode,
   setRowHeightMode,
 }: DatabaseCrudProps) {
-  const [activeSubTab, setActiveSubTab] = useState<'siswa' | 'guru' | 'indikator' | 'kop' | 'backup' | 'riwayat'>('siswa');
+  const [activeSubTab, setActiveSubTab] = useState<'siswa' | 'guru' | 'indikator' | 'kop' | 'backup' | 'riwayat' | 'snapshot' | 'integritas'>('siswa');
   const [changeLogs, setChangeLogs] = useState<ChangeLog[]>([]);
   const [logSearchQuery, setLogSearchQuery] = useState('');
+
+  // States for Snapshot Manual & Yayasan Report
+  const [snapshotLabel, setSnapshotLabel] = useState('');
+  const [snapshots, setSnapshots] = useState<any[]>(() => {
+    try {
+      const raw = localStorage.getItem('rapor_5nk_manual_snapshots');
+      return raw ? JSON.parse(raw) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+
+  const [yayasanWaliFilter, setYayasanWaliFilter] = useState('');
+  const [yayasanCabangFilter, setYayasanCabangFilter] = useState(kopSekolah.cabang || '');
+
+  const handleCreateSnapshot = () => {
+    if (!snapshotLabel.trim()) {
+      alert("Silahkan isi label snapshot terlebih dahulu!");
+      return;
+    }
+    const newSnap = {
+      id: 'snap_' + Date.now(),
+      timestamp: new Date().toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' }),
+      label: snapshotLabel.trim(),
+      studentsCount: students.length,
+      teachersCount: teachers.length,
+      data: {
+        students,
+        teachers,
+        categories,
+        kopSekolah,
+        classes
+      }
+    };
+    const updated = [newSnap, ...snapshots];
+    setSnapshots(updated);
+    localStorage.setItem('rapor_5nk_manual_snapshots', JSON.stringify(updated));
+    setSnapshotLabel('');
+    addChangeLog(
+      'SNAPSHOT BARU',
+      `Membuat snapshot manual: "${newSnap.label}" dengan ${newSnap.studentsCount} siswa`
+    );
+    alert(`Snapshot "${newSnap.label}" berhasil dibuat secara lokal!`);
+  };
+
+  const handleRestoreSnapshot = (snap: any) => {
+    const confirmRestore = window.confirm(`Apakah Anda yakin ingin memulihkan data Rapor ke snapshot "${snap.label}" yang dibuat pada ${snap.timestamp}?\n\nSemua data siswa, guru, kategori, kop surat, dan kelas saat ini akan ditimpa dengan data cadangan ini.\n\nTindakan ini tidak dapat dibatalkan!`);
+    if (!confirmRestore) return;
+
+    const d = snap.data;
+    if (d.students) onUpdateStudents(d.students);
+    if (d.teachers) onUpdateTeachers(d.teachers);
+    if (d.categories) onUpdateCategories(d.categories);
+    if (d.kopSekolah) onUpdateKopSekolah(d.kopSekolah);
+    if (d.classes) onUpdateClasses(d.classes);
+
+    addChangeLog(
+      'SNAPSHOT RESTORE',
+      `Memulihkan database dari snapshot: "${snap.label}"`
+    );
+    alert(`Data berhasil dipulihkan ke kondisi "${snap.label}"!`);
+  };
+
+  const handleDeleteSnapshot = (id: string) => {
+    if (!window.confirm('Apakah Anda yakin ingin menghapus snapshot manual ini?')) return;
+    const updated = snapshots.filter(s => s.id !== id);
+    setSnapshots(updated);
+    localStorage.setItem('rapor_5nk_manual_snapshots', JSON.stringify(updated));
+  };
+
+  const handleExportYayasan = () => {
+    let filtered = [...students];
+    if (yayasanWaliFilter) {
+      const teacher = teachers.find(t => t.name === yayasanWaliFilter);
+      if (teacher) {
+        filtered = filtered.filter(s => s.kelas === teacher.classAssigned);
+      } else {
+        filtered = [];
+      }
+    }
+
+    if (filtered.length === 0) {
+      alert("Tidak ada data siswa yang cocok dengan filter wali kelas yang dipilih.");
+      return;
+    }
+
+    const wb = XLSX.utils.book_new();
+    
+    const totalSiswa = filtered.length;
+    const lakiLaki = filtered.filter(s => s.gender === 'L').length;
+    const perempuan = filtered.filter(s => s.gender === 'P').length;
+    const lengkap = filtered.filter(s => s.completed).length;
+    const belumLengkap = totalSiswa - lengkap;
+    const persenLengkap = Math.round((lengkap / totalSiswa) * 100);
+
+    const ringkasanRows = [
+      ['LAPORAN KOORDINASI & SINKRONISASI RAPOR YAYASAN'],
+      ['YAYASAN', kopSekolah.yayasan.toUpperCase()],
+      ['CABANG/SUB-CABANG', yayasanCabangFilter.toUpperCase() || kopSekolah.cabang.toUpperCase()],
+      ['KOORDINATOR', kopSekolah.koordinator.toUpperCase()],
+      ['NAMA SEKOLAH', kopSekolah.namaSekolah.toUpperCase()],
+      ['WALI KELAS FILTER', yayasanWaliFilter || 'SEMUA WALI KELAS'],
+      ['TANGGAL EKSPOR', new Date().toLocaleString('id-ID')],
+      [],
+      ['METRIK UTAMA', 'NILAI'],
+      ['Total Siswa Terfilter', totalSiswa],
+      ['Jumlah Siswa Laki-Laki', lakiLaki],
+      ['Jumlah Siswa Perempuan', perempuan],
+      ['Status Rapor Lengkap (Selesai)', lengkap],
+      ['Status Rapor Belum Lengkap', belumLengkap],
+      ['Persentase Penyelesaian (%)', `${persenLengkap}%`],
+      [],
+      ['Tanda Tangan Pelapor', '', '', 'Mengetahui Yayasan'],
+      [],
+      [],
+      [yayasanWaliFilter || 'Wali Kelas', '', '', 'Pengurus Yayasan']
+    ];
+    const wsSummary = XLSX.utils.aoa_to_sheet(ringkasanRows);
+    XLSX.utils.book_append_sheet(wb, wsSummary, 'Ringkasan_Laporan');
+
+    const detailRows = filtered.map((s, idx) => ({
+      'No': idx + 1,
+      'NIS': s.nis,
+      'Nama Siswa': s.name,
+      'Kelas': s.kelas,
+      'Jenis Kelamin': s.gender === 'L' ? 'Laki-Laki' : 'Perempuan',
+      'Status Rapor': s.completed ? 'LENGKAP' : 'BELUM SELESAI',
+      'Kesimpulan': s.kesimpulan || '',
+      'Catatan Wali': s.catatanWali || ''
+    }));
+    const wsDetail = XLSX.utils.json_to_sheet(detailRows);
+    XLSX.utils.book_append_sheet(wb, wsDetail, 'Detail_Siswa');
+
+    const filename = `Laporan_Yayasan_${(yayasanCabangFilter || 'Cabang').replace(/\s+/g, '_')}_${(yayasanWaliFilter || 'Semua_Wali').replace(/\s+/g, '_')}.xlsx`;
+    XLSX.writeFile(wb, filename);
+
+    addChangeLog(
+      'EKSPOR YAYASAN',
+      `Ekspor laporan yayasan untuk Cabang: ${yayasanCabangFilter || 'Semua'} & Wali: ${yayasanWaliFilter || 'Semua'}. Total: ${totalSiswa} siswa`
+    );
+    alert(`Laporan yayasan berhasil diekspor ke file "${filename}"!`);
+  };
 
   // Sync change logs
   useEffect(() => {
@@ -1002,6 +1144,26 @@ export default function DatabaseCrud({
           >
             ⏱️ Riwayat Perubahan
           </button>
+          <button
+            onClick={() => setActiveSubTab('snapshot')}
+            className={`px-3 py-1.5 text-xs font-bold rounded-lg flex items-center gap-1.5 cursor-pointer select-none border transition-colors ${
+              activeSubTab === 'snapshot' 
+                ? 'bg-white text-slate-800 border-slate-200 shadow-xs' 
+                : 'text-slate-500 hover:bg-slate-200/50 border-transparent'
+            }`}
+          >
+            📸 Snapshot Manual
+          </button>
+          <button
+            onClick={() => setActiveSubTab('integritas')}
+            className={`px-3 py-1.5 text-xs font-bold rounded-lg flex items-center gap-1.5 cursor-pointer select-none border transition-colors ${
+              activeSubTab === 'integritas' 
+                ? 'bg-white text-slate-800 border-slate-200 shadow-xs' 
+                : 'text-slate-500 hover:bg-slate-200/50 border-transparent'
+            }`}
+          >
+            🔍 Cek Integritas Data
+          </button>
         </div>
         
         <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
@@ -1826,6 +1988,37 @@ export default function DatabaseCrud({
               </div>
             </div>
 
+            {/* Forced Print Orientation */}
+            <div className="mt-4 p-4 bg-white border border-slate-200 rounded-xl flex items-center justify-between">
+              <div>
+                <h5 className="font-bold text-slate-700 text-xs">Orientasi Cetak Rapor</h5>
+                <p className="text-[11px] text-slate-400 mt-0.5">Paksa tata letak cetak/PDF menggunakan mode Portrait atau Landscape.</p>
+              </div>
+              <div className="flex bg-slate-100 p-1 rounded-lg">
+                <button
+                  type="button"
+                  onClick={() => setEditKop({ ...editKop, forcedOrientation: 'auto' })}
+                  className={`px-3 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${(!editKop.forcedOrientation || editKop.forcedOrientation === 'auto') ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                  Otomatis
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditKop({ ...editKop, forcedOrientation: 'portrait' })}
+                  className={`px-3 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${editKop.forcedOrientation === 'portrait' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                  Portrait
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditKop({ ...editKop, forcedOrientation: 'landscape' })}
+                  className={`px-3 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${editKop.forcedOrientation === 'landscape' ? 'bg-white shadow-sm text-slate-800' : 'text-slate-500 hover:text-slate-700'}`}
+                >
+                  Landscape
+                </button>
+              </div>
+            </div>
+
             {/* Custom Footer Text */}
             <div className="mt-4 p-4 bg-white border border-slate-200 rounded-xl">
               <h5 className="font-bold text-slate-700 text-xs mb-2">Teks Footer Kustom</h5>
@@ -2185,6 +2378,252 @@ export default function DatabaseCrud({
           )}
         </div>
       )}
+
+      {/* -------------------- SUBTAB 7: SNAPSHOT MANUAL & EKSPOR YAYASAN -------------------- */}
+      {activeSubTab === 'snapshot' && (
+        <div className="flex-1 overflow-y-auto p-6 max-h-[500px]">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            
+            {/* Kiri: Buat Snapshot Baru */}
+            <div className="lg:col-span-5 flex flex-col gap-6">
+              <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
+                <h4 className="font-bold text-slate-800 text-xs uppercase tracking-wider text-emerald-800 mb-2">📸 Buat Backup Point (Snapshot)</h4>
+                <p className="text-xs text-slate-400 mb-4">Buat salinan data (Siswa, Guru, Kop) saat ini ke dalam memori browser lokal. Amankan konfigurasi sebelum melakukan edit massal.</p>
+                
+                <div className="flex flex-col gap-3">
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-500 block mb-1">Label / Nama Snapshot</label>
+                    <input
+                      type="text"
+                      placeholder="Contoh: Sebelum AI generate deskripsi"
+                      value={snapshotLabel}
+                      onChange={(e) => setSnapshotLabel(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-emerald-500 focus:bg-white text-slate-700 transition-all placeholder:text-slate-400"
+                    />
+                  </div>
+                  <button
+                    onClick={handleCreateSnapshot}
+                    className="w-full bg-emerald-700 hover:bg-emerald-600 font-bold px-4 py-2.5 rounded-xl text-xs text-white shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-95 animate-pulse"
+                  >
+                    <Save className="h-4 w-4" /> Ambil Snapshot Data
+                  </button>
+                </div>
+              </div>
+
+              {/* Ekspor Laporan Yayasan */}
+              <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs">
+                <h4 className="font-bold text-slate-800 text-xs uppercase tracking-wider text-indigo-800 mb-2">🏢 Laporan Koordinasi Yayasan</h4>
+                <p className="text-xs text-slate-400 mb-4">Saring data siswa berdasarkan wali kelas atau sub-cabang sekolah secara otomatis untuk diekspor ke Excel koordinasi yayasan.</p>
+                
+                <div className="flex flex-col gap-3">
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-500 block mb-1">Filter Wali Kelas</label>
+                    <select
+                      value={yayasanWaliFilter}
+                      onChange={(e) => setYayasanWaliFilter(e.target.value)}
+                      className="w-full px-2.5 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-indigo-500 focus:bg-white text-slate-700 transition-all cursor-pointer"
+                    >
+                      <option value="">-- Semua Wali Kelas --</option>
+                      {teachers.filter(t => t.role === 'Wali Kelas').map(t => (
+                        <option key={t.id} value={t.name}>{t.name} (Kelas {t.classAssigned || '-'})</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-500 block mb-1">Sub-Cabang Sekolah</label>
+                    <input
+                      type="text"
+                      placeholder="Masukkan nama cabang pelaporan"
+                      value={yayasanCabangFilter}
+                      onChange={(e) => setYayasanCabangFilter(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:border-indigo-500 focus:bg-white text-slate-700 transition-all placeholder:text-slate-400"
+                    />
+                  </div>
+
+                  <button
+                    onClick={handleExportYayasan}
+                    className="w-full bg-indigo-700 hover:bg-indigo-600 font-bold px-4 py-2.5 rounded-xl text-xs text-white shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-95"
+                  >
+                    <Download className="h-4 w-4" /> Unduh Laporan Yayasan (.xlsx)
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Kanan: Daftar Snapshot yang Tersedia */}
+            <div className="lg:col-span-7 bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col min-h-[300px]">
+              <h4 className="font-bold text-slate-800 text-xs uppercase tracking-wider text-slate-700 mb-2 flex items-center gap-1.5">
+                📜 Daftar Backup Points lokal ({snapshots.length})
+              </h4>
+              <p className="text-xs text-slate-400 mb-4">Pulihkan data kapan saja ke kondisi di bawah jika terjadi kesalahan entri data massal.</p>
+
+              {snapshots.length === 0 ? (
+                <div className="flex-1 flex flex-col items-center justify-center text-center p-8 border border-dashed border-slate-200 rounded-xl bg-slate-50">
+                  <div className="text-slate-300 font-black text-2xl mb-1">Belum Ada Snapshot</div>
+                  <p className="text-xs text-slate-400 max-w-xs">Snapshot yang Anda ambil akan muncul di sini untuk dipulihkan secara instan.</p>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2 max-h-[350px] overflow-y-auto pr-1">
+                  {snapshots.map((snap) => (
+                    <div
+                      key={snap.id}
+                      className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between gap-4 hover:border-emerald-300 hover:bg-slate-50/50 transition-all animate-in fade-in duration-200"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2 mb-1">
+                          <span className="font-black text-xs text-slate-800 truncate uppercase">{snap.label}</span>
+                          <span className="text-[9px] bg-slate-200 text-slate-600 font-bold px-1.5 py-0.5 rounded-full font-mono whitespace-nowrap">
+                            {snap.timestamp}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 font-bold">
+                          Kandungan: <span className="text-slate-600">{snap.studentsCount} Siswa</span>, <span className="text-slate-600">{snap.teachersCount} Wali Kelas</span>
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 flex-none">
+                        <button
+                          onClick={() => handleRestoreSnapshot(snap)}
+                          className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 font-bold px-2.5 py-1.5 rounded-lg text-[10px] flex items-center gap-1 cursor-pointer transition-colors active:scale-95"
+                          title="Restore data ke snapshot ini"
+                        >
+                          <RotateCcw className="h-3 w-3 animate-spin-slow" /> Pulihkan
+                        </button>
+                        <button
+                          onClick={() => handleDeleteSnapshot(snap.id)}
+                          className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 border border-transparent hover:border-rose-200 transition-all cursor-pointer active:scale-95"
+                          title="Hapus snapshot ini"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+          </div>
+        </div>
+      )}
+
+      {/* -------------------- SUBTAB 8: CEK INTEGRITAS DATA -------------------- */}
+      {activeSubTab === 'integritas' && (() => {
+        const report = runIntegrityCheck(students, teachers, categories, classes);
+        return (
+          <div className="flex-1 overflow-y-auto p-6 max-h-[500px]">
+            <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col gap-6">
+              <div>
+                <h4 className="font-extrabold text-slate-800 text-xs uppercase tracking-wider text-slate-700 mb-1 flex items-center gap-2">
+                  🔍 Laporan Integritas & Validasi Konsistensi Data
+                </h4>
+                <p className="text-xs text-slate-400">
+                  Sistem memeriksa konsistensi rujukan data secara mendalam antara Daftar Siswa, Data Guru / Wali Kelas, dan Kategori Indikator Penilaian.
+                </p>
+              </div>
+
+              {report.isValid ? (
+                <div className="bg-emerald-50 border border-emerald-200 p-5 rounded-2xl flex items-start gap-4">
+                  <div className="bg-emerald-500 text-white p-2 rounded-xl flex-none">
+                    <Check className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <h5 className="font-extrabold text-emerald-800 text-xs uppercase tracking-wider mb-1">✓ Database 100% Sempurna & Konsisten!</h5>
+                    <p className="text-xs text-emerald-600 font-semibold leading-relaxed">
+                      Luar biasa! Tidak ditemukan ID referensi terputus, semua murid memiliki Wali Kelas yang sah, dan semua skor penilaian memetakan ke indikator karakter 5NK yang valid di dalam sistem.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-amber-50 border border-amber-200 p-5 rounded-2xl flex items-start gap-4">
+                  <div className="bg-amber-500 text-white p-2 rounded-xl flex-none">
+                    <AlertCircle className="h-5 w-5" />
+                  </div>
+                  <div className="flex-1">
+                    <h5 className="font-extrabold text-amber-800 text-xs uppercase tracking-wider mb-1">⚠️ Ditemukan Masalah Konsistensi Data ({report.brokenStudentClasses.length + report.brokenGradeIndicators.length + report.unassignedClasses.length} konflik)</h5>
+                    <p className="text-xs text-amber-700 leading-relaxed font-semibold">
+                      Harap perbaiki beberapa referensi di bawah ini untuk memastikan tidak terjadi malfungsi ketika mencetak atau melakukan ekspor rapor.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Detail Konflik */}
+              {!report.isValid && (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  {/* 1. Siswa tanpa Wali Kelas */}
+                  <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4">
+                    <h6 className="font-bold text-slate-700 text-xs uppercase tracking-wide mb-3 flex items-center gap-1.5 text-slate-800">
+                      🧑‍🎓 Kelas Siswa Terputus ({report.brokenStudentClasses.length})
+                    </h6>
+                    {report.brokenStudentClasses.length === 0 ? (
+                      <p className="text-xs text-slate-400 italic">Tidak ada masalah kelas siswa.</p>
+                    ) : (
+                      <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
+                        {report.brokenStudentClasses.map((item, idx) => (
+                          <div key={idx} className="p-2.5 bg-white border border-slate-200 rounded-xl text-[11px] leading-relaxed">
+                            <p className="font-extrabold text-slate-800">{item.studentName}</p>
+                            <p className="text-slate-400 font-mono">ID: {item.studentId}</p>
+                            <div className="mt-1 flex items-center justify-between">
+                              <span className="text-[10px] bg-rose-50 text-rose-700 font-bold px-1.5 py-0.5 rounded-md">
+                                Kelas: {item.class}
+                              </span>
+                              <span className="text-[9px] text-slate-400 font-semibold italic">Wali Kelas Hilang</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 2. Indikator Terputus */}
+                  <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4">
+                    <h6 className="font-bold text-slate-700 text-xs uppercase tracking-wide mb-3 flex items-center gap-1.5 text-slate-800">
+                      📝 Indikator Nilai Terputus ({report.brokenGradeIndicators.length})
+                    </h6>
+                    {report.brokenGradeIndicators.length === 0 ? (
+                      <p className="text-xs text-slate-400 italic">Tidak ada indikator nilai terputus.</p>
+                    ) : (
+                      <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
+                        {report.brokenGradeIndicators.map((item, idx) => (
+                          <div key={idx} className="p-2.5 bg-white border border-slate-200 rounded-xl text-[11px] leading-relaxed">
+                            <p className="font-extrabold text-slate-800">{item.studentName}</p>
+                            <p className="text-slate-400 font-mono">Indikator ID: <strong className="text-rose-600 font-mono">{item.indicatorId}</strong></p>
+                            <p className="text-[10px] text-slate-400 leading-snug mt-1 italic">Indikator tidak ada di Kategori 5NK.</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 3. Kelas Tanpa Wali Kelas */}
+                  <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4">
+                    <h6 className="font-bold text-slate-700 text-xs uppercase tracking-wide mb-3 flex items-center gap-1.5 text-slate-800">
+                      🏢 Kelas Tanpa Wali Kelas ({report.unassignedClasses.length})
+                    </h6>
+                    {report.unassignedClasses.length === 0 ? (
+                      <p className="text-xs text-slate-400 italic">Semua kelas memiliki Wali Kelas.</p>
+                    ) : (
+                      <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
+                        {report.unassignedClasses.map((cls, idx) => (
+                          <div key={idx} className="p-2.5 bg-white border border-slate-200 rounded-xl text-[11px] flex items-center justify-between">
+                            <span className="font-extrabold text-slate-800">Kelas {cls}</span>
+                            <span className="text-[9px] bg-amber-50 text-amber-700 border border-amber-200 font-bold px-2 py-0.5 rounded-lg">
+                              Belum Ditugaskan
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ----------------- POPUP MODAL 0: TAMBAH KELAS ----------------- */}
       {isAddClassModalOpen && (

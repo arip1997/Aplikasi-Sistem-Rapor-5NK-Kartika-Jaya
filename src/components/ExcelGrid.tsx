@@ -711,8 +711,8 @@ export default function ExcelGrid({
                             </span>
                           )}
                           {stud.printStatus && (
-                            <span className="flex-none ml-1 text-indigo-600 bg-indigo-50 p-0.5 rounded-full" title="Telah Dicetak">
-                              <Printer className="h-3 w-3" />
+                            <span className="flex-none ml-1 text-emerald-700 bg-emerald-100 p-0.5 rounded-full border border-emerald-300" title="Sudah Dicetak">
+                              <Check className="h-3 w-3" />
                             </span>
                           )}
                         </button>

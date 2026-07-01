@@ -8,6 +8,7 @@ import { Printer, Download, Eye, FileSpreadsheet, ArrowLeft, Heart, Award, Spark
 import html2pdf from 'html2pdf.js';
 import { uploadFileToDrive } from '../lib/drive.ts';
 import { googleSignIn, getAccessToken, initAuth } from '../firebase.ts';
+import ClassSelectorDropdown from './ClassSelectorDropdown';
 
 const EMPTY_SIGNATURE = "\u00A0".repeat(28);
 const EMPTY_SIGNATURE_PARENT = "\u00A0".repeat(45);
@@ -26,6 +27,7 @@ interface RaporCetakProps {
   onAddExportLog?: (type: string, action: string, file: string, count: number) => void;
   teachers?: any[];
   onMarkAsPrinted?: (studentIds: any[]) => void;
+  onResetPrintStatus?: () => void;
   autoTriggerBatchPdf?: boolean;
   autoPrintImmediately?: boolean;
   onResetAutoTrigger?: () => void;
@@ -34,6 +36,7 @@ interface RaporCetakProps {
   onClassChange?: (cls: string) => void;
   showFooterDate?: boolean;
   onUpdateShowFooterDate?: (value: boolean) => void;
+  onForceSync?: () => Promise<void>;
 }
 
 export default function RaporCetak({
@@ -50,6 +53,7 @@ export default function RaporCetak({
   onAddExportLog,
   teachers = [],
   onMarkAsPrinted,
+  onResetPrintStatus,
   autoTriggerBatchPdf = false,
   autoPrintImmediately = false,
   onResetAutoTrigger,
@@ -58,6 +62,7 @@ export default function RaporCetak({
   onClassChange,
   showFooterDate = true,
   onUpdateShowFooterDate,
+  onForceSync,
 }: RaporCetakProps) {
   
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
@@ -106,11 +111,24 @@ export default function RaporCetak({
   const [previewNis, setPreviewNis] = useState<string>(student.nis);
 
   const totalIndicators = categories.reduce((sum, cat) => sum + cat.indicators.length, 0);
-  const [isLandscape, setIsLandscape] = useState(totalIndicators > 6);
+  
+  const getInitialLandscape = () => {
+    if (kopSekolah.forcedOrientation === 'portrait') return false;
+    if (kopSekolah.forcedOrientation === 'landscape') return true;
+    return totalIndicators > 6;
+  };
+
+  const [isLandscape, setIsLandscape] = useState(getInitialLandscape());
 
   useEffect(() => {
-    setIsLandscape(totalIndicators > 6);
-  }, [totalIndicators]);
+    if (kopSekolah.forcedOrientation === 'portrait') {
+      setIsLandscape(false);
+    } else if (kopSekolah.forcedOrientation === 'landscape') {
+      setIsLandscape(true);
+    } else {
+      setIsLandscape(totalIndicators > 6);
+    }
+  }, [totalIndicators, kopSekolah.forcedOrientation]);
 
   // Sync the selected list and preview when initialBatchNisList or autoTriggerBatchPdf changes
   useEffect(() => {
@@ -167,9 +185,9 @@ export default function RaporCetak({
   }
   const selectedStudents = classStudents.filter(s => selectedNisList.includes(s.nis) && isStudentValid(s));
 
-  // If a ZIP download is in progress, we render just the 1 active batchStudent under loop.
+  // If a ZIP download or Google Drive save is in progress, we render just the 1 active batchStudent under loop.
   // Otherwise, we render all of the checked/selected students so they compile/print as a combined set.
-  const pdfRenderStudents = isGeneratingAll
+  const pdfRenderStudents = (isGeneratingAll || isUploadingToDrive)
     ? (batchStudent && isStudentValid(batchStudent) ? [batchStudent] : [])
     : selectedStudents;
 
@@ -215,6 +233,12 @@ export default function RaporCetak({
         document.title = `Rapor_5NK_Batch_${selectedClass}`;
       }
       
+      if (isLandscape) {
+        document.body.classList.add('print-landscape');
+      } else {
+        document.body.classList.remove('print-landscape');
+      }
+
       const isIframe = window.self !== window.top;
       window.focus();
       window.print();
@@ -226,6 +250,7 @@ export default function RaporCetak({
       console.warn("Direct Print blocked by sandbox/browser security:", err);
       setShowSandboxNotice(true);
     } finally {
+      document.body.classList.remove('print-landscape');
       setTimeout(() => {
         document.title = originalTitle;
       }, 500);
@@ -311,6 +336,7 @@ export default function RaporCetak({
         windowWidth: 1200,
         backgroundColor: '#ffffff',
         onclone: (clonedDoc: Document) => {
+          injectPrintStyles(clonedDoc, isLandscape, pageMargin);
           if (clonedDoc.defaultView) {
             const origClonedGcs = clonedDoc.defaultView.getComputedStyle;
             
@@ -584,6 +610,13 @@ export default function RaporCetak({
   };
 
   const handleDownloadPDF = async () => {
+    if (onForceSync) {
+      try {
+        await onForceSync();
+      } catch (syncErr) {
+        console.warn("[Sync Warning before PDF] Force sync failed, proceeding with local data:", syncErr);
+      }
+    }
     applyGlobalStyleOverrides(isLandscape);
     const html2pdfFn = typeof html2pdf === 'function' ? html2pdf : (html2pdf as any).default;
     if (!html2pdfFn) {
@@ -623,21 +656,36 @@ export default function RaporCetak({
           console.warn("[Dry-Run Warning] Detasemen validasi DOM menemukan ketidakcocokan visual; melanjutkan regenerasi paksa.");
         }
 
-        let filename = `Rapor_5NK_Batch_${selectedClass}.pdf`;
+        let defaultFilename = `Rapor_5NK_Batch_${selectedClass}.pdf`;
         if (selectedStudents.length === 1) {
           const s = selectedStudents[0];
-          filename = `Rapor_5NK_${s.name.replace(/\s+/g, '_')}_${s.nis}.pdf`;
+          defaultFilename = `Rapor_5NK_${s.name.replace(/\s+/g, '_')}_${s.nis}.pdf`;
         }
 
-        const baseOpt = getHtml2PdfOpt(selectedStudents[0] || student, originalElement);
-        const opt = {
-          ...baseOpt,
-          filename: filename
-        };
+        const inputFilename = window.prompt("Masukkan nama file untuk unduhan PDF:", defaultFilename.replace('.pdf', ''));
+        if (inputFilename === null) {
+          return;
+        }
 
-        console.log(`[PDF Generator] Starting html2pdf with filename: "${filename}"`);
-        await savePdfWithTimeout(html2pdfFn, originalElement, opt, 60000);
-        console.log("[PDF Generator] File generated and download triggered successfully.");
+        const filename = inputFilename.trim() 
+          ? (inputFilename.toLowerCase().endsWith('.pdf') ? inputFilename.trim() : `${inputFilename.trim()}.pdf`)
+          : defaultFilename;
+
+        console.log(`[PDF Generator] Starting iframe-based html2pdf with filename: "${filename}"`);
+        await generatePdfIframe(isLandscape, originalElement, filename, true, { top: 10, bottom: 10, left: 10, right: 10 });
+        console.log("[PDF Generator] File generated via iframe and download triggered successfully.");
+
+        if (onMarkAsPrinted && selectedStudents.length > 0) {
+          onMarkAsPrinted(selectedStudents.map(s => s.id));
+        }
+        if (onAddExportLog && selectedStudents.length > 0) {
+          onAddExportLog(
+            'PDF',
+            `Export ke PDF untuk ${selectedStudents.length} siswa`,
+            filename,
+            selectedStudents.length
+          );
+        }
       } finally {
         // Clean up data-layout-id
         originalElement.removeAttribute('data-layout-id');
@@ -655,6 +703,13 @@ export default function RaporCetak({
   };
 
   const handleSaveToDrive = async () => {
+    if (onForceSync) {
+      try {
+        await onForceSync();
+      } catch (syncErr) {
+        console.warn("[Sync Warning before Drive] Force sync failed, proceeding with local data:", syncErr);
+      }
+    }
     applyGlobalStyleOverrides(isLandscape);
     if (selectedStudents.length === 0) return;
 
@@ -698,11 +753,30 @@ export default function RaporCetak({
 
       for (const curStudent of validStudents) {
         try {
+          // Clear previous state first to force clear DOM
+          setBatchStudent(null);
+          await new Promise(resolve => setTimeout(resolve, 100));
+
           setBatchStudent(curStudent);
           setRenderTrigger(prev => prev + 1);
 
-          // Give a solid delay to ensure complete React state hydration and layout paint
-          await new Promise(resolve => setTimeout(resolve, 400));
+          // Now wait for the DOM to reflect the correct student
+          let isRendered = false;
+          for (let checkAttempts = 0; checkAttempts < 30; checkAttempts++) {
+            const originalElement = document.getElementById('rapor-pdf-content');
+            if (originalElement) {
+              const html = originalElement.innerHTML || "";
+              if (html.includes(curStudent.nis)) {
+                isRendered = true;
+                break;
+              }
+            }
+            await new Promise(resolve => setTimeout(resolve, 150));
+          }
+
+          if (!isRendered) {
+            console.warn(`[Drive Engine] Timeout waiting for student ${curStudent.name} DOM render.`);
+          }
 
           const originalElement = document.getElementById('rapor-pdf-content');
           if (!originalElement) {
@@ -724,16 +798,11 @@ export default function RaporCetak({
 
             runDryRunAuditAndVerifyDom(1);
 
-            const baseOpt = getHtml2PdfOpt(curStudent, originalElement);
             const cleanStudentName = curStudent.name.replace(/[^a-zA-Z0-9 ]/g, '').trim().replace(/\s+/g, '_');
             const filename = `Rapor_5NK_${cleanStudentName}_${curStudent.nis}.pdf`;
-            
-            const opt = {
-              ...baseOpt,
-              filename
-            };
 
-            const pdfBlob = await generatePdfWithTimeout(html2pdfFn, originalElement, opt, 60000);
+            console.log(` - Generating iframe-based pdf blob for ${curStudent.name}...`);
+            const pdfBlob = await generatePdfIframe(isLandscape, originalElement, filename, false, { top: 10, bottom: 10, left: 10, right: 10 }) as Blob;
             
             if (pdfBlob && pdfBlob.size > 0) {
               await uploadFileToDrive(token, pdfBlob, filename);
@@ -766,6 +835,14 @@ export default function RaporCetak({
   };
 
   const handleBatchPrint = async () => {
+    if (onForceSync) {
+      try {
+        await onForceSync();
+      } catch (syncErr) {
+        console.warn("[Sync Warning before Batch Print] Force sync failed, proceeding with local data:", syncErr);
+      }
+    }
+
     if (!selectedStudents || selectedStudents.length === 0) {
       alert("Peringatan: Tidak ada siswa yang dipilih untuk diunduh. Pastikan panjang array siswa tidak kosong sebelum memulai proses kompresi ZIP.");
       return;
@@ -807,11 +884,30 @@ export default function RaporCetak({
         try {
           console.log(`[Batch PDF Engine] Processing student: "${curStudent.name}" (${curStudent.nis})`);
           
+          // Clear previous state first to force clear DOM
+          setBatchStudent(null);
+          await new Promise(resolve => setTimeout(resolve, 100));
+
           setBatchStudent(curStudent);
           setRenderTrigger(prev => prev + 1);
 
-          // Give a solid delay to ensure complete React state hydration and layout paint
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          // Now wait for the DOM to reflect the correct student
+          let isRendered = false;
+          for (let checkAttempts = 0; checkAttempts < 30; checkAttempts++) {
+            const originalElement = document.getElementById('rapor-pdf-content');
+            if (originalElement) {
+              const html = originalElement.innerHTML || "";
+              if (html.includes(curStudent.nis)) {
+                isRendered = true;
+                break;
+              }
+            }
+            await new Promise(resolve => setTimeout(resolve, 150));
+          }
+
+          if (!isRendered) {
+            console.warn(`[Batch PDF Engine] Timeout waiting for student ${curStudent.name} DOM render.`);
+          }
 
           const originalElement = document.getElementById('rapor-pdf-content');
           if (!originalElement) {
@@ -840,18 +936,12 @@ export default function RaporCetak({
               console.warn(`[Batch Dry-Run Warning] Student "${curStudent.name}" failed complete pristine DOM audit verification.`);
             }
 
-            const baseOpt = getHtml2PdfOpt(curStudent, originalElement);
             const cleanStudentName = curStudent.name.replace(/[^a-zA-Z0-9 ]/g, '').trim().replace(/\s+/g, '_');
-            const safeFilename = `Rapor_5NK_${cleanStudentName}_${curStudent.nis}.pdf`;
+            const safeFilename = `Rapor_${cleanStudentName}_${curStudent.nis}.pdf`;
             
-            const opt = {
-              ...baseOpt,
-              filename: safeFilename
-            };
-            
-            // Generate Blob directly from the fully stable element
-            console.log(` - Generating html2pdf blob for ${curStudent.name}...`);
-            const pdfBlob = await generatePdfWithTimeout(html2pdfFn, originalElement, opt, 60000);
+            // Generate Blob directly from the iframe element
+            console.log(` - Generating iframe-based pdf blob for ${curStudent.name}...`);
+            const pdfBlob = await generatePdfIframe(isLandscape, originalElement, safeFilename, false, { top: 10, bottom: 10, left: 10, right: 10 }) as Blob;
             
             if (pdfBlob && pdfBlob.size > 0) {
               console.log(` ✅ Blob generated successfully: ${pdfBlob.size} bytes. MIME: ${pdfBlob.type}`);
@@ -891,6 +981,19 @@ export default function RaporCetak({
       URL.revokeObjectURL(url);
       console.log("[Batch PDF Engine] Batch processing completed successfully and ZIP downloaded.");
 
+      // Mark all successfully zipped students as printed
+      if (onMarkAsPrinted && validStudents.length > 0) {
+        onMarkAsPrinted(validStudents.map(s => s.id));
+      }
+      if (onAddExportLog && validStudents.length > 0) {
+        onAddExportLog(
+          'PDF',
+          `Unduh ZIP Rapor kelas ${selectedClass} berisi ${validStudents.length} siswa`,
+          `${folderName}.zip`,
+          validStudents.length
+        );
+      }
+
     } catch (err) {
       console.error("Kesalahan Unduh Semua PDF:", err);
       alert(`Terjadi kesalahan saat menyusun ZIP: ${err instanceof Error ? err.message : 'Silakan coba lagi.'}`);
@@ -900,6 +1003,8 @@ export default function RaporCetak({
       setIsGeneratingAll(false);
     }
   };
+
+  const exportToZipAndPdf = handleBatchPrint;
 
   // Kartika Jaya School Seal Image Representation
   const KartikaLogo = () => (
@@ -1163,17 +1268,23 @@ export default function RaporCetak({
                       <Award className="h-4 w-4 text-indigo-600 flex-none" />
                       Daftar Siswa
                     </h3>
-                    {classes.length > 0 && onClassChange && (
-                      <select 
-                        value={selectedClass}
-                        onChange={(e) => onClassChange(e.target.value)}
-                        className="text-[10px] font-bold bg-slate-100 border border-slate-200 rounded-md px-2 py-1 text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    <div className="flex items-center gap-1">
+                      {classes.length > 0 && onClassChange && (
+                        <ClassSelectorDropdown
+                          classes={classes}
+                          selectedClass={selectedClass}
+                          onChange={onClassChange}
+                          disabled={false}
+                        />
+                      )}
+                      <button 
+                        onClick={onResetPrintStatus}
+                        className="text-[10px] bg-amber-100 text-amber-800 hover:bg-amber-200 px-2 py-1 rounded-md font-bold"
+                        title="Reset Status Cetak Masal"
                       >
-                        {classes.map(cls => (
-                          <option key={cls} value={cls}>Kelas {cls}</option>
-                        ))}
-                      </select>
-                    )}
+                        Reset Massal
+                      </button>
+                    </div>
                   </div>
                   <p className="text-[10px] text-slate-500 leading-normal">
                     Pilih satu atau beberapa siswa untuk pratinjau, cetak massal, atau ekspor gabungan.
@@ -1407,7 +1518,7 @@ export default function RaporCetak({
                       <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
                         <colgroup>
                           <col style={{ width: '15%' }} />
-                          <col style={{ width: '41%' }} />
+                          <col style={{ width: 'auto', maxWidth: '350px' }} />
                           <col style={{ width: '11%' }} />
                           <col style={{ width: '11%' }} />
                           <col style={{ width: '11%' }} />
@@ -1593,7 +1704,7 @@ export default function RaporCetak({
                         <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
                           <colgroup>
                             <col style={{ width: '15%' }} />
-                            <col style={{ width: '41%' }} />
+                            <col style={{ width: 'auto', maxWidth: '350px' }} />
                             <col style={{ width: '11%' }} />
                             <col style={{ width: '11%' }} />
                             <col style={{ width: '11%' }} />
@@ -1740,7 +1851,7 @@ export default function RaporCetak({
                                 )}
                               </div>
                               <div className="flex flex-col items-center w-full font-sans h-[1.2cm] justify-start">
-                                <p id="tanda-tangan-kepala-sekolah" data-label="Kepala Sekolah" className="font-bold text-black text-[10.5pt] text-center leading-tight select-all inline-block w-fit px-2 border-b border-black pb-0.5 whitespace-nowrap min-h-[20px]">
+                                <p id="tanda-tangan-kepala-sekolah" data-label="Kepala Sekolah" className="font-bold text-black text-[10.5pt] text-center leading-tight select-all inline-block w-fit max-w-full px-2 border-b border-black pb-0.5 whitespace-normal break-words min-h-[20px]" style={{ fontSize: (kopSekolah.namaKepalaSekolah?.length || 0) > 30 ? '9pt' : '10.5pt' }}>
                                   {kopSekolah.namaKepalaSekolah || EMPTY_SIGNATURE}
                                 </p>
                                 {kopSekolah.nipKepalaSekolah ? (
@@ -1922,7 +2033,7 @@ export default function RaporCetak({
             <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug">
               <colgroup>
                 <col style={{ width: '15%' }} />
-                <col style={{ width: '41%' }} />
+                <col style={{ width: 'auto', maxWidth: '350px' }} />
                 <col style={{ width: '11%' }} />
                 <col style={{ width: '11%' }} />
                 <col style={{ width: '11%' }} />
@@ -2102,7 +2213,7 @@ export default function RaporCetak({
             <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug">
               <colgroup>
                 <col style={{ width: '15%' }} />
-                <col style={{ width: '41%' }} />
+                <col style={{ width: 'auto', maxWidth: '350px' }} />
                 <col style={{ width: '11%' }} />
                 <col style={{ width: '11%' }} />
                 <col style={{ width: '11%' }} />
@@ -2256,7 +2367,7 @@ export default function RaporCetak({
                       )}
                     </div>
                     <div className="flex flex-col items-center w-full font-sans h-[1.2cm] justify-start">
-                                <p id="tanda-tangan-kepala-sekolah" className="font-bold text-black text-[10.5pt] text-center leading-tight select-all inline-block w-fit px-2 border-b border-black pb-0.5 whitespace-nowrap min-h-[20px]">
+                                <p id="tanda-tangan-kepala-sekolah" className="font-bold text-black text-[10.5pt] text-center leading-tight select-all inline-block w-fit max-w-full px-2 border-b border-black pb-0.5 whitespace-normal break-words min-h-[20px]" style={{ fontSize: (kopSekolah.namaKepalaSekolah?.length || 0) > 30 ? '9pt' : '10.5pt' }}>
                                   {kopSekolah.namaKepalaSekolah || EMPTY_SIGNATURE}
                                 </p>
                                 {kopSekolah.nipKepalaSekolah ? (
@@ -2440,7 +2551,7 @@ export default function RaporCetak({
                     <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
                       <colgroup>
                         <col style={{ width: '15%' }} />
-                        <col style={{ width: '41%' }} />
+                        <col style={{ width: 'auto', maxWidth: '350px' }} />
                         <col style={{ width: '11%' }} />
                         <col style={{ width: '11%' }} />
                         <col style={{ width: '11%' }} />
@@ -2626,7 +2737,7 @@ export default function RaporCetak({
                     <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
                       <colgroup>
                         <col style={{ width: '15%' }} />
-                        <col style={{ width: '41%' }} />
+                        <col style={{ width: 'auto', maxWidth: '350px' }} />
                         <col style={{ width: '11%' }} />
                         <col style={{ width: '11%' }} />
                         <col style={{ width: '11%' }} />
@@ -2777,7 +2888,7 @@ export default function RaporCetak({
                               )}
                             </div>
                             <div className="flex flex-col items-center w-full font-sans h-[1.2cm] justify-start mt-2">
-                                <p id="tanda-tangan-kepala-sekolah" className="font-bold text-black text-[10.5pt] text-center leading-tight select-all inline-block w-fit px-2 border-b border-black pb-0.5 whitespace-nowrap min-h-[20px]" data-label="Kepala Sekolah">
+                                <p id="tanda-tangan-kepala-sekolah" className="font-bold text-black text-[10.5pt] text-center leading-tight select-all inline-block w-fit max-w-full px-2 border-b border-black pb-0.5 whitespace-normal break-words min-h-[20px]" data-label="Kepala Sekolah" style={{ fontSize: (kopSekolah.namaKepalaSekolah?.length || 0) > 30 ? '9pt' : '10.5pt' }}>
                                   {kopSekolah.namaKepalaSekolah || EMPTY_SIGNATURE}
                                 </p>
                                 {kopSekolah.nipKepalaSekolah ? (
@@ -2922,6 +3033,10 @@ export default function RaporCetak({
       )}
       <style>{`
         @media print {
+          @page {
+            size: A4 ${isLandscape ? 'landscape' : 'portrait'} !important;
+            margin: 0 !important;
+          }
           .print-page {
             padding: ${pageMargin.top}mm ${pageMargin.right}mm ${pageMargin.bottom}mm ${pageMargin.left}mm !important;
           }
@@ -3147,6 +3262,309 @@ function toSafeRgb(val, fallback = 'transparent') {
   if (trimmed.includes('0.4') || trimmed.includes('0.96')) return 'rgb(241, 245, 249)';
   if (trimmed.includes('0.5') || trimmed.includes('0.98')) return 'rgb(248, 250, 252)';
   return fallback;
+}
+
+function loadIndexCssSynchronously(): string {
+  try {
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', '/src/index.css', false); // false means synchronous
+    xhr.send(null);
+    if (xhr.status === 200) {
+      return xhr.responseText;
+    }
+  } catch (err) {
+    console.warn('[loadIndexCssSynchronously] Gagal memuat index.css secara sinkron:', err);
+  }
+  return '';
+}
+
+function applyStrictPrintMargins(
+  clonedDoc: Document,
+  isLandscape: boolean,
+  pageMargin: { top: number; bottom: number; left: number; right: number } = { top: 10, bottom: 10, left: 10, right: 10 }
+) {
+  try {
+    const totalWidthMm = isLandscape ? 297 : 210;
+    const totalHeightMm = isLandscape ? 210 : 297;
+
+    const contentWidthMm = totalWidthMm - pageMargin.left - pageMargin.right;
+    const contentHeightMm = totalHeightMm - pageMargin.top - pageMargin.bottom;
+
+    const styleTag = clonedDoc.createElement('style');
+    styleTag.innerHTML = `
+      @page {
+        size: A4 ${isLandscape ? 'landscape' : 'portrait'} !important;
+        margin: ${pageMargin.top}mm ${pageMargin.right}mm ${pageMargin.bottom}mm ${pageMargin.left}mm !important;
+      }
+      body {
+        margin: 0 !important;
+        padding: 0 !important;
+        background-color: #ffffff !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+        font-family: 'Inter', system-ui, -apple-system, sans-serif !important;
+      }
+      #rapor-print-section, #rapor-pdf-content {
+        display: block !important;
+        position: static !important;
+        width: ${contentWidthMm}mm !important;
+        height: auto !important;
+        background: #ffffff !important;
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+      .print-page {
+        box-sizing: border-box !important;
+        width: ${contentWidthMm}mm !important;
+        height: ${contentHeightMm}mm !important;
+        background-color: #ffffff !important;
+        page-break-after: always !important;
+        page-break-inside: avoid !important;
+        position: relative !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+    `;
+    clonedDoc.head.appendChild(styleTag);
+    console.log(`[applyStrictPrintMargins] Dynamically set content size to 10mm margins: ${contentWidthMm}mm x ${contentHeightMm}mm`);
+  } catch (err) {
+    console.error("[applyStrictPrintMargins] Error:", err);
+  }
+}
+
+function injectPrintStyles(clonedDoc: Document, isLandscape: boolean, pageMargin?: { top: number; bottom: number; left: number; right: number }) {
+  try {
+    // 1. Load index.css synchronously to guarantee fonts, margins, and borders
+    const indexCss = loadIndexCssSynchronously();
+    if (indexCss) {
+      const styleTag = clonedDoc.createElement('style');
+      styleTag.innerHTML = convertOklabCss(convertOklchCss(indexCss));
+      clonedDoc.head.appendChild(styleTag);
+    }
+
+    // 2. Copy all parent stylesheets and style tags
+    document.querySelectorAll('style').forEach((origStyle) => {
+      const clonedStyle = clonedDoc.createElement('style');
+      clonedStyle.innerHTML = convertOklabCss(convertOklchCss(origStyle.innerHTML));
+      clonedDoc.head.appendChild(clonedStyle);
+    });
+
+    document.querySelectorAll('link[rel="stylesheet"]').forEach((origLink) => {
+      const clonedLink = clonedDoc.createElement('link');
+      clonedLink.rel = 'stylesheet';
+      clonedLink.href = (origLink as HTMLLinkElement).href;
+      clonedDoc.head.appendChild(clonedLink);
+    });
+
+    // 3. Inject strict A4 margins based on the content width calculation
+    applyStrictPrintMargins(clonedDoc, isLandscape, pageMargin);
+
+    // 4. Inject explicit table, border, and color styles
+    const explicitStyle = clonedDoc.createElement('style');
+    explicitStyle.innerHTML = `
+      :root {
+        --color-slate-50: #f8fafc;
+        --color-slate-100: #f1f5f9;
+        --color-slate-200: #e2e8f0;
+        --color-slate-300: #cbd5e1;
+        --color-slate-400: #94a3b8;
+        --color-slate-500: #64748b;
+        --color-slate-600: #475569;
+        --color-slate-700: #334155;
+        --color-slate-800: #1e293b;
+        --color-slate-900: #0f172a;
+        --color-indigo-600: #4f46e5;
+        --color-emerald-600: #059669;
+        --color-rose-600: #e11d48;
+      }
+
+      /* Ensure precise table borders and margins for PDF output */
+      table {
+        border-collapse: collapse !important;
+        width: 100% !important;
+        table-layout: auto !important;
+        word-wrap: break-word !important;
+        word-break: break-word !important;
+        overflow-wrap: break-word !important;
+        border-spacing: 0 !important;
+        margin-top: 4px !important;
+        margin-bottom: 4px !important;
+        page-break-inside: auto !important;
+        border: 1px solid #000000 !important;
+      }
+      tr {
+        page-break-inside: avoid !important;
+        page-break-after: auto !important;
+      }
+      thead { display: table-header-group !important; }
+      tfoot { display: table-footer-group !important; }
+      
+      th, td {
+        border: 1px solid #000000 !important;
+        padding: 4px 6px !important;
+        box-sizing: border-box !important;
+        vertical-align: top !important;
+      }
+      
+      /* Avoid border cutoff on page breaks */
+      tr td, tr th {
+        border-bottom: 1px solid #000000 !important;
+      }
+
+      .text-slate-500, .text-slate-600, .text-slate-700, .text-slate-800, .text-slate-900 {
+        color: #000000 !important;
+      }
+      .border-slate-200, .border-slate-300, .border-slate-400 {
+        border-color: #000000 !important;
+      }
+      @font-face {
+        font-family: 'Inter';
+        font-style: normal;
+        font-weight: 100 900;
+        font-display: swap;
+        src: url('https://fonts.gstatic.com/s/inter/v13/UcCO3FwrK3iLTeHuS_fvQtMwCp50KnMw2boKoduKmMEVuLyfMZhrib2Bg-4.ttf') format('truetype');
+      }
+    `;
+    clonedDoc.head.appendChild(explicitStyle);
+  } catch (err) {
+    console.error("[injectPrintStyles] Error loading stylesheets synchronously:", err);
+  }
+}
+
+async function generatePdfIframe(
+  isLandscape: boolean,
+  originalElement: HTMLElement,
+  filename: string,
+  isDownload: boolean,
+  pageMargin = { top: 10, bottom: 10, left: 10, right: 10 }
+): Promise<Blob | void> {
+  const html2pdfFn = typeof html2pdf === 'function' ? html2pdf : (html2pdf as any).default;
+  if (!html2pdfFn) {
+    throw new Error("html2pdf library is not loaded in window scope.");
+  }
+
+  // Create temporary iframe
+  const iframe = document.createElement('iframe');
+  iframe.style.position = 'fixed';
+  iframe.style.left = '-9999px';
+  iframe.style.top = '0';
+  iframe.style.width = isLandscape ? '297mm' : '210mm';
+  iframe.style.height = isLandscape ? '210mm' : '297mm';
+  iframe.style.border = 'none';
+  document.body.appendChild(iframe);
+
+  try {
+    const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+    if (!iframeDoc) {
+      throw new Error("Gagal mengakses dokumen di dalam iframe.");
+    }
+
+    // Get HTML content
+    const htmlContent = originalElement.innerHTML;
+
+    // Write HTML structure into the iframe
+    iframeDoc.open();
+    iframeDoc.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="utf-8">
+        </head>
+        <body>
+          <div id="rapor-pdf-content">
+            ${htmlContent}
+          </div>
+        </body>
+      </html>
+    `);
+    iframeDoc.close();
+
+    // Call injectPrintStyles to load index.css synchronously and handle all margins & styling
+    injectPrintStyles(iframeDoc, isLandscape, pageMargin);
+
+    // Override styles inside the iframe to ensure perfect 1-to-1 canvas compilation of A4 sheet
+    const pdfStyle = iframeDoc.createElement('style');
+    pdfStyle.innerHTML = `
+      @page {
+        size: A4 ${isLandscape ? 'landscape' : 'portrait'} !important;
+        margin: 0 !important;
+      }
+      #rapor-pdf-content {
+        width: ${isLandscape ? 297 : 210}mm !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        background-color: #ffffff !important;
+      }
+      .print-page {
+        width: ${isLandscape ? 297 : 210}mm !important;
+        height: ${isLandscape ? 210 : 297}mm !important;
+        padding: ${pageMargin.top}mm ${pageMargin.right}mm ${pageMargin.bottom}mm ${pageMargin.left}mm !important;
+        box-sizing: border-box !important;
+        margin: 0 !important;
+        page-break-after: always !important;
+        page-break-inside: avoid !important;
+        position: relative !important;
+        overflow: hidden !important;
+        background-color: #ffffff !important;
+      }
+    `;
+    iframeDoc.head.appendChild(pdfStyle);
+
+    // Update page numbers inside iframe Doc
+    const allPrintPages = iframeDoc.querySelectorAll('.print-page');
+    allPrintPages.forEach((page, idx) => {
+      const pageNumSpan = page.querySelector('.page-number-display');
+      if (pageNumSpan) {
+        pageNumSpan.textContent = `Halaman ${idx + 1} dari ${allPrintPages.length}`;
+      }
+    });
+
+    // Wait for fonts & images to render
+    await new Promise(resolve => setTimeout(resolve, 500));
+    try {
+      if (iframe.contentWindow) {
+        await (iframe.contentWindow as any).document.fonts?.ready;
+      }
+    } catch (e) {
+      console.warn("Fonts ready promise timed out or failed:", e);
+    }
+
+    const iframeElement = iframeDoc.getElementById('rapor-pdf-content');
+    if (!iframeElement) {
+      throw new Error("Gagal menemukan elemen target di dalam iframe.");
+    }
+
+    // Configure html2pdf options with strict 10mm margins
+    const opt = {
+      margin:       0, // strict 0 margin to let the A4 page's internal padding handle margins perfectly
+      filename:     filename,
+      image:        { type: 'jpeg', quality: 0.98 },
+      pagebreak:    { mode: ['css', 'legacy'], avoid: ['.avoid-break'] },
+      html2canvas:  {
+        scale: 2.2,
+        useCORS: true,
+        letterRendering: true,
+        logging: false,
+        backgroundColor: '#ffffff'
+      },
+      jsPDF:        { unit: 'mm', format: 'a4', orientation: isLandscape ? 'landscape' : 'portrait' }
+    };
+
+    if (isDownload) {
+      await html2pdfFn().set(opt).from(iframeElement).save();
+    } else {
+      const blob = await html2pdfFn().set(opt).from(iframeElement).output('blob');
+      return blob;
+    }
+  } finally {
+    // Always cleanup iframe
+    try {
+      iframe.remove();
+    } catch (e) {
+      console.warn("Error cleaning up iframe:", e);
+    }
+  }
 }
 
 let overrideStyleTag: HTMLStyleElement | null = null;
