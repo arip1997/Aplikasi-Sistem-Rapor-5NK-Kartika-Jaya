@@ -1,5 +1,6 @@
 import { useState, useEffect, useId, useRef, startTransition, useTransition, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTooltip, ResponsiveContainer, CartesianGrid, ReferenceLine } from 'recharts';
 import { Student, ScoreKey, Category, Teacher, KopSekolah } from './types';
 import { normalizeAllData } from './normalization';
 import { 
@@ -31,6 +32,8 @@ import { exportClassToExcel, generateClassExcelBlob, exportSingleStudentToExcel,
 import { getAccessToken, initAuth, auth, db } from './firebase';
 import { doc, setDoc } from 'firebase/firestore';
 import { uploadFileToDrive, getOrCreateFolder } from './lib/drive';
+import { StudentOverview } from './components/StudentOverview';
+import { CatatanWaliKelas } from './components/CatatanWaliKelas';
 import { 
   FileSpreadsheet, 
   Printer, 
@@ -71,7 +74,7 @@ import {
   Download,
   Loader2,
   Menu
-} from 'lucide-react';
+, AlertTriangle } from 'lucide-react';
 
 export default function App() {
   const [isPending, startTransition] = useTransition();
@@ -1015,6 +1018,7 @@ export default function App() {
   };
 
   const filteredStudents = students.filter(s => s.kelas === selectedClass);
+  const studentsWithMissingData = filteredStudents.filter(s => !s.nis || !s.gender || !s.kesimpulan?.trim() || !s.catatanWali?.trim());
   const selectedStudent = students.find(s => s.id === selectedStudentId) || null;
 
   // Handle single indicator grade changes (safely counting based on dynamic indicators)
@@ -1778,11 +1782,39 @@ export default function App() {
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.3 }}
-                className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6 flex-1 h-auto md:h-full overflow-visible md:overflow-hidden print:overflow-visible no-print"
+                className="flex flex-col gap-4 flex-1 h-auto md:h-full overflow-visible md:overflow-hidden print:overflow-visible no-print"
               >
+              {studentsWithMissingData.length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center justify-between shadow-sm">
+                  <div className="flex items-center gap-3">
+                    <div className="bg-amber-100 p-1.5 rounded-full">
+                      <AlertTriangle className="h-4 w-4 text-amber-600" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-amber-800">Data Siswa Belum Lengkap ({studentsWithMissingData.length} siswa)</p>
+                      <p className="text-[10px] text-amber-700 mt-0.5 font-sans">
+                        Beberapa siswa memiliki data NIS, Jenis Kelamin, atau Ulasan Rapor yang masih kosong.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      const firstMissing = studentsWithMissingData[0];
+                      setSelectedStudentId(firstMissing.id);
+                      const el = document.getElementById(`edit-kesimpulan`);
+                      if (el) el.focus();
+                    }}
+                    className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-lg shadow-sm transition-colors flex items-center gap-1.5"
+                  >
+                    <span>Lengkapi Sekarang</span>
+                  </button>
+                </div>
+              )}
+                
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6 flex-1 min-h-0">
             
             {/* Left spreadsheet grid - spans 2 columns */}
-            <div className="lg:col-span-2 flex flex-col h-[480px] md:h-full overflow-hidden">
+            <div className="lg:col-span-2 flex flex-col h-[480px] md:h-full overflow-hidden relative">
               <ExcelGrid
                 students={filteredStudents}
                 categories={categories}
@@ -1859,6 +1891,8 @@ export default function App() {
                             <option value="P">Perempuan (P)</option>
                           </select>
                         </div>
+                        
+                        <StudentOverview student={selectedStudent} allStudents={filteredStudents} categories={categories} />
 
                         {/* AI Generate Button inside edit-pane */}
                         <div className="bg-gradient-to-r from-indigo-50 to-emerald-50 border border-indigo-150 p-3 rounded-xl flex flex-col gap-2 relative overflow-hidden">
@@ -1895,7 +1929,7 @@ export default function App() {
                                   const data = await res.json();
                                   handleUpdateComments(selectedStudent.id, data.kesimpulan, data.catatanWali);
                                   markStudentAsAiModified(selectedStudent.id);
-                                  triggerAlert('success', `✓ Sukses men-generate ulasan AI! ${data.aiUsed ? 'Ditenagai oleh Gemini-3.1-pro-preview dengan Model Berpikir Tinggi (Thinking Mode).' : 'Menggunakan ulasan fallback lokal.'}`);
+                                  triggerAlert('success', `✓ Sukses men-generate ulasan AI! ${data.aiUsed ? 'Ditenagai oleh Gemini-2.5-flash.' : 'Menggunakan ulasan fallback lokal.'}`);
                                 } else {
                                   const err = await res.json();
                                   triggerAlert('info', `✗ Gagal generate AI: ${err.error || 'Server error'}`);
@@ -1943,13 +1977,10 @@ export default function App() {
                               {selectedStudent.catatanWali?.length || 0} Karakter
                             </span>
                           </div>
-                          <textarea
+                          <CatatanWaliKelas
                             id="edit-catatan-wali"
                             value={selectedStudent.catatanWali}
-                            onChange={(e) => handleUpdateComments(selectedStudent.id, selectedStudent.kesimpulan, e.target.value)}
-                            rows={3}
-                            placeholder="Catatan motivasi yang mendorong semangat..."
-                            className="bg-slate-50 border border-slate-200 rounded-lg p-2 font-sans text-xs leading-relaxed focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                            onChange={(val) => handleUpdateComments(selectedStudent.id, selectedStudent.kesimpulan, val)}
                           />
                         </div>
 
@@ -2006,7 +2037,42 @@ export default function App() {
                 )}
               </div>
             </div>
-          </motion.div>
+            
+            {/* Quick Actions Floating Button */}
+            <div className="fixed bottom-6 right-6 z-50 group">
+              <button className="h-12 w-12 bg-indigo-600 hover:bg-indigo-700 text-white rounded-full shadow-lg shadow-indigo-600/30 flex items-center justify-center transition-transform group-hover:scale-110 active:scale-95">
+                <span className="text-xl">⚡</span>
+              </button>
+              <div className="absolute bottom-16 right-0 flex-col gap-2 mb-2 w-48 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-all translate-y-4 group-hover:translate-y-0 hidden group-hover:flex">
+                <button 
+                  onClick={() => {
+                    const classStudentsRef = students.filter(s => s.kelas === selectedClass);
+                    const firstStudent = classStudentsRef[0];
+                    if (firstStudent) {
+                      setSelectedStudentId(firstStudent.id);
+                      setAutoTriggerBatchPdf(true);
+                      setViewMode('print');
+                    } else {
+                      triggerAlert('error', "Tidak ada siswa terdaftar di dalam kelas ini untuk diunduh!");
+                    }
+                  }}
+                  className="w-full text-left px-4 py-2 bg-white text-slate-700 hover:bg-indigo-50 border border-slate-200 rounded-xl shadow-lg shadow-slate-200/50 text-xs font-bold transition-colors flex items-center gap-2">
+                  <Printer className="h-4 w-4 text-indigo-600" /> Bulk Print Current Class
+                </button>
+                <button 
+                  onClick={() => exportClassToExcel(filteredStudents, selectedClass, activeWaliKelas.name, categories)}
+                  className="w-full text-left px-4 py-2 bg-white text-slate-700 hover:bg-emerald-50 border border-slate-200 rounded-xl shadow-lg shadow-slate-200/50 text-xs font-bold transition-colors flex items-center gap-2">
+                  <FileSpreadsheet className="h-4 w-4 text-emerald-600" /> Download Class Excel
+                </button>
+                <button 
+                  onClick={() => setIsHighContrast(!isHighContrast)}
+                  className="w-full text-left px-4 py-2 bg-white text-slate-700 hover:bg-amber-50 border border-slate-200 rounded-xl shadow-lg shadow-slate-200/50 text-xs font-bold transition-colors flex items-center gap-2">
+                  <span className="text-amber-600 text-sm">◐</span> Toggle High Contrast Mode
+                </button>
+              </div>
+            </div>
+          </div>
+        </motion.div>
             )
           ) : null}
 

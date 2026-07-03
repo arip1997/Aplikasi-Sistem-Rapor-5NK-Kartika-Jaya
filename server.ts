@@ -117,11 +117,10 @@ Kembalikan HANYA teks JSON murni tanpa menyertakan blok kode markdown seperti \`
 `;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.1-pro-preview',
+      model: 'gemini-2.5-flash',
       contents: prompt,
       config: {
-        responseMimeType: 'application/json',
-        thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH }
+        responseMimeType: 'application/json'
       }
     });
 

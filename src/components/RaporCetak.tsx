@@ -166,7 +166,7 @@ export default function RaporCetak({
           if (autoPrintImmediately) {
             await handlePrint();
           } else {
-            await handleBatchPrint();
+            await handleDownloadPDF();
           }
         } catch (err) {
           console.error("Auto batch action failed:", err);
@@ -845,225 +845,7 @@ export default function RaporCetak({
     }
   };
 
-  const handleBatchPrint = async () => {
-    if (onForceSync) {
-      try {
-        await onForceSync();
-      } catch (syncErr) {
-        console.warn("[Sync Warning before Batch Print] Force sync failed, proceeding with local data:", syncErr);
-      }
-    }
 
-    if (!selectedStudents || selectedStudents.length === 0) {
-      alert("Peringatan: Tidak ada siswa yang dipilih untuk diunduh. Pastikan panjang array siswa tidak kosong sebelum memulai proses kompresi ZIP.");
-      return;
-    }
-
-    // Validasi struktur data objek students untuk mencegah render error
-    const validStudents = selectedStudents.filter(student => {
-      const isValid = student && typeof student === 'object' && student.nis && student.name && student.grades;
-      if (!isValid) {
-        console.warn(`[Batch Validation Warning] Skipping invalid student object:`, student);
-      }
-      return isValid;
-    });
-
-    if (validStudents.length === 0) {
-      alert("Peringatan: Tidak ada data siswa dengan struktur yang valid untuk diekspor ke PDF.");
-      return;
-    }
-
-    applyGlobalStyleOverrides(isLandscape);
-    
-    const html2pdfFn = typeof html2pdf === 'function' ? html2pdf : (html2pdf as any).default;
-    if (!html2pdfFn) {
-      console.error("[Cetak Semua Error] html2pdf library function is not loaded in window scope.");
-      return;
-    }
-
-    setIsGeneratingAll(true);
-
-    try {
-      const zip = new JSZip();
-      const folderName = `Rapor_5NK_${selectedClass}`;
-      const folder = zip.folder(folderName);
-      if (!folder) throw new Error("Failed to create ZIP folder");
-
-      console.log(`[Batch PDF Engine] Starting generation of ${validStudents.length} student documents.`);
-
-      for (const curStudent of validStudents) {
-        try {
-          console.log(`[Batch PDF Engine] Processing student: "${curStudent.name}" (${curStudent.nis})`);
-          
-          // Clear previous state first to force clear DOM
-          setBatchStudent(null);
-          await new Promise(resolve => setTimeout(resolve, 100));
-
-          setBatchStudent(curStudent);
-          setRenderTrigger(prev => prev + 1);
-
-          // Now wait for the DOM to reflect the correct student
-          let isRendered = false;
-          for (let checkAttempts = 0; checkAttempts < 30; checkAttempts++) {
-            const originalElement = document.getElementById('rapor-pdf-content');
-            if (originalElement) {
-              const html = originalElement.innerHTML || "";
-              if (html.includes(curStudent.nis)) {
-                isRendered = true;
-                break;
-              }
-            }
-            await new Promise(resolve => setTimeout(resolve, 150));
-          }
-
-          if (!isRendered) {
-            console.warn(`[Batch PDF Engine] Timeout waiting for student ${curStudent.name} DOM render.`);
-          }
-
-          const originalElement = document.getElementById('rapor-pdf-content');
-          if (!originalElement) {
-            console.error(`[Batch PDF Error] #rapor-pdf-content element is missing for ${curStudent.name}.`);
-            continue;
-          }
-
-          // Tag original elements with data-layout-id for reliable onclone mapping
-          let idCounter = 1;
-          originalElement.setAttribute('data-layout-id', String(idCounter++));
-          const origDescendants = originalElement.querySelectorAll('*');
-          origDescendants.forEach(el => {
-            el.setAttribute('data-layout-id', String(idCounter++));
-          });
-
-          try {
-            // Force synchronous layout reflow
-            void originalElement.offsetHeight;
-            
-            // Allow the browser to calculate complete styles
-            await new Promise(resolve => setTimeout(resolve, 150));
-
-            // Run live dry-run DOM verification check for 1 expected student group in batch focus mode
-            const dryRunPassed = runDryRunAuditAndVerifyDom(1);
-            if (!dryRunPassed) {
-              console.warn(`[Batch Dry-Run Warning] Student "${curStudent.name}" failed complete pristine DOM audit verification.`);
-            }
-
-            const cleanStudentName = curStudent.name.replace(/[^a-zA-Z0-9 ]/g, '').trim().replace(/\s+/g, '_');
-            const safeFilename = `Rapor_${cleanStudentName}_${curStudent.nis}.pdf`;
-            
-            // Generate Blob directly from the iframe element
-            console.log(` - Generating iframe-based pdf blob for ${curStudent.name}...`);
-            const pdfBlob = await generatePdfIframe(isLandscape, originalElement, safeFilename, false, pageMargin, paperSize) as Blob;
-            
-            if (pdfBlob && pdfBlob.size > 0) {
-              console.log(` ✅ Blob generated successfully: ${pdfBlob.size} bytes. MIME: ${pdfBlob.type}`);
-              folder.file(safeFilename, pdfBlob);
-            } else {
-              console.error(` ❌ ERROR: Generated blob for "${curStudent.name}" is empty or failed!`);
-            }
-          } finally {
-            // Clean up data-layout-id
-            originalElement.removeAttribute('data-layout-id');
-            origDescendants.forEach(el => {
-              el.removeAttribute('data-layout-id');
-            });
-          }
-        } catch (studentErr) {
-          console.error(`[Batch Failure Skipped] Gagal memproses siswa "${curStudent.name}":`, studentErr);
-        }
-      }
-
-      // Restore UI back to normal Selected Student
-      setBatchStudent(null);
-
-      console.log("[Batch PDF Engine] Compiling ZIP archive...");
-      
-      // EXPORT EXCEL GRID (RECAP) KE PDF (jsPDF + autoTable)
-      try {
-        const doc = new jsPDF('landscape');
-        
-        doc.setFontSize(14);
-        doc.text(`Laporan Data Rekap Nilai 5NK - Kelas ${selectedClass}`, 14, 15);
-        doc.setFontSize(10);
-        doc.text(`Total Siswa: ${validStudents.length}`, 14, 22);
-        
-        const headRow = ['Nama Lengkap', 'NIS', 'L/P'];
-        categories.forEach(c => {
-          c.indicators.forEach(ind => {
-            headRow.push(ind.id);
-          });
-        });
-        
-        const tableBody = validStudents.map(student => {
-          const row = [student.name || '-', student.nis || '-', student.gender || '-'];
-          categories.forEach(c => {
-            c.indicators.forEach(ind => {
-              row.push(student.grades?.[ind.id] || '-');
-            });
-          });
-          return row;
-        });
-        
-        autoTable(doc, {
-          startY: 28,
-          head: [headRow],
-          body: tableBody,
-          theme: 'grid',
-          headStyles: { fillColor: [4, 120, 87] },
-          styles: { fontSize: 6, cellPadding: 1, halign: 'center' },
-          columnStyles: {
-            0: { halign: 'left', cellWidth: 35 },
-            1: { cellWidth: 18 },
-            2: { cellWidth: 8 }
-          }
-        });
-        
-        const recapBlob = doc.output('blob');
-        folder.file(`Laporan_Data_Kelas_${selectedClass}.pdf`, recapBlob);
-        console.log("✅ Berhasil menambahkan Laporan_Data.pdf (Grid Rekap) ke dalam ZIP");
-      } catch (errRecap) {
-        console.error("Gagal membuat PDF Laporan Data (Rekap) untuk ZIP:", errRecap);
-      }
-
-      const fileKeys = Object.keys(folder.files).filter(k => !k.endsWith('/'));
-      const fileCount = fileKeys.length;
-      if (fileCount === 0) {
-        throw new Error("Tidak ada berkas PDF yang berhasil dibuat. Tidak dapat mengompres ZIP yang kosong.");
-      }
-      const zipBlob = await zip.generateAsync({ type: 'blob' });
-      const url = URL.createObjectURL(zipBlob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${folderName}.zip`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      console.log("[Batch PDF Engine] Batch processing completed successfully and ZIP downloaded.");
-
-      // Mark all successfully zipped students as printed
-      if (onMarkAsPrinted && validStudents.length > 0) {
-        onMarkAsPrinted(validStudents.map(s => s.id));
-      }
-      if (onAddExportLog && validStudents.length > 0) {
-        onAddExportLog(
-          'PDF',
-          `Unduh ZIP Rapor kelas ${selectedClass} berisi ${validStudents.length} siswa`,
-          `${folderName}.zip`,
-          validStudents.length
-        );
-      }
-
-    } catch (err) {
-      console.error("Kesalahan Unduh Semua PDF:", err);
-      alert(`Terjadi kesalahan saat menyusun ZIP: ${err instanceof Error ? err.message : 'Silakan coba lagi.'}`);
-    } finally {
-      setBatchStudent(null);
-      restoreGlobalStyleOverrides();
-      setIsGeneratingAll(false);
-    }
-  };
-
-  const exportToZipAndPdf = handleBatchPrint;
 
   // Kartika Jaya School Seal Image Representation
   const KartikaLogo = () => (
@@ -1169,24 +951,6 @@ export default function RaporCetak({
           </button>
           
           <button
-            onClick={handleBatchPrint}
-            disabled={isGeneratingPdf || isGeneratingAll || isUploadingToDrive || selectedStudents.length === 0}
-            className={`px-4 py-2 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-lg flex items-center gap-2 cursor-pointer transition-all shadow-md hover:shadow-amber-100 transform hover:-translate-y-0.5 active:translate-y-0 min-w-36 justify-center ${isGeneratingAll ? 'opacity-75 cursor-not-allowed' : ''}`}
-          >
-            {isGeneratingAll ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                <span>Memproses...</span>
-              </>
-            ) : (
-              <>
-                <Archive className="h-4 w-4" />
-                <span>Unduh ZIP ({selectedStudents.length})</span>
-              </>
-            )}
-          </button>
-
-          <button
             onClick={handleDownloadPDF}
             disabled={isGeneratingPdf || isGeneratingAll || isUploadingToDrive || selectedStudents.length === 0}
             className={`px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-lg flex items-center gap-2 cursor-pointer transition-all shadow-md hover:shadow-rose-100 transform hover:-translate-y-0.5 active:translate-y-0 ${isGeneratingPdf ? 'opacity-75 cursor-not-allowed' : ''}`}
@@ -1194,12 +958,12 @@ export default function RaporCetak({
             {isGeneratingPdf ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
-                <span>Mengekspor...</span>
+                <span>Menyimpan PDF...</span>
               </>
             ) : (
               <>
                 <Download className="h-4 w-4" />
-                <span>Export ke PDF</span>
+                <span>Simpan ke PDF</span>
               </>
             )}
           </button>
