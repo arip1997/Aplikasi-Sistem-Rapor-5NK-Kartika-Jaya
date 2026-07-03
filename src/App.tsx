@@ -1790,6 +1790,7 @@ export default function App() {
 
           <div className="flex flex-wrap items-center gap-2">
             <button
+              id="btn-cetak-semua-rapor"
               onClick={() => {
                 if (filteredStudents.length > 0) {
                   // Pre-Flight Validation
@@ -1810,15 +1811,16 @@ export default function App() {
                   if (!selectedStudentId) {
                     setSelectedStudentId(filteredStudents[0].id);
                   }
+                  setAutoPrintImmediately(true);
                   setAutoTriggerBatchPdf(true);
                   setViewMode('print');
                 } else {
                   triggerAlert('info', 'Tidak ada murid di kelas ini untuk dicetak.');
                 }
               }}
-              className="px-3.5 py-1.5 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all duration-200 cursor-pointer bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white shadow-md shadow-amber-900/10 border border-amber-600"
+              className="px-3.5 py-1.5 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-all duration-200 cursor-pointer bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white shadow-md shadow-emerald-900/10 border border-emerald-600"
             >
-              <Download className="h-3.5 w-3.5" /> Unduh Rekap Semua
+              <Printer className="h-3.5 w-3.5" /> Cetak Semua Rapor (Print Direct)
             </button>
             
             <label className="flex items-center gap-1.5 cursor-pointer no-print ml-1 text-slate-600 hover:text-slate-800 select-none">

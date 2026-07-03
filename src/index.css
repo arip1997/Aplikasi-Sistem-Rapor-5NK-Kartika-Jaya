@@ -159,6 +159,12 @@
   gap: 2rem !important;
 }
 
+.print-page .grid-cols-3 {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 1.5rem !important;
+}
+
 /* Enforce strict page break rules for components inside print pages globally */
 .print-page thead,
 .print-page tbody,

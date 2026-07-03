@@ -2732,7 +2732,7 @@ export default function RaporCetak({
                     </div>
 
                     {/* Signatures block */}
-                    <div className="mt-auto pt-4 avoid-break font-sans signature-container">
+                    <div className="absolute bottom-[18mm] left-[15mm] right-[15mm] pt-4 avoid-break font-sans signature-container">
                       <p className="text-[10.5pt] font-semibold text-black text-center col-span-full mb-2 select-none">
                         Mengetahui,
                       </p>
@@ -3431,6 +3431,7 @@ async function generatePdfIframe(
         background-color: #ffffff !important;
       }
       .print-page {
+        display: block !important;
         width: ${paperWidth}mm !important;
         height: ${paperHeight}mm !important;
         padding: ${pageMargin.top}mm ${pageMargin.right}mm ${pageMargin.bottom}mm ${pageMargin.left}mm !important;
@@ -3441,6 +3442,32 @@ async function generatePdfIframe(
         position: relative !important;
         overflow: hidden !important;
         background-color: #ffffff !important;
+      }
+      /* Fallbacks for CSS grid inside html2canvas to ensure side-by-side flex columns */
+      #rapor-pdf-content .grid {
+        display: flex !important;
+        flex-direction: row !important;
+        width: 100% !important;
+      }
+      #rapor-pdf-content .grid-cols-2 {
+        display: flex !important;
+        flex-direction: row !important;
+        width: 100% !important;
+        gap: 1.5rem !important;
+      }
+      #rapor-pdf-content .grid-cols-2 > * {
+        width: 50% !important;
+        flex: 1 !important;
+      }
+      #rapor-pdf-content .grid-cols-3 {
+        display: flex !important;
+        flex-direction: row !important;
+        width: 100% !important;
+        gap: 1.5rem !important;
+      }
+      #rapor-pdf-content .grid-cols-3 > * {
+        width: 33.333% !important;
+        flex: 1 !important;
       }
       .student-pdf-group:last-child .print-page:last-child {
         page-break-after: avoid !important;
