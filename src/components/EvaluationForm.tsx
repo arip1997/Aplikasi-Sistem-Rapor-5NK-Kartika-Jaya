@@ -26,6 +26,8 @@ interface EvaluationFormProps {
   onClearStudentGrades: (studentId: string) => void;
   onClearClassGrades: () => void;
   selectedClass?: string;
+  isGeneratingHiddenPdf?: boolean;
+  onExportPdfPerSiswa?: (studentId: string) => void;
 }
 
 export default function EvaluationForm({
@@ -38,6 +40,8 @@ export default function EvaluationForm({
   onClearStudentGrades,
   onClearClassGrades,
   selectedClass = '',
+  isGeneratingHiddenPdf = false,
+  onExportPdfPerSiswa
 }: EvaluationFormProps) {
   const [activeCategoryIndex, setActiveCategoryIndex] = useState(0);
   const [studentSearch, setStudentSearch] = useState('');
@@ -846,19 +850,43 @@ export default function EvaluationForm({
               </button>
 
               {activeCategoryIndex < categories.length ? (
-                <button
-                  onClick={() => setActiveCategoryIndex(prev => prev + 1)}
-                  className="py-1.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer"
-                >
-                  Aspek Berikutnya <ChevronRight className="h-4 w-4" />
-                </button>
+                <div className="flex gap-2">
+                  {onExportPdfPerSiswa && student && (
+                    <button
+                      onClick={() => onExportPdfPerSiswa(student.id)}
+                      disabled={isGeneratingHiddenPdf}
+                      className={`py-1.5 px-4 ${isGeneratingHiddenPdf ? 'bg-rose-400 cursor-not-allowed' : 'bg-rose-600 hover:bg-rose-700'} text-white rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors shadow-sm`}
+                    >
+                      <FileText className="h-4 w-4" /> 
+                      {isGeneratingHiddenPdf ? 'Menyimpan PDF...' : 'Ekspor PDF Siswa Ini'}
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setActiveCategoryIndex(prev => prev + 1)}
+                    className="py-1.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer"
+                  >
+                    Aspek Berikutnya <ChevronRight className="h-4 w-4" />
+                  </button>
+                </div>
               ) : (
-                <button
-                  onClick={onViewReport}
-                  className="py-2 px-5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-md shadow-indigo-100 transform active:translate-y-px transition-all"
-                >
-                  <UserCheck className="h-4 w-4" /> Simpan & Lihat Pratinjau Rapor
-                </button>
+                <div className="flex gap-2">
+                  {onExportPdfPerSiswa && student && (
+                    <button
+                      onClick={() => onExportPdfPerSiswa(student.id)}
+                      disabled={isGeneratingHiddenPdf}
+                      className={`py-2 px-4 ${isGeneratingHiddenPdf ? 'bg-rose-400 cursor-not-allowed' : 'bg-rose-600 hover:bg-rose-700'} text-white rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors shadow-md shadow-rose-100`}
+                    >
+                      <FileText className="h-4 w-4" />
+                      {isGeneratingHiddenPdf ? 'Menyimpan PDF...' : 'Ekspor PDF'}
+                    </button>
+                  )}
+                  <button
+                    onClick={onViewReport}
+                    className="py-2 px-5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-md shadow-indigo-100 transform active:translate-y-px transition-all"
+                  >
+                    <UserCheck className="h-4 w-4" /> Simpan & Lihat Pratinjau Rapor
+                  </button>
+                </div>
               )}
             </div>
 

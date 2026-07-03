@@ -409,6 +409,50 @@ export function exportClassToCsv(students: Student[], className: string, categor
   window.URL.revokeObjectURL(url);
 }
 
+export function exportAllTeachersToCsv(teachers: Teacher[]) {
+  const headers = ['No', 'ID', 'Nama Guru', 'Role', 'Wali Kelas', 'NIP'];
+  
+  const escapeCsv = (val: any) => {
+    if (val === undefined || val === null) return '""';
+    const str = String(val).trim();
+    if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return `"${str}"`;
+  };
+
+  const csvRows = [headers.map(escapeCsv).join(',')];
+
+  const sortedTeachers = [...teachers].sort((a, b) => {
+    const roleComp = a.role.localeCompare(b.role);
+    if (roleComp !== 0) return roleComp;
+    return a.name.localeCompare(b.name);
+  });
+
+  sortedTeachers.forEach((teacher, index) => {
+    const row = [
+      index + 1,
+      teacher.id,
+      teacher.name,
+      teacher.role,
+      teacher.classAssigned || '',
+      teacher.nip || ''
+    ];
+    csvRows.push(row.map(escapeCsv).join(','));
+  });
+
+  const csvContent = "\uFEFF" + csvRows.join('\r\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `Rekap_Master_Guru.csv`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.URL.revokeObjectURL(url);
+}
+
 export function exportAllStudentsToCsv(students: Student[], categories: Category[]) {
   const indicatorIds: string[] = [];
   categories.forEach(cat => {

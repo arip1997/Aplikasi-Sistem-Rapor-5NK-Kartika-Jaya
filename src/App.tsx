@@ -104,8 +104,12 @@ export default function App() {
   const [autoTriggerBatchPdf, setAutoTriggerBatchPdf] = useState<boolean>(false);
   const [autoPrintImmediately, setAutoPrintImmediately] = useState<boolean>(false);
   const [batchPrintNisList, setBatchPrintNisList] = useState<string[]>([]);
+  const [hiddenPdfStudentId, setHiddenPdfStudentId] = useState<string | null>(null);
+  const [shortcuts, setShortcuts] = useState<{search: string, tab: string}>(() => JSON.parse(localStorage.getItem('rapor_5nk_shortcuts') || '{"search": "k", "tab": "j"}'));
   
-  // State for all change logs used to show student edit histories
+  useEffect(() => {
+    localStorage.setItem('rapor_5nk_shortcuts', JSON.stringify(shortcuts));
+  }, [shortcuts]);
   const [allLogs, setAllLogs] = useState<ChangeLog[]>(() => getChangeLogs());
 
   useEffect(() => {
@@ -873,12 +877,12 @@ export default function App() {
         }, 800);
       }
 
-      if (isCtrlOrMeta && e.key.toLowerCase() === 'k') {
+      if (isCtrlOrMeta && e.key.toLowerCase() === shortcuts.search) {
         e.preventDefault();
         setIsQuickSearchOpen(prev => !prev);
       }
 
-      if (isCtrlOrMeta && e.key.toLowerCase() === 'j') {
+      if (isCtrlOrMeta && e.key.toLowerCase() === shortcuts.tab) {
         e.preventDefault();
         const viewsList: Array<'spreadsheet' | 'form_penilaian' | 'rekap_nilai' | 'crud_manager'> = [
           'spreadsheet',
@@ -894,7 +898,7 @@ export default function App() {
                           nextMode === 'form_penilaian' ? 'Form Penilaian' :
                           nextMode === 'rekap_nilai' ? 'Rekap Nilai' :
                           'Master CRUD';
-        triggerAlert('info', `🗂️ Navigasi: Beralih ke Tab ${modeLabel} (Ctrl+J)`);
+        triggerAlert('info', `🗂️ Navigasi: Beralih ke Tab ${modeLabel} (Ctrl+${shortcuts.tab.toUpperCase()})`);
       }
 
       // 🎹 Power-user specific Navigation Shortcuts (Alt+1, Alt+2, Alt+3, Alt+4)
@@ -921,7 +925,7 @@ export default function App() {
     return () => {
       window.removeEventListener('keydown', handleGlobalKeyDown);
     };
-  }, [students, teachers, categories, kopSekolah, classes, currentUser, viewMode]);
+  }, [students, teachers, categories, kopSekolah, classes, currentUser, viewMode, shortcuts]);
 
   // Initialize selectedStudentId based on the default selectedClass
   useEffect(() => {
@@ -2338,6 +2342,8 @@ export default function App() {
               onClearStudentGrades={handleClearStudentGrades}
               onClearClassGrades={handleClearClassGrades}
               selectedClass={selectedClass}
+              isGeneratingHiddenPdf={hiddenPdfStudentId !== null}
+              onExportPdfPerSiswa={(id) => setHiddenPdfStudentId(id)}
             />
           </motion.div>
         ) : viewMode === 'rekap_nilai' ? (
@@ -2403,6 +2409,8 @@ export default function App() {
               onUpdateShowFooterDate={handleUpdateShowFooterDate}
               paperSize={paperSize}
               onUpdatePaperSize={handleUpdatePaperSize}
+              shortcuts={shortcuts}
+              setShortcuts={setShortcuts}
               triggerAlert={triggerAlert}
               triggerToast={triggerToast}
             />
@@ -3612,6 +3620,40 @@ export default function App() {
           </div>
         )}
       </footer>
+
+      {/* Hidden PDF Generator Component */}
+      {hiddenPdfStudentId && (() => {
+        const student = students.find(s => s.id === hiddenPdfStudentId);
+        if (!student) return null;
+        
+        const cls = student.kelas || selectedClass;
+        let wk = teachers.find(t => t.classAssigned === cls && t.role === 'Wali Kelas');
+        if (!wk) wk = { id: '', name: 'Wali Kelas Belum Diatur', nip: '', role: 'Wali Kelas' } as Teacher;
+
+        return (
+          <div style={{ position: 'fixed', top: '-9999px', left: '-9999px', width: '0px', height: '0px', overflow: 'hidden' }} className="no-print pointer-events-none">
+            <RaporCetak
+              student={student}
+              allClassStudents={[student]}
+              categories={categories}
+              kopSekolah={kopSekolah}
+              waliKelasName={wk.name}
+              waliKelasNip={wk.nip}
+              waliKelasSignatureUrl={wk.signatureUrl}
+              onBack={() => setHiddenPdfStudentId(null)}
+              onDownloadExcel={() => {}}
+              initialBatchNisList={[student.nis]}
+              onAddExportLog={addExportLog}
+              teachers={teachers}
+              autoTriggerBatchPdf={true}
+              paperSize={paperSize}
+              onUpdatePaperSize={setPaperSize}
+              selectedClass={cls}
+              onMarkAsPrinted={() => setHiddenPdfStudentId(null)}
+            />
+          </div>
+        );
+      })()}
 
       {/* Footer minimal auto-sync status (Hidden as requested) */}
       <div className="hidden">

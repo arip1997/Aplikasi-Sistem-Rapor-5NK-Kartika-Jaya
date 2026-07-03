@@ -219,15 +219,47 @@ export default function UserGuideModal({ isOpen, onClose }: UserGuideModalProps)
                 </div>
                 <div className="divide-y divide-slate-100 p-1 bg-slate-50 text-xs">
                   
-                  <div className="p-4 flex flex-col sm:flex-row gap-2 justify-between items-start sm:items-center">
+                  <div className="p-4 flex flex-col sm:flex-row gap-2 justify-between items-start sm:items-center hover:bg-slate-100/50 transition-colors group cursor-help" title="Gunakan Alt + 1/2/3 untuk pindah tab cepat, dan Ctrl + Enter untuk simpan perubahan form.">
                     <div>
-                      <p className="font-bold text-slate-800">Pintasan Navigasi Cepat</p>
+                      <p className="font-bold text-slate-800 flex items-center gap-1.5">
+                        Pintasan Navigasi Cepat <Info className="h-3 w-3 text-slate-400 group-hover:text-emerald-500 transition-colors" />
+                      </p>
                       <p className="text-slate-500 text-[11px] mt-0.5">Berpindah tab dan menyimpan form penilaian secara efisien tanpa mouse.</p>
                     </div>
                     <div className="flex gap-1.5 flex-wrap">
-                      <kbd className="bg-white border border-slate-200 px-2 py-0.5 rounded shadow-xs font-mono text-[10px] font-bold text-slate-700">Alt + 1 / 2 / 3</kbd>
-                      <kbd className="bg-white border border-slate-200 px-2 py-0.5 rounded shadow-xs font-mono text-[10px] font-bold text-slate-700">Ctrl + Enter (Simpan)</kbd>
+                      <kbd className="bg-white border border-slate-200 px-2 py-0.5 rounded shadow-xs font-mono text-[10px] font-bold text-slate-700 group-hover:border-emerald-300 group-hover:text-emerald-700 transition-colors">Alt + 1 / 2 / 3</kbd>
+                      <kbd className="bg-white border border-slate-200 px-2 py-0.5 rounded shadow-xs font-mono text-[10px] font-bold text-slate-700 group-hover:border-emerald-300 group-hover:text-emerald-700 transition-colors">Ctrl + Enter</kbd>
                     </div>
+                  </div>
+
+                  <div className="p-4 flex flex-col sm:flex-row gap-2 justify-between items-start sm:items-center hover:bg-slate-100/50 transition-colors group cursor-help" title="Tekan Ctrl+J dari mana saja untuk memutar antar tab (Siswa, Grid, Cetak) dengan instan.">
+                    <div>
+                      <p className="font-bold text-slate-800 flex items-center gap-1.5">
+                        Pindah Tab Layar Pintar <Info className="h-3 w-3 text-slate-400 group-hover:text-blue-500 transition-colors" />
+                      </p>
+                      <p className="text-slate-500 text-[11px] mt-0.5">Siklus berputar melintasi tab (Siswa, Rapor, Cetak, dll) secara instan.</p>
+                    </div>
+                    <kbd className="bg-white border border-slate-200 px-2 py-0.5 rounded shadow-xs font-mono text-[10px] font-bold text-slate-700 group-hover:border-blue-300 group-hover:text-blue-700 transition-colors">Ctrl + J</kbd>
+                  </div>
+
+                  <div className="p-4 flex flex-col sm:flex-row gap-2 justify-between items-start sm:items-center hover:bg-slate-100/50 transition-colors group cursor-help" title="Tekan Ctrl+K kapan saja untuk memunculkan kotak pencarian super cepat yang melayang di layar.">
+                    <div>
+                      <p className="font-bold text-slate-800 flex items-center gap-1.5">
+                        Pencarian Siswa Global <Info className="h-3 w-3 text-slate-400 group-hover:text-indigo-500 transition-colors" />
+                      </p>
+                      <p className="text-slate-500 text-[11px] mt-0.5">Memunculkan kotak pencarian instan dari layar mana pun.</p>
+                    </div>
+                    <kbd className="bg-white border border-slate-200 px-2 py-0.5 rounded shadow-xs font-mono text-[10px] font-bold text-slate-700 group-hover:border-indigo-300 group-hover:text-indigo-700 transition-colors">Ctrl + K</kbd>
+                  </div>
+
+                  <div className="p-4 flex flex-col sm:flex-row gap-2 justify-between items-start sm:items-center hover:bg-slate-100/50 transition-colors group cursor-help" title="Tekan Ctrl+S untuk memaksa sinkronisasi/penyimpanan ke server.">
+                    <div>
+                      <p className="font-bold text-slate-800 flex items-center gap-1.5">
+                        Simpan & Sinkronisasi <Info className="h-3 w-3 text-slate-400 group-hover:text-amber-500 transition-colors" />
+                      </p>
+                      <p className="text-slate-500 text-[11px] mt-0.5">Memaksa aplikasi untuk menyinkronkan data dengan database cloud/lokal seketika.</p>
+                    </div>
+                    <kbd className="bg-white border border-slate-200 px-2 py-0.5 rounded shadow-xs font-mono text-[10px] font-bold text-slate-700 group-hover:border-amber-300 group-hover:text-amber-700 transition-colors">Ctrl + S</kbd>
                   </div>
 
                   <div className="p-4 flex flex-col sm:flex-row gap-2 justify-between items-start sm:items-center">

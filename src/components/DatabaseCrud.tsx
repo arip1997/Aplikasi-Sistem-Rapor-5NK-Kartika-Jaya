@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import * as XLSX from 'xlsx';
 import { Student, Teacher, Category, Indicator, ScoreKey, KopSekolah } from '../types';
 import { SCHOOL_CLASSES, DEFAULT_KOP } from '../data';
-import { exportDatabaseBackupConfig, parseExcelDatabase, uploadExcelToGoogleDrive, encryptData, decryptData, addChangeLog, getChangeLogs, clearChangeLogs, deleteChangeLog, exportLocalJsonBackup, ChangeLog, formatProperName, runIntegrityCheck, IntegrityReport, fixIntegrity, exportAllStudentsToCsv, uploadZipSnapshotToGoogleDrive, downloadZipSnapshotLocally } from '../utils';
+import { exportDatabaseBackupConfig, parseExcelDatabase, uploadExcelToGoogleDrive, encryptData, decryptData, addChangeLog, getChangeLogs, clearChangeLogs, deleteChangeLog, exportLocalJsonBackup, ChangeLog, formatProperName, runIntegrityCheck, IntegrityReport, fixIntegrity, exportAllStudentsToCsv, exportAllTeachersToCsv, uploadZipSnapshotToGoogleDrive, downloadZipSnapshotLocally } from '../utils';
 import { normalizeAllData, hasValidAcademicTitle } from '../normalization';
 import { initAuth, googleSignIn, getAccessToken, logout } from '../firebase';
 import { 
@@ -33,7 +33,8 @@ import {
   Camera,
   Database,
   Cloud,
-  Copy
+  Copy,
+  Settings
 } from 'lucide-react';
 
 interface DatabaseCrudProps {
@@ -56,6 +57,8 @@ interface DatabaseCrudProps {
   setRowHeightMode: (value: 'compact' | 'comfortable') => void;
   paperSize: 'A4' | 'F4';
   onUpdatePaperSize: (size: 'A4' | 'F4') => void;
+  shortcuts?: {search: string, tab: string};
+  setShortcuts?: (s: {search: string, tab: string}) => void;
   triggerAlert?: (type: 'success' | 'info' | 'error', message: string) => void;
   triggerToast?: (type: 'success' | 'info' | 'error', message: string) => void;
 }
@@ -80,10 +83,12 @@ export default function DatabaseCrud({
   setRowHeightMode,
   paperSize,
   onUpdatePaperSize,
+  shortcuts,
+  setShortcuts,
   triggerAlert,
   triggerToast,
 }: DatabaseCrudProps) {
-  const [activeSubTab, setActiveSubTab] = useState<'siswa' | 'guru' | 'indikator' | 'kop' | 'backup' | 'riwayat' | 'snapshot' | 'integritas'>('siswa');
+  const [activeSubTab, setActiveSubTab] = useState<'siswa' | 'guru' | 'indikator' | 'kop' | 'backup' | 'riwayat' | 'snapshot' | 'integritas' | 'pengaturan'>('siswa');
   const [localAlert, setLocalAlert] = useState<{ type: 'success' | 'info' | 'error'; message: string } | null>(null);
 
   const notify = (message: string, type: 'success' | 'info' | 'error' = 'info') => {
@@ -945,12 +950,15 @@ export default function DatabaseCrud({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const csvFileInputRef = useRef<HTMLInputElement>(null);
+  const teacherCsvFileInputRef = useRef<HTMLInputElement>(null);
 
   // States for CSV Parsing / Column Mapping Modal
   const [isCsvMappingOpen, setIsCsvMappingOpen] = useState(false);
+  const [isTeacherCsvMappingOpen, setIsTeacherCsvMappingOpen] = useState(false);
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
   const [csvRows, setCsvRows] = useState<string[][]>([]);
   const [csvColumnMapping, setCsvColumnMapping] = useState({ nameIdx: -1, nisIdx: -1, classIdx: -1, genderIdx: -1 });
+  const [teacherCsvColumnMapping, setTeacherCsvColumnMapping] = useState({ nameIdx: -1, roleIdx: -1, classIdx: -1, nipIdx: -1 });
   const [csvFileName, setCsvFileName] = useState('');
 
   const [needsAuth, setNeedsAuth] = useState(false);
@@ -1289,6 +1297,130 @@ export default function DatabaseCrud({
     }
   };
 
+  const handleImportTeacherCsvAction = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const text = event.target?.result as string;
+        if (!text) {
+          alert('File CSV kosong atau gagal dibaca.');
+          return;
+        }
+
+        const rows = parseCSVToRows(text);
+        if (rows.length < 2) {
+          alert('Format CSV tidak valid atau baris data terlalu sedikit (harus memiliki baris header dan minimal 1 data guru).');
+          return;
+        }
+
+        const headers = rows[0].map(h => h.trim());
+        setCsvHeaders(headers);
+        setCsvRows(rows.slice(1));
+        setCsvFileName(file.name);
+
+        // Auto-detect columns
+        const hLow = headers.map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ''));
+        const nameIdx = hLow.findIndex(h => h.includes('nama') || h.includes('name'));
+        const roleIdx = hLow.findIndex(h => h.includes('role') || h.includes('peran') || h.includes('jabatan'));
+        const classIdx = hLow.findIndex(h => h.includes('kelas') || h.includes('class') || h.includes('walikelas'));
+        const nipIdx = hLow.findIndex(h => h.includes('nip') || h.includes('id'));
+
+        setTeacherCsvColumnMapping({
+          nameIdx: nameIdx !== -1 ? nameIdx : 0,
+          roleIdx: roleIdx !== -1 ? roleIdx : 0,
+          classIdx: classIdx !== -1 ? classIdx : 0,
+          nipIdx: nipIdx !== -1 ? nipIdx : 0
+        });
+
+        setIsTeacherCsvMappingOpen(true);
+      };
+      reader.readAsText(file);
+    } catch (err: any) {
+      alert(`Gagal memproses file CSV: ${err.message}`);
+    }
+  };
+
+  const handleConfirmImportTeacherCsv = () => {
+    const { nameIdx, roleIdx, classIdx, nipIdx } = teacherCsvColumnMapping;
+    if (nameIdx === -1) {
+      alert('Anda wajib memetakan kolom "Nama Guru" agar data bisa diimpor.');
+      return;
+    }
+
+    try {
+      const importedTeachers: Teacher[] = [];
+      let autoNipCount = 0;
+
+      csvRows.forEach((row, index) => {
+        if (row.length === 0 || (row.length === 1 && !row[0])) return;
+
+        const rawName = row[nameIdx] || '';
+        if (!rawName.trim()) return;
+        
+        const normalizedName = formatProperName(rawName.trim());
+
+        let rawNip = nipIdx !== -1 ? (row[nipIdx] || '').trim() : '';
+        if (!rawNip || rawNip === 'undefined' || rawNip === 'null') {
+          rawNip = `NIP-${String(Math.floor(1000 + Math.random() * 9000))}`;
+          autoNipCount++;
+        }
+
+        const rawRole = roleIdx !== -1 ? (row[roleIdx] || '').trim().toLowerCase() : '';
+        const isWaliKelas = rawRole.includes('wali') || rawRole.includes('homeroom');
+        const role: 'Guru Mapel' | 'Wali Kelas' = isWaliKelas ? 'Wali Kelas' : 'Guru Mapel';
+
+        const rawClass = classIdx !== -1 ? (row[classIdx] || '').trim() : '';
+
+        importedTeachers.push({
+          id: `TCH_CSV_${Date.now()}_${index}`,
+          name: normalizedName,
+          nip: rawNip,
+          role: role,
+          classAssigned: isWaliKelas ? rawClass : undefined
+        });
+      });
+
+      if (importedTeachers.length === 0) {
+        alert('Tidak ada guru yang diimpor. Periksa kembali struktur file CSV.');
+        return;
+      }
+
+      const currentTeachers = [...teachers];
+      let overwriteCount = 0;
+      let newCount = 0;
+
+      importedTeachers.forEach(newTch => {
+        // Find existing by NIP or Name
+        const existIdx = currentTeachers.findIndex(t => (t.nip && newTch.nip && t.nip === newTch.nip) || t.name === newTch.name);
+        if (existIdx !== -1) {
+          currentTeachers[existIdx] = { ...currentTeachers[existIdx], ...newTch, id: currentTeachers[existIdx].id }; // keep old ID
+          overwriteCount++;
+        } else {
+          currentTeachers.push(newTch);
+          newCount++;
+        }
+      });
+
+      onUpdateTeachers(currentTeachers);
+      setIsTeacherCsvMappingOpen(false);
+
+      addChangeLog('IMPORT_CSV', `Mengimpor ${importedTeachers.length} guru/wali kelas baru dari file CSV "${csvFileName}"`);
+
+      let notifMsg = `CSV GURU BERHASIL DIIMPOR!\n\nBerhasil membaca ${importedTeachers.length} baris guru dari CSV.\n- Guru Baru: ${newCount}\n- Diperbarui (NIP/Nama Cocok): ${overwriteCount}\n`;
+      if (autoNipCount > 0) {
+        notifMsg += `\n⚠️ Ada ${autoNipCount} guru diimpor dengan NIP otomatis karena kosong pada CSV.`;
+      }
+      alert(notifMsg);
+
+      if (teacherCsvFileInputRef.current) teacherCsvFileInputRef.current.value = '';
+    } catch (err: any) {
+      alert(`Gagal mengimpor data CSV Guru: ${err.message}`);
+    }
+  };
+
   const handleDirectEncryptedBackup = () => {
     const password = window.prompt(
       "AMANKAN DATABASE OFFLINE (JSON TERENKRIPSI):\n" +
@@ -1454,6 +1586,16 @@ export default function DatabaseCrud({
             }`}
           >
             🔍 Cek Integritas Data
+          </button>
+          <button
+            onClick={() => setActiveSubTab('pengaturan')}
+            className={`px-3 py-1.5 text-xs font-bold rounded-lg flex items-center gap-1.5 cursor-pointer select-none border transition-colors ${
+              activeSubTab === 'pengaturan' 
+                ? 'bg-white text-slate-800 border-slate-200 shadow-xs' 
+                : 'text-slate-500 hover:bg-slate-200/50 border-transparent'
+            }`}
+          >
+            ⚙️ Pengaturan
           </button>
         </div>
         
@@ -1764,6 +1906,36 @@ export default function DatabaseCrud({
               >
                 <Plus className="h-4 w-4" /> Tambah Staf Guru
               </button>
+
+              <button
+                onClick={() => teacherCsvFileInputRef.current?.click()}
+                className="bg-teal-600 hover:bg-teal-700 text-white font-bold px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
+                title="Impor daftar guru/wali kelas massal dari file CSV (.csv)"
+              >
+                <Upload className="h-4 w-4" /> Impor Guru CSV
+              </button>
+
+              <button 
+                onClick={() => {
+                  if (teachers.length === 0) {
+                    alert('Belum ada data guru/wali kelas untuk diekspor.');
+                    return;
+                  }
+                  exportAllTeachersToCsv(teachers);
+                }}
+                className="bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100 font-bold px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
+                title="Download rekap data mentah seluruh guru/wali kelas ke format CSV"
+              >
+                <Download className="h-4 w-4" /> Ekspor CSV
+              </button>
+              
+              <input
+                type="file"
+                accept=".csv"
+                className="hidden"
+                ref={teacherCsvFileInputRef}
+                onChange={handleImportTeacherCsvAction}
+              />
             </div>
           </div>
           
@@ -3376,6 +3548,79 @@ export default function DatabaseCrud({
         );
       })()}
 
+      {/* -------------------- SUBTAB 9: PENGATURAN CRUD -------------------- */}
+      {activeSubTab === 'pengaturan' && (
+        <div className="flex-1 overflow-y-auto p-6 max-h-[500px]">
+          <div className="mb-6">
+            <h4 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+              <Settings className="h-4 w-4 text-emerald-600" />
+              Pengaturan Pintasan Navigasi Cepat (Keyboard Shortcuts)
+            </h4>
+            <p className="text-xs text-slate-400 mt-0.5">Petakan ulang tombol shortcut keyboard utama sesuai dengan alur kerja Anda sendiri.</p>
+          </div>
+
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col gap-6 max-w-xl">
+            {shortcuts && setShortcuts ? (
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-bold text-slate-700 text-xs">Pintasan Siklus Rotasi Tab (Default: Ctrl + J)</label>
+                  <p className="text-[11px] text-slate-400 mb-1">Pintasan untuk memutar layar (Grid Siswa - Form - Cetak Rapor - Master CRUD) secara instan.</p>
+                  <div className="flex items-center gap-2">
+                    <kbd className="bg-slate-100 border border-slate-200 px-2 py-1 rounded text-xs font-mono font-bold text-slate-700">Ctrl + </kbd>
+                    <input
+                      type="text"
+                      maxLength={1}
+                      value={shortcuts.tab.toUpperCase()}
+                      onChange={(e) => {
+                        const val = e.target.value.toLowerCase();
+                        if (val.match(/[a-z0-9]/)) {
+                          setShortcuts({ ...shortcuts, tab: val });
+                          if (triggerToast) triggerToast('success', `✓ Pintasan ganti tab diubah menjadi Ctrl+${val.toUpperCase()}`);
+                        }
+                      }}
+                      className="w-12 text-center bg-slate-50 border border-slate-300 rounded p-1 font-mono text-sm font-bold uppercase focus:ring-2 focus:ring-emerald-500 outline-none"
+                    />
+                  </div>
+                </div>
+
+                <div className="h-px bg-slate-100 my-2"></div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-bold text-slate-700 text-xs">Pintasan Cari Siswa Instan (Default: Ctrl + K)</label>
+                  <p className="text-[11px] text-slate-400 mb-1">Pintasan untuk memunculkan kotak dialog cari murid dari layar mana pun.</p>
+                  <div className="flex items-center gap-2">
+                    <kbd className="bg-slate-100 border border-slate-200 px-2 py-1 rounded text-xs font-mono font-bold text-slate-700">Ctrl + </kbd>
+                    <input
+                      type="text"
+                      maxLength={1}
+                      value={shortcuts.search.toUpperCase()}
+                      onChange={(e) => {
+                        const val = e.target.value.toLowerCase();
+                        if (val.match(/[a-z0-9]/)) {
+                          setShortcuts({ ...shortcuts, search: val });
+                          if (triggerToast) triggerToast('success', `✓ Pintasan pencarian diubah menjadi Ctrl+${val.toUpperCase()}`);
+                        }
+                      }}
+                      className="w-12 text-center bg-slate-50 border border-slate-300 rounded p-1 font-mono text-sm font-bold uppercase focus:ring-2 focus:ring-emerald-500 outline-none"
+                    />
+                  </div>
+                </div>
+                
+                <div className="mt-4 p-3 bg-blue-50/50 border border-blue-100 rounded-xl">
+                  <p className="text-[11px] text-blue-700 leading-relaxed italic">
+                    Perubahan disimpan otomatis di memori peramban lokal perangkat Anda. Hindari menggunakan pintasan peramban bawaan yang sama (seperti Ctrl+P, Ctrl+T, Ctrl+R, dsb) untuk mencegah konflik yang tidak diinginkan.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="text-sm text-amber-600 bg-amber-50 p-4 rounded-xl border border-amber-200">
+                Opsi pintasan belum termuat oleh sistem utama.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* ----------------- POPUP MODAL 0: TAMBAH KELAS ----------------- */}
       {isAddClassModalOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 animate-in fade-in duration-150">
@@ -3897,6 +4142,113 @@ export default function DatabaseCrud({
                 className="py-1.5 px-4 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 cursor-pointer flex items-center gap-1"
               >
                 <Check className="h-4 w-4" /> Mulai Impor Siswa
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ----------------- POPUP MODAL CSV MAPPING GURU ----------------- */}
+      {isTeacherCsvMappingOpen && (
+        <div className="fixed inset-0 bg-black/55 flex items-center justify-center z-50 p-4 animate-in fade-in duration-150">
+          <div className="bg-white rounded-xl border border-slate-300 shadow-2xl p-6 max-w-md w-full flex flex-col gap-4 animate-in slide-in-from-bottom duration-200">
+            <div>
+              <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
+                <span className="text-lg">📋</span> Pemetaan Kolom File CSV Guru
+              </h3>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                File: {csvFileName} ({csvRows.length} baris data terdeteksi)
+              </p>
+            </div>
+
+            <div className="text-[11px] text-slate-600 bg-teal-50 border border-teal-200 rounded-lg p-2.5 leading-relaxed font-sans">
+              <strong className="text-teal-800">Petunjuk Pemetaan:</strong> Cocokkan kolom dari file CSV Anda dengan atribut data guru.
+            </div>
+
+            <div className="flex flex-col gap-3 text-xs font-sans">
+              
+              {/* Nama mapping */}
+              <div className="flex flex-col gap-1">
+                <label className="font-bold text-slate-600 flex justify-between">
+                  <span>Nama Guru <span className="text-red-500">*</span></span>
+                  <span className="text-[10px] text-slate-400 font-normal">Wajib diisi</span>
+                </label>
+                <select
+                  value={teacherCsvColumnMapping.nameIdx}
+                  onChange={(e) => setTeacherCsvColumnMapping({ ...teacherCsvColumnMapping, nameIdx: Number(e.target.value) })}
+                  className="bg-slate-50 border border-slate-200 rounded-lg p-2 font-medium focus:ring-1 focus:ring-teal-500"
+                >
+                  <option value={-1}>-- Pilih Kolom Nama --</option>
+                  {csvHeaders.map((h, i) => (
+                    <option key={i} value={i}>Kolom {i+1}: {h}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Role mapping */}
+              <div className="flex flex-col gap-1">
+                <label className="font-bold text-slate-600">Peran / Jabatan</label>
+                <select
+                  value={teacherCsvColumnMapping.roleIdx}
+                  onChange={(e) => setTeacherCsvColumnMapping({ ...teacherCsvColumnMapping, roleIdx: Number(e.target.value) })}
+                  className="bg-slate-50 border border-slate-200 rounded-lg p-2 font-medium focus:ring-1 focus:ring-teal-500"
+                >
+                  <option value={-1}>-- Default Guru Mapel --</option>
+                  {csvHeaders.map((h, i) => (
+                    <option key={i} value={i}>Kolom {i+1}: {h}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Class mapping */}
+              <div className="flex flex-col gap-1">
+                <label className="font-bold text-slate-600">Alokasi Kelas Wali</label>
+                <select
+                  value={teacherCsvColumnMapping.classIdx}
+                  onChange={(e) => setTeacherCsvColumnMapping({ ...teacherCsvColumnMapping, classIdx: Number(e.target.value) })}
+                  className="bg-slate-50 border border-slate-200 rounded-lg p-2 font-medium focus:ring-1 focus:ring-teal-500"
+                >
+                  <option value={-1}>-- Pilih Kolom Kelas --</option>
+                  {csvHeaders.map((h, i) => (
+                    <option key={i} value={i}>Kolom {i+1}: {h}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* NIP mapping */}
+              <div className="flex flex-col gap-1">
+                <label className="font-bold text-slate-600">NIP (Bisa Kosong)</label>
+                <select
+                  value={teacherCsvColumnMapping.nipIdx}
+                  onChange={(e) => setTeacherCsvColumnMapping({ ...teacherCsvColumnMapping, nipIdx: Number(e.target.value) })}
+                  className="bg-slate-50 border border-slate-200 rounded-lg p-2 font-medium focus:ring-1 focus:ring-teal-500"
+                >
+                  <option value={-1}>-- Pilih Kolom NIP --</option>
+                  {csvHeaders.map((h, i) => (
+                    <option key={i} value={i}>Kolom {i+1}: {h}</option>
+                  ))}
+                </select>
+              </div>
+
+            </div>
+
+            <div className="flex justify-end gap-2 mt-4 pt-4 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsTeacherCsvMappingOpen(false);
+                  if (teacherCsvFileInputRef.current) teacherCsvFileInputRef.current.value = '';
+                }}
+                className="py-1.5 px-3 border border-slate-200 text-slate-600 rounded-lg text-xs font-semibold hover:bg-slate-50 cursor-pointer"
+              >
+                Batalkan
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmImportTeacherCsv}
+                className="py-1.5 px-4 bg-teal-600 text-white rounded-lg text-xs font-bold hover:bg-teal-700 cursor-pointer flex items-center gap-1"
+              >
+                <Check className="h-4 w-4" /> Mulai Impor Guru
               </button>
             </div>
           </div>

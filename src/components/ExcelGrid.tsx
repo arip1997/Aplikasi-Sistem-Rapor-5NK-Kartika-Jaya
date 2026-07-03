@@ -1,6 +1,5 @@
 import { useState, useId, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FixedSizeList as List } from 'react-window';
 import { Student, Category, ScoreKey, scoreOptions } from '../types';
 import { ChevronDown, Search, Check, AlertCircle, Sparkles, Filter, FileSpreadsheet, RotateCcw, AlertTriangle, RefreshCw, Printer } from 'lucide-react';
 import { formatProperName, exportClassToCsv } from '../utils';
