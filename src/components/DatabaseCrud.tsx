@@ -2706,15 +2706,37 @@ export default function DatabaseCrud({
 
           {/* QUICK ACTIONS CUSTOMIZER */}
           <div className="bg-slate-50 border border-slate-200 rounded-xl p-5">
-            <div className="mb-4">
-              <h5 className="font-bold text-slate-850 text-xs uppercase tracking-wider flex items-center gap-2">
-                <span className="text-indigo-600 font-extrabold text-sm">⚙️</span>
-                KUSTOMISASI TOMBOL TINDAKAN CEPAT (QUICK ACTIONS)
-              </h5>
-              <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
-                Tentukan tepat <strong>3 tindakan cepat</strong> yang akan muncul ketika Anda mengarahkan kursor ke tombol melayang (Quick Actions) di sudut kanan bawah halaman. Pilihan Anda akan disimpan secara otomatis.
-              </p>
+            <div className="mb-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+              <div>
+                <h5 className="font-bold text-slate-850 text-xs uppercase tracking-wider flex items-center gap-2">
+                  <span className="text-indigo-600 font-extrabold text-sm">⚙️</span>
+                  KUSTOMISASI TOMBOL TINDAKAN CEPAT (QUICK ACTIONS)
+                </h5>
+                <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+                  Tentukan tepat <strong className="text-indigo-700">3 tindakan cepat</strong> yang akan muncul pada tombol melayang di sudut kanan bawah halaman. Pilihan Anda disimpan secara otomatis.
+                </p>
+              </div>
+              <div className="shrink-0">
+                {quickActions.length === 3 ? (
+                  <span className="text-[10px] bg-emerald-100 text-emerald-800 font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1 shadow-xs">
+                    ✓ Konfigurasi Lengkap (3 dari 3)
+                  </span>
+                ) : (
+                  <span className="text-[10px] bg-amber-100 text-amber-850 font-extrabold px-2.5 py-1 rounded-full flex items-center gap-1 animate-pulse shadow-xs">
+                    ⚠️ Silakan pilih tepat 3 ({quickActions.length}/3)
+                  </span>
+                )}
+              </div>
             </div>
+
+            {quickActions.length !== 3 && (
+              <div className="mb-4 p-3 bg-amber-50 border border-amber-200/60 rounded-xl text-[11px] text-amber-800 font-medium flex items-center gap-2">
+                <span className="text-base">⚠️</span>
+                <span>
+                  Sistem membutuhkan <strong>persis 3 tindakan</strong> untuk ditampilkan secara simetris pada menu melayang. Silakan pilih tindakan tambahan atau kurangi pilihan agar jumlahnya pas 3.
+                </span>
+              </div>
+            )}
 
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
               {[
@@ -2730,10 +2752,6 @@ export default function DatabaseCrud({
                     onClick={() => {
                       let next: string[];
                       if (isActive) {
-                        if (quickActions.length <= 1) {
-                          alert("Minimal harus ada 1 tindakan cepat yang aktif!");
-                          return;
-                        }
                         next = quickActions.filter(id => id !== act.id);
                       } else {
                         if (quickActions.length >= 3) {
@@ -2748,7 +2766,7 @@ export default function DatabaseCrud({
                       // Dispatch custom event for immediate response in current window context
                       window.dispatchEvent(new CustomEvent('quickActionsChanged'));
                     }}
-                    className={`border rounded-xl p-4 flex flex-col justify-between cursor-pointer transition-all hover:shadow-sm select-none ${
+                    className={`border rounded-xl p-4 flex flex-col justify-between cursor-pointer transition-all hover:shadow-sm select-none hover:scale-[1.01] active:scale-[0.99] ${
                       isActive 
                         ? 'bg-indigo-50/60 border-indigo-300 ring-1 ring-indigo-300' 
                         : 'bg-white border-slate-200 hover:bg-slate-50'
@@ -2757,7 +2775,7 @@ export default function DatabaseCrud({
                     <div>
                       <div className="flex items-center justify-between mb-2">
                         <span className="text-xl">{act.icon}</span>
-                        <div className={`w-4.5 h-4.5 rounded-full border flex items-center justify-center ${
+                        <div className={`w-4.5 h-4.5 rounded-full border flex items-center justify-center transition-colors ${
                           isActive ? 'bg-indigo-600 border-indigo-600 text-white font-bold' : 'border-slate-300'
                         }`}>
                           {isActive && <span className="text-[10px] font-black">✓</span>}
@@ -2771,7 +2789,7 @@ export default function DatabaseCrud({
                       <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
                         isActive ? 'bg-indigo-100 text-indigo-800' : 'bg-slate-100 text-slate-500'
                       }`}>
-                        {isActive ? 'AKTIF' : 'AKTIF'}
+                        {isActive ? 'AKTIF' : 'NON-AKTIF'}
                       </span>
                     </div>
                   </div>

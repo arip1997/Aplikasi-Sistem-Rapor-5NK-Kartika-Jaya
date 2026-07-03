@@ -2124,16 +2124,45 @@ export default function App() {
               <AnimatePresence>
                 {isQuickActionsOpen && (
                   <motion.div
-                    initial={{ opacity: 0, scale: 0.8, y: 15 }}
-                    animate={{ opacity: 1, scale: 1, y: 0 }}
-                    exit={{ opacity: 0, scale: 0.85, y: 10 }}
-                    transition={{ type: 'spring', stiffness: 350, damping: 22 }}
+                    initial="hidden"
+                    animate="visible"
+                    exit="exit"
+                    variants={{
+                      hidden: { opacity: 0 },
+                      visible: {
+                        opacity: 1,
+                        transition: {
+                          staggerChildren: 0.08,
+                          delayChildren: 0.05
+                        }
+                      },
+                      exit: {
+                        opacity: 0,
+                        transition: {
+                          staggerChildren: 0.04,
+                          staggerDirection: -1
+                        }
+                      }
+                    }}
                     className="absolute bottom-16 right-0 flex flex-col gap-2 mb-1 w-52 z-50"
                   >
                     {quickActions.map(actionId => {
+                      const itemTransition = {
+                        type: 'spring' as const,
+                        stiffness: 380,
+                        damping: 20
+                      };
+                      
+                      const itemVariants = {
+                        hidden: { opacity: 0, scale: 0.8, y: 15 },
+                        visible: { opacity: 1, scale: 1, y: 0, transition: itemTransition },
+                        exit: { opacity: 0, scale: 0.8, y: 10, transition: { duration: 0.15 } }
+                      };
+
                       if (actionId === 'print') {
                         return (
-                          <button 
+                          <motion.button 
+                            variants={itemVariants}
                             key="print"
                             onClick={() => {
                               const classStudentsRef = students.filter(s => s.kelas === selectedClass);
@@ -2149,43 +2178,47 @@ export default function App() {
                             className="w-full text-left px-3.5 py-2.5 bg-white text-slate-800 hover:bg-indigo-50 border border-slate-200 rounded-xl shadow-lg shadow-slate-200/40 text-xs font-bold transition-all duration-200 flex items-center gap-2 cursor-pointer hover:-translate-y-0.5"
                           >
                             <Printer className="h-4 w-4 text-indigo-600 shrink-0" /> Cetak Massal Kelas
-                          </button>
+                          </motion.button>
                         );
                       }
                       if (actionId === 'excel') {
                         return (
-                          <button 
+                          <motion.button 
+                            variants={itemVariants}
                             key="excel"
                             onClick={() => exportClassToExcel(filteredStudents, selectedClass, activeWaliKelas.name, categories)}
                             className="w-full text-left px-3.5 py-2.5 bg-white text-slate-800 hover:bg-emerald-50 border border-slate-200 rounded-xl shadow-lg shadow-slate-200/40 text-xs font-bold transition-all duration-200 flex items-center gap-2 cursor-pointer hover:-translate-y-0.5"
                           >
                             <FileSpreadsheet className="h-4 w-4 text-emerald-600 shrink-0" /> Unduh Excel Kelas
-                          </button>
+                          </motion.button>
                         );
                       }
                       if (actionId === 'contrast') {
                         return (
-                          <button 
+                          <motion.button 
+                            variants={itemVariants}
                             key="contrast"
                             onClick={() => setIsHighContrast(!isHighContrast)}
                             className="w-full text-left px-3.5 py-2.5 bg-white text-slate-800 hover:bg-amber-50 border border-slate-200 rounded-xl shadow-lg shadow-slate-200/40 text-xs font-bold transition-all duration-200 flex items-center gap-2 cursor-pointer hover:-translate-y-0.5"
                           >
                             <span className="text-amber-600 text-sm font-black shrink-0">◐</span> Mode Kontras Tinggi
-                          </button>
+                          </motion.button>
                         );
                       }
                       if (actionId === 'sort') {
                         return (
-                          <button 
+                          <motion.button 
+                            variants={itemVariants}
                             key="sort"
                             onClick={() => {
-                              setClassSortBy(prev => prev === 'NAME' ? 'NIS' : 'NAME');
-                              triggerToast('success', `Daftar kelas diurutkan berdasarkan ${classSortBy === 'NAME' ? 'NIS' : 'Nama siswa'}!`);
+                              const nextSort = classSortBy === 'NAME' ? 'NIS' : 'NAME';
+                              setClassSortBy(nextSort);
+                              triggerToast('success', `Daftar kelas diurutkan berdasarkan ${nextSort === 'NAME' ? 'Nama siswa' : 'NIS'}!`);
                             }}
                             className="w-full text-left px-3.5 py-2.5 bg-white text-slate-800 hover:bg-pink-50 border border-slate-200 rounded-xl shadow-lg shadow-slate-200/40 text-xs font-bold transition-all duration-200 flex items-center gap-2 cursor-pointer hover:-translate-y-0.5"
                           >
-                            <ArrowUpDown className="h-4 w-4 text-pink-600 shrink-0" /> Urut: {classSortBy === 'NAME' ? 'Urut NIS' : 'Urut Nama'}
-                          </button>
+                            <ArrowUpDown className="h-4 w-4 text-pink-600 shrink-0" /> Urut: {classSortBy === 'NAME' ? 'Nama Siswa' : 'NIS'}
+                          </motion.button>
                         );
                       }
                       return null;
