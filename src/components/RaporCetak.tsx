@@ -673,14 +673,18 @@ export default function RaporCetak({
           defaultFilename = `Rapor_5NK_${s.name.replace(/\s+/g, '_')}_${s.nis}.pdf`;
         }
 
-        const inputFilename = window.prompt("Masukkan nama file untuk unduhan PDF:", defaultFilename.replace('.pdf', ''));
-        if (inputFilename === null) {
-          return;
+        let filename = defaultFilename;
+        try {
+          const isIframe = window.self !== window.top;
+          if (!isIframe) {
+            const inputFilename = window.prompt("Masukkan nama file untuk unduhan PDF:", defaultFilename.replace('.pdf', ''));
+            if (inputFilename !== null && inputFilename.trim() !== '') {
+              filename = inputFilename.trim().toLowerCase().endsWith('.pdf') ? inputFilename.trim() : `${inputFilename.trim()}.pdf`;
+            }
+          }
+        } catch (promptErr) {
+          console.warn("window.prompt blocked or failed in iframe sandbox:", promptErr);
         }
-
-        const filename = inputFilename.trim() 
-          ? (inputFilename.toLowerCase().endsWith('.pdf') ? inputFilename.trim() : `${inputFilename.trim()}.pdf`)
-          : defaultFilename;
 
         console.log(`[PDF Generator] Starting iframe-based html2pdf with filename: "${filename}"`);
         await generatePdfIframe(isLandscape, originalElement, filename, true, pageMargin, paperSize);
@@ -3362,13 +3366,16 @@ async function generatePdfIframe(
   const paperWidth = paperSize === 'F4' ? (isLandscape ? 330 : 215) : (isLandscape ? 297 : 210);
   const paperHeight = paperSize === 'F4' ? (isLandscape ? 215 : 330) : (isLandscape ? 210 : 297);
 
+  const widthPx = Math.round(paperWidth * 3.77953);
+  const heightPx = Math.round(paperHeight * 3.77953);
+
   // Create temporary iframe
   const iframe = document.createElement('iframe');
   iframe.style.position = 'fixed';
   iframe.style.left = '-9999px';
   iframe.style.top = '0';
-  iframe.style.width = `${paperWidth}mm`;
-  iframe.style.height = `${paperHeight}mm`;
+  iframe.style.width = `${widthPx}px`;
+  iframe.style.height = `${heightPx}px`;
   iframe.style.border = 'none';
   document.body.appendChild(iframe);
 
@@ -3408,6 +3415,15 @@ async function generatePdfIframe(
         size: ${paperSize === 'F4' ? (isLandscape ? '330mm 215mm' : '215mm 330mm') : 'A4 ' + (isLandscape ? 'landscape' : 'portrait')} !important;
         margin: 0 !important;
       }
+      body {
+        margin: 0 !important;
+        padding: 0 !important;
+        width: 100% !important;
+        height: 100% !important;
+        background-color: #ffffff !important;
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }
       #rapor-pdf-content {
         width: ${paperWidth}mm !important;
         margin: 0 !important;
@@ -3426,7 +3442,7 @@ async function generatePdfIframe(
         overflow: hidden !important;
         background-color: #ffffff !important;
       }
-      .print-page:last-child, .print-page:last-of-type {
+      .student-pdf-group:last-child .print-page:last-child {
         page-break-after: avoid !important;
       }
     `;
@@ -3461,7 +3477,7 @@ async function generatePdfIframe(
       margin:       0, // strict 0 margin to let the A4 page's internal padding handle margins perfectly
       filename:     filename,
       image:        { type: 'jpeg', quality: 0.98 },
-      pagebreak:    { mode: ['css', 'legacy'], avoid: ['.avoid-break'] },
+      pagebreak:    { mode: ['css', 'legacy'], before: '.print-page', avoid: ['.print-page', '.avoid-break'] },
       html2canvas:  {
         scale: 2.2,
         useCORS: true,

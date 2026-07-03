@@ -9,6 +9,7 @@ interface ExcelGridProps {
   categories: Category[];
   selectedClass: string;
   onUpdateStudentGrades: (studentId: string, grades: Record<string, ScoreKey>) => void;
+  onUpdateBulkStudentGrades?: (updates: { studentId: string; nextGrades: Record<string, ScoreKey> }[]) => void;
   onUpdateComments: (studentId: string, kesimpulan: string, Notes: string) => void;
   onSelectStudent: (student: Student) => void;
   onBatchPrint?: (studentIds: string[]) => void;
@@ -17,6 +18,8 @@ interface ExcelGridProps {
   aiModifiedStudentIds?: string[];
   onAddExportLog?: (type: 'EXCEL' | 'PDF' | 'CSV', description: string, fileName: string, studentCount: number) => void;
   rowHeightMode?: 'compact' | 'comfortable';
+  triggerAlert?: (type: 'success' | 'info' | 'error', message: string) => void;
+  triggerToast?: (type: 'success' | 'info' | 'error', message: string) => void;
 }
 
 export default function ExcelGrid({
@@ -24,6 +27,7 @@ export default function ExcelGrid({
   categories,
   selectedClass,
   onUpdateStudentGrades,
+  onUpdateBulkStudentGrades,
   onUpdateComments,
   onSelectStudent,
   onBatchPrint,
@@ -32,8 +36,26 @@ export default function ExcelGrid({
   aiModifiedStudentIds = [],
   onAddExportLog,
   rowHeightMode = 'comfortable',
+  triggerAlert,
+  triggerToast,
 }: ExcelGridProps) {
   const [searchTerm, setSearchTerm] = useState('');
+  const [localAlert, setLocalAlert] = useState<{ type: 'success' | 'info' | 'error'; message: string } | null>(null);
+
+  const notify = (message: string, type: 'success' | 'info' | 'error' = 'info') => {
+    if (triggerAlert) {
+      triggerAlert(type, message);
+    } else if (triggerToast) {
+      triggerToast(type, message);
+    } else {
+      setLocalAlert({ type, message });
+      const timer = setTimeout(() => {
+        setLocalAlert(null);
+      }, 4500);
+      return () => clearTimeout(timer);
+    }
+  };
+
   const [searchNis, setSearchNis] = useState('');
   const [activeCell, setActiveCell] = useState<{ studentId: string; indicatorId: string } | null>(null);
   const [filterCompleted, setFilterCompleted] = useState<'all' | 'completed' | 'pending'>('all');
@@ -66,35 +88,43 @@ export default function ExcelGrid({
 
   const applyBulkGrades = (score: ScoreKey) => {
     if (!activeCell) {
-      alert("Pilih sel indikator terlebih dahulu di grid Excel!");
+      notify("Pilih sel indikator terlebih dahulu di grid Excel!", "error");
       return;
     }
     const targetStudentIds = Object.keys(checkedStudentIds).filter(id => checkedStudentIds[id]);
     if (targetStudentIds.length === 0) {
-      alert("Silakan pilih minimal satu siswa dengan mencentang kotak di baris nama siswa!");
+      notify("Silakan pilih minimal satu siswa dengan mencentang kotak di baris nama siswa!", "error");
       return;
     }
     
     if (confirm(`Apakah Anda yakin ingin mengisi nilai "${score}" untuk Indikator ${activeCell.indicatorId} pada ${targetStudentIds.length} siswa terpilih?`)) {
-      targetStudentIds.forEach(id => {
-        const stud = students.find(s => s.id === id);
-        if (stud) {
-          const nextGrades = { ...stud.grades, [activeCell.indicatorId]: score };
-          onUpdateStudentGrades(id, nextGrades);
-        }
-      });
-      alert(`Berhasil memperbarui nilai untuk ${targetStudentIds.length} siswa secara massal!`);
+      if (onUpdateBulkStudentGrades) {
+        const updates = targetStudentIds.map(id => {
+          const stud = students.find(s => s.id === id);
+          return stud ? { studentId: id, nextGrades: { ...stud.grades, [activeCell.indicatorId]: score } } : null;
+        }).filter(Boolean) as { studentId: string; nextGrades: Record<string, ScoreKey> }[];
+        onUpdateBulkStudentGrades(updates);
+      } else {
+        targetStudentIds.forEach(id => {
+          const stud = students.find(s => s.id === id);
+          if (stud) {
+            const nextGrades = { ...stud.grades, [activeCell.indicatorId]: score };
+            onUpdateStudentGrades(id, nextGrades);
+          }
+        });
+      }
+      notify(`Berhasil memperbarui nilai untuk ${targetStudentIds.length} siswa secara massal!`, "success");
     }
   };
 
   const applyBulkCommentsCopy = () => {
     if (!selectedStudent) {
-      alert("Pilih siswa sumber (klik nama siswa di tabel) yang ingin disalin catatan/kesimpulannya!");
+      notify("Pilih siswa sumber (klik nama siswa di tabel) yang ingin disalin catatan/kesimpulannya!", "error");
       return;
     }
     const targetStudentIds = Object.keys(checkedStudentIds).filter(id => checkedStudentIds[id]);
     if (targetStudentIds.length === 0) {
-      alert("Silakan pilih minimal satu siswa dengan mencentang kotak di baris nama siswa!");
+      notify("Silakan pilih minimal satu siswa dengan mencentang kotak di baris nama siswa!", "error");
       return;
     }
 
@@ -103,27 +133,34 @@ export default function ExcelGrid({
         if (id === selectedStudent.id) return; // Skip self
         onUpdateComments(id, selectedStudent.kesimpulan || '', selectedStudent.catatanWali || '');
       });
-      alert(`Berhasil menyalin seluruh catatan dari "${selectedStudent.name}" ke ${targetStudentIds.length} siswa secara massal!`);
+      notify(`Berhasil menyalin seluruh catatan dari "${selectedStudent.name}" ke ${targetStudentIds.length} siswa secara massal!`, "success");
     }
   };
 
   const applyBulkGradesCopy = () => {
     if (!selectedStudent) {
-      alert("Pilih siswa sumber (klik nama siswa di tabel) yang ingin disalin nilai-nilainya!");
+      notify("Pilih siswa sumber (klik nama siswa di tabel) yang ingin disalin nilai-nilainya!", "error");
       return;
     }
     const targetStudentIds = Object.keys(checkedStudentIds).filter(id => checkedStudentIds[id]);
     if (targetStudentIds.length === 0) {
-      alert("Silakan pilih minimal satu siswa dengan mencentang kotak di baris nama siswa!");
+      notify("Silakan pilih minimal satu siswa dengan mencentang kotak di baris nama siswa!", "error");
       return;
     }
 
     if (confirm(`Apakah Anda yakin ingin menyalin seluruh aspek penilaian dari "${selectedStudent.name}" ke ${targetStudentIds.length} siswa terpilih?`)) {
-      targetStudentIds.forEach(id => {
-        if (id === selectedStudent.id) return; // Skip self
-        onUpdateStudentGrades(id, { ...selectedStudent.grades });
-      });
-      alert(`Berhasil menyalin seluruh nilai dari "${selectedStudent.name}" ke ${targetStudentIds.length} siswa secara massal!`);
+      if (onUpdateBulkStudentGrades) {
+        const updates = targetStudentIds
+          .filter(id => id !== selectedStudent.id)
+          .map(id => ({ studentId: id, nextGrades: { ...selectedStudent.grades } }));
+        onUpdateBulkStudentGrades(updates);
+      } else {
+        targetStudentIds.forEach(id => {
+          if (id === selectedStudent.id) return; // Skip self
+          onUpdateStudentGrades(id, { ...selectedStudent.grades });
+        });
+      }
+      notify(`Berhasil menyalin seluruh nilai dari "${selectedStudent.name}" ke ${targetStudentIds.length} siswa secara massal!`, "success");
     }
   };
 
@@ -228,13 +265,20 @@ export default function ExcelGrid({
     if (stud) {
       onSelectStudent(stud);
     }
+    // Auto-scroll the newly activated student row into view smoothly
+    setTimeout(() => {
+      const el = document.getElementById(`row-${studentId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    }, 40);
   };
 
   const handleScoreSelect = (student: Student, indicatorId: string, score: ScoreKey, keepActive = false) => {
     // 🛡️ Data Validation Layer: Ensure input strictly matches 5NK scale ('BSB', 'B', 'MB', 'BB')
     const validScores: ScoreKey[] = ['BSB', 'B', 'MB', 'BB'];
     if (!validScores.includes(score)) {
-      alert(`[VALIDASI ERROR] Nilai "${score}" tidak valid!\nNilai harus salah satu dari: BSB, B, MB, BB.`);
+      notify(`[VALIDASI ERROR] Nilai "${score}" tidak valid!\nNilai harus salah satu dari: BSB, B, MB, BB.`, "error");
       return;
     }
 
@@ -282,23 +326,35 @@ export default function ExcelGrid({
 
       // Handle shortcuts for filling grades
       const key = e.key.toLowerCase();
+      const advanceFocus = () => {
+        if (studentIndex < filteredStudents.length - 1) {
+          const nextStudentId = filteredStudents[studentIndex + 1].id;
+          handleCellClick(nextStudentId, activeCell.indicatorId);
+        }
+      };
+
       if (key === '1' || key === 's') {
         e.preventDefault();
         handleScoreSelect(stud, activeCell.indicatorId, 'BSB', true);
+        advanceFocus();
       } else if (key === '2' || key === 'b') {
         e.preventDefault();
         handleScoreSelect(stud, activeCell.indicatorId, 'B', true);
+        advanceFocus();
       } else if (key === '3' || key === 'm') {
         e.preventDefault();
         handleScoreSelect(stud, activeCell.indicatorId, 'MB', true);
+        advanceFocus();
       } else if (key === '4' || key === 'k') {
         e.preventDefault();
         handleScoreSelect(stud, activeCell.indicatorId, 'BB', true);
+        advanceFocus();
       } else if (key === '0' || key === 'backspace' || key === 'delete') {
         e.preventDefault();
         const nextGrades = { ...stud.grades };
         delete nextGrades[activeCell.indicatorId];
         onUpdateStudentGrades(stud.id, nextGrades);
+        advanceFocus();
       }
       
       // Handle cell movement / navigation (arrows)
@@ -624,11 +680,19 @@ export default function ExcelGrid({
                           const val = e.target.value as ScoreKey | '';
                           if (!val) return;
                           if (confirm(`Apakah Anda yakin ingin mengisi otomatis nilai "${val}" pada Indikator ${ind.id} untuk SEMUA SISWA di Kelas ${selectedClass}?`)) {
-                            filteredStudents.forEach(s => {
-                              const nextGrades = { ...s.grades, [ind.id]: val };
-                              onUpdateStudentGrades(s.id, nextGrades);
-                            });
-                            alert(`✓ Berhasil mengisi otomatis nilai "${val}" ke semua siswa di Kelas ${selectedClass}!`);
+                            if (onUpdateBulkStudentGrades) {
+                              const updates = filteredStudents.map(s => ({
+                                studentId: s.id,
+                                nextGrades: { ...s.grades, [ind.id]: val }
+                              }));
+                              onUpdateBulkStudentGrades(updates);
+                            } else {
+                              filteredStudents.forEach(s => {
+                                const nextGrades = { ...s.grades, [ind.id]: val };
+                                onUpdateStudentGrades(s.id, nextGrades);
+                              });
+                            }
+                            notify(`✓ Berhasil mengisi otomatis nilai "${val}" ke semua siswa di Kelas ${selectedClass}!`, "success");
                           }
                           e.target.value = ''; // Reset select
                         }}
@@ -685,6 +749,7 @@ export default function ExcelGrid({
                   return (
                     <tr 
                       key={stud.id} 
+                      id={`row-${stud.id}`}
                       className={`hover:bg-slate-50 transition-all duration-300 ${isSelected && !currentlyEditingAnyone ? 'bg-emerald-50/20' : ''} ${rowDimClass}`}
                     >
                       {/* Index / Checkbox Column */}

@@ -56,6 +56,8 @@ interface DatabaseCrudProps {
   setRowHeightMode: (value: 'compact' | 'comfortable') => void;
   paperSize: 'A4' | 'F4';
   onUpdatePaperSize: (size: 'A4' | 'F4') => void;
+  triggerAlert?: (type: 'success' | 'info' | 'error', message: string) => void;
+  triggerToast?: (type: 'success' | 'info' | 'error', message: string) => void;
 }
 
 export default function DatabaseCrud({
@@ -78,8 +80,26 @@ export default function DatabaseCrud({
   setRowHeightMode,
   paperSize,
   onUpdatePaperSize,
+  triggerAlert,
+  triggerToast,
 }: DatabaseCrudProps) {
   const [activeSubTab, setActiveSubTab] = useState<'siswa' | 'guru' | 'indikator' | 'kop' | 'backup' | 'riwayat' | 'snapshot' | 'integritas'>('siswa');
+  const [localAlert, setLocalAlert] = useState<{ type: 'success' | 'info' | 'error'; message: string } | null>(null);
+
+  const notify = (message: string, type: 'success' | 'info' | 'error' = 'info') => {
+    if (triggerAlert) {
+      triggerAlert(type, message);
+    } else if (triggerToast) {
+      triggerToast(type, message);
+    } else {
+      setLocalAlert({ type, message });
+      const timer = setTimeout(() => {
+        setLocalAlert(null);
+      }, 4500);
+      return () => clearTimeout(timer);
+    }
+  };
+
   const [changeLogs, setChangeLogs] = useState<ChangeLog[]>([]);
   const [logSearchQuery, setLogSearchQuery] = useState('');
   const [logActionFilter, setLogActionFilter] = useState('ALL');
@@ -1314,6 +1334,29 @@ export default function DatabaseCrud({
       transition={{ duration: 0.3, ease: 'easeOut' }}
       className="bg-white border border-slate-200 rounded-xl shadow-xs flex flex-col h-full overflow-hidden"
     >
+      <AnimatePresence>
+        {localAlert && (
+          <motion.div
+            initial={{ opacity: 0, y: -40, x: "-50%", scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, x: "-50%", scale: 1 }}
+            exit={{ opacity: 0, y: -20, x: "-50%", scale: 0.95 }}
+            transition={{ type: 'spring', stiffness: 350, damping: 25 }}
+            className="fixed top-5 left-1/2 z-[100000] no-print pointer-events-none"
+          >
+            <div className={`pointer-events-auto rounded-full border px-5 py-2.5 shadow-lg flex items-center gap-2.5 text-xs font-semibold backdrop-blur-md ${
+              localAlert.type === 'success' ? 'bg-emerald-50/95 text-emerald-950 border-emerald-250/50 shadow-emerald-500/5' 
+              : localAlert.type === 'error' ? 'bg-rose-50/95 text-rose-950 border-rose-250/50 shadow-rose-500/5'
+              : 'bg-indigo-50/95 text-indigo-950 border-indigo-250/50 shadow-indigo-500/5'
+            }`}>
+              <span className="shrink-0">
+                {localAlert.type === 'success' ? '✨' : localAlert.type === 'error' ? '⚠️' : 'ℹ️'}
+              </span>
+              <span>{localAlert.message}</span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <input 
         type="file" 
         accept=".xlsx, .xls" 

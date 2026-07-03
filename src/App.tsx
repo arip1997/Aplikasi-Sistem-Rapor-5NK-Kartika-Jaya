@@ -28,7 +28,7 @@ import DatabaseCrud from './components/DatabaseCrud';
 import UserGuideModal from './components/UserGuideModal';
 import { HighlightText } from './components/HighlightText';
 import ClassSelectorDropdown from './components/ClassSelectorDropdown';
-import { exportClassToExcel, generateClassExcelBlob, exportSingleStudentToExcel, addChangeLog, runIntegrityCheck } from './utils';
+import { exportClassToExcel, generateClassExcelBlob, exportSingleStudentToExcel, addChangeLog, runIntegrityCheck, getChangeLogs, ChangeLog } from './utils';
 import { getAccessToken, initAuth, auth, db } from './firebase';
 import { doc, setDoc } from 'firebase/firestore';
 import { uploadFileToDrive, getOrCreateFolder } from './lib/drive';
@@ -41,6 +41,7 @@ import {
   Settings2, 
   GraduationCap, 
   CheckCircle,
+  AlertCircle,
   FileText,
   User,
   Info,
@@ -103,6 +104,19 @@ export default function App() {
   const [autoTriggerBatchPdf, setAutoTriggerBatchPdf] = useState<boolean>(false);
   const [autoPrintImmediately, setAutoPrintImmediately] = useState<boolean>(false);
   const [batchPrintNisList, setBatchPrintNisList] = useState<string[]>([]);
+  
+  // State for all change logs used to show student edit histories
+  const [allLogs, setAllLogs] = useState<ChangeLog[]>(() => getChangeLogs());
+
+  useEffect(() => {
+    const handleLogsUpdated = () => {
+      setAllLogs(getChangeLogs());
+    };
+    window.addEventListener('rapor_change_logs_updated', handleLogsUpdated);
+    return () => {
+      window.removeEventListener('rapor_change_logs_updated', handleLogsUpdated);
+    };
+  }, []);
   
   // Custom View modes: spreadsheet grid, wizard evaluation, recapitulation summary, database crud console, 1:1 print preview
   const [viewMode, setViewMode] = useState<'spreadsheet' | 'form_penilaian' | 'rekap_nilai' | 'crud_manager' | 'print'>('spreadsheet');
@@ -1116,6 +1130,36 @@ export default function App() {
     }
   };
 
+  const handleUpdateBulkStudentGrades = (updates: { studentId: string; nextGrades: Record<string, ScoreKey> }[]) => {
+    const allIndicatorIds = categories.flatMap(c => c.indicators).map(i => i.id);
+    const updated = students.map(s => {
+      const match = updates.find(u => u.studentId === s.id);
+      if (match) {
+        const scoredCount = Object.keys(match.nextGrades).filter(id => allIndicatorIds.includes(id)).length;
+        const complete = scoredCount === allIndicatorIds.length;
+        
+        Object.keys(match.nextGrades).forEach(id => {
+          if (s.grades[id] !== match.nextGrades[id]) {
+            setDirtyCells(prev => ({
+              ...prev,
+              [`${s.id}_${id}`]: true
+            }));
+          }
+        });
+
+        return {
+          ...s,
+          grades: match.nextGrades,
+          completed: complete
+        };
+      }
+      return s;
+    });
+    
+    addChangeLog('UBAH_NILAI', `Memperbarui nilai ${updates.length} siswa secara massal`);
+    handlePersistStudents(updated);
+  };
+
   // Handle full student modification (especially from child wizard form)
   const handleUpdateSingleStudent = (updatedStudent: Student) => {
     const updated = students.map(s => s.id === updatedStudent.id ? updatedStudent : s);
@@ -1565,35 +1609,39 @@ export default function App() {
 
       {/* PANEL: Status Sinkronisasi Data Dihapus dan dipindahkan ke footer bottom */}
 
-      {/* Alert banner */}
-      {alert && (
-        <div className="bg-slate-50 border-b border-slate-200/60 no-print">
-          <div className="max-w-7xl mx-auto px-4 py-2.5">
-            <div className={`rounded-xl border p-2 px-4 text-xs font-bold flex justify-between items-center gap-2 animate-in slide-in-from-top-1 duration-300 ${
-              alert.type === 'success' ? 'bg-emerald-500/5 text-emerald-800 border-emerald-500/20' 
-              : alert.type === 'error' ? 'bg-rose-500/5 text-rose-800 border-rose-500/20'
-              : 'bg-blue-500/5 text-blue-800 border-blue-500/20'
+      {/* Sleek Minimalist Global Alert Notification */}
+      <AnimatePresence>
+        {alert && (
+          <motion.div
+            initial={{ opacity: 0, y: -40, x: "-50%", scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, x: "-50%", scale: 1 }}
+            exit={{ opacity: 0, y: -20, x: "-50%", scale: 0.95 }}
+            transition={{ type: 'spring', stiffness: 350, damping: 25 }}
+            className="fixed top-5 left-1/2 z-[100000] no-print pointer-events-none"
+          >
+            <div className={`pointer-events-auto rounded-full border px-5 py-2.5 shadow-lg flex items-center gap-2.5 text-xs font-semibold backdrop-blur-md ${
+              alert.type === 'success' ? 'bg-emerald-50/95 text-emerald-950 border-emerald-250/50 shadow-emerald-500/5' 
+              : alert.type === 'error' ? 'bg-rose-50/95 text-rose-950 border-rose-250/50 shadow-rose-500/5'
+              : 'bg-sky-50/95 text-sky-950 border-sky-250/50 shadow-sky-500/5'
             }`}>
-              <div className="flex items-center gap-2.5">
-                <span className={`p-1 rounded-lg ${
-                  alert.type === 'success' ? 'bg-emerald-500/10 text-emerald-600'
-                  : alert.type === 'error' ? 'bg-rose-500/10 text-rose-600'
-                  : 'bg-blue-500/10 text-blue-600'
-                }`}>
-                  <Info className="h-3.5 w-3.5" />
-                </span>
-                <span>{alert.message}</span>
-              </div>
+              <span className={`flex items-center justify-center h-5 w-5 rounded-full ${
+                alert.type === 'success' ? 'bg-emerald-500/10 text-emerald-600'
+                : alert.type === 'error' ? 'bg-rose-500/10 text-rose-600'
+                : 'bg-sky-500/10 text-sky-600'
+              }`}>
+                {alert.type === 'success' ? <CheckCircle className="h-3 w-3" /> : alert.type === 'error' ? <AlertCircle className="h-3 w-3" /> : <Info className="h-3 w-3" />}
+              </span>
+              <span>{alert.message}</span>
               <button 
                 onClick={() => setAlert(null)}
-                className="p-1 rounded-lg text-slate-450 hover:text-slate-600 hover:bg-slate-100 transition-all cursor-pointer"
+                className="ml-1 text-slate-400 hover:text-slate-600 p-0.5 rounded-full hover:bg-slate-100 transition-colors cursor-pointer"
               >
-                <X className="h-3.5 w-3.5" />
+                <X className="h-3 w-3" />
               </button>
             </div>
-          </div>
-        </div>
-      )}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* 2. Top Settings and Filter Subbar */}
       <div className="bg-white border-b border-slate-200 py-3.5 px-4 no-print shadow-xs">
@@ -1843,10 +1891,10 @@ export default function App() {
             ) : (
               <motion.div
                 key="spreadsheet"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.3 }}
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -15 }}
+                transition={{ duration: 0.25, ease: 'easeInOut' }}
                 className="flex flex-col gap-4 flex-1 h-auto md:h-full overflow-visible md:overflow-hidden print:overflow-visible no-print"
               >
               {studentsWithMissingData.length > 0 && (
@@ -1890,6 +1938,7 @@ export default function App() {
                 categories={categories}
                 selectedClass={selectedClass}
                 onUpdateStudentGrades={handleUpdateStudentGrades}
+                onUpdateBulkStudentGrades={handleUpdateBulkStudentGrades}
                 onUpdateComments={handleUpdateComments}
                 onSelectStudent={(st) => setSelectedStudentId(st.id)}
                 selectedStudent={selectedStudent}
@@ -1897,6 +1946,8 @@ export default function App() {
                 aiModifiedStudentIds={aiModifiedStudentIds}
                 onBatchPrint={handleBatchPrint}
                 onAddExportLog={addExportLog}
+                triggerAlert={triggerAlert}
+                triggerToast={triggerToast}
               />
             </div>
 
@@ -2077,6 +2128,42 @@ export default function App() {
                         >
                           <Printer className="h-3.5 w-3.5" /> Pratinjau Cetak Murid Ini
                         </button>
+
+                        {/* Student Audit Trail / Change History Panel */}
+                        <div className="border border-slate-150 rounded-xl bg-slate-50/50 p-3 mt-1.5">
+                          <h4 className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1.5 select-none">
+                            <span>⏳ Riwayat Perubahan Terakhir</span>
+                          </h4>
+                          {allLogs.filter(log => 
+                            log.description.includes(selectedStudent.name) || 
+                            (selectedStudent.nis && log.description.includes(selectedStudent.nis))
+                          ).length > 0 ? (
+                            <div className="flex flex-col gap-2 max-h-40 overflow-y-auto pr-1">
+                              {allLogs.filter(log => 
+                                log.description.includes(selectedStudent.name) || 
+                                (selectedStudent.nis && log.description.includes(selectedStudent.nis))
+                              ).map((log) => (
+                                <div key={log.id} className="text-[10px] bg-white border border-slate-200 rounded-lg p-2 shadow-3xs flex flex-col gap-1 transition-all hover:border-slate-300">
+                                  <div className="flex items-center justify-between text-slate-400 font-mono text-[9px]">
+                                    <span>{log.timestamp}</span>
+                                    <span className="bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-sans font-medium text-[8px] truncate max-w-[120px]" title={log.operator}>
+                                      👤 {log.operator?.split('@')[0] || 'Lokal'}
+                                    </span>
+                                  </div>
+                                  <p className="text-slate-600 font-medium leading-relaxed font-sans">
+                                    {log.description
+                                      .replace(` untuk siswa ${selectedStudent.name} (${selectedStudent.nis})`, '')
+                                      .replace(` siswa "${selectedStudent.name}" (NIS: ${selectedStudent.nis})`, '')
+                                      .replace(` siswa "${selectedStudent.name}"`, '')
+                                    }
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-[10px] text-slate-400 italic">Belum ada riwayat perubahan terekam untuk siswa ini.</p>
+                          )}
+                        </div>
                       </div>
                     ) : (
                       <div className="flex flex-col items-center justify-center text-center p-8 text-slate-400 text-xs italic gap-2 h-full">
@@ -2230,16 +2317,13 @@ export default function App() {
           </div>
         </motion.div>
             )
-          ) : null}
-
-        {/* TAB VIEW 2: FORM PENILAIAN WIZARD */}
-        {viewMode === 'form_penilaian' && (
-          <motion.div
+          ) : viewMode === 'form_penilaian' ? (
+            <motion.div
             key="form_penilaian"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.3 }}
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -15 }}
+            transition={{ duration: 0.25, ease: 'easeInOut' }}
             className="flex-1 h-auto md:h-full overflow-visible md:overflow-hidden no-print"
           >
             <EvaluationForm
@@ -2254,16 +2338,13 @@ export default function App() {
               selectedClass={selectedClass}
             />
           </motion.div>
-        )}
-
-        {/* TAB VIEW 3: REKAP NILAI MATRIX */}
-        {viewMode === 'rekap_nilai' && (
+        ) : viewMode === 'rekap_nilai' ? (
           <motion.div
             key="rekap_nilai"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.3 }}
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -15 }}
+            transition={{ duration: 0.25, ease: 'easeInOut' }}
             className="flex-1 h-auto md:h-full overflow-visible md:overflow-hidden no-print"
           >
             <GradeRecap
@@ -2290,16 +2371,13 @@ export default function App() {
               activeWaliKelasNip={activeWaliKelas.nip}
             />
           </motion.div>
-        )}
-
-        {/* TAB VIEW 4: MASTER ADMINISTRATIVE CRUD CONSOLE */}
-        {viewMode === 'crud_manager' && (
+        ) : viewMode === 'crud_manager' ? (
           <motion.div
             key="crud_manager"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.3 }}
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -15 }}
+            transition={{ duration: 0.25, ease: 'easeInOut' }}
             className="flex-1 h-auto md:h-full overflow-visible md:overflow-hidden no-print"
           >
             <DatabaseCrud
@@ -2322,18 +2400,17 @@ export default function App() {
               onUpdateShowFooterDate={handleUpdateShowFooterDate}
               paperSize={paperSize}
               onUpdatePaperSize={handleUpdatePaperSize}
+              triggerAlert={triggerAlert}
+              triggerToast={triggerToast}
             />
           </motion.div>
-        )}
-
-        {/* TAB VIEW 5: PRINT PREVIEW REPORT */}
-        {viewMode === 'print' && selectedStudent && (
+        ) : viewMode === 'print' && selectedStudent ? (
           <motion.div
             key="print"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.3 }}
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -15 }}
+            transition={{ duration: 0.25, ease: 'easeInOut' }}
             className="flex-1 overflow-y-auto print:overflow-visible"
           >
             <RaporCetak
@@ -2388,7 +2465,7 @@ export default function App() {
               onUpdatePaperSize={handleUpdatePaperSize}
             />
           </motion.div>
-        )}
+        ) : null}
 
       </AnimatePresence>
     </main>
@@ -3000,14 +3077,39 @@ export default function App() {
         </div>
       )}
       {/* Custom Global Toast */}
-      {toast && (
-        <div className="fixed bottom-6 right-6 z-[99999] bg-slate-900 border border-slate-700 text-white rounded-xl shadow-2xl p-4 flex items-center gap-3 animate-in slide-in-from-bottom-5 fade-in duration-300 no-print">
-          <div className={`p-1.5 rounded-full ${toast.type === 'success' ? 'bg-emerald-500/20 text-emerald-400' : toast.type === 'error' ? 'bg-rose-500/20 text-rose-400' : 'bg-blue-500/20 text-blue-400'}`}>
-            <CheckCircle className="h-5 w-5" />
-          </div>
-          <p className="text-sm font-semibold pr-4">{toast.message}</p>
-        </div>
-      )}
+      <AnimatePresence>
+        {toast && (
+          <motion.div
+            initial={{ opacity: 0, y: 30, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 15, scale: 0.95 }}
+            transition={{ type: 'spring', stiffness: 350, damping: 25 }}
+            className="fixed bottom-6 right-6 z-[99999] no-print pointer-events-auto"
+          >
+            <div className="bg-white/95 border border-slate-150 text-slate-850 rounded-2xl shadow-xl p-3.5 flex items-center gap-3.5 max-w-sm">
+              <div className={`p-2 rounded-xl shrink-0 ${
+                toast.type === 'success' ? 'bg-emerald-50 text-emerald-600' 
+                : toast.type === 'error' ? 'bg-rose-50 text-rose-600' 
+                : 'bg-sky-50 text-sky-600'
+              }`}>
+                {toast.type === 'success' ? <CheckCircle className="h-4 w-4" /> : toast.type === 'error' ? <AlertCircle className="h-4 w-4" /> : <Info className="h-4 w-4" />}
+              </div>
+              <div className="flex-1 min-w-0">
+                <span className="text-[9px] font-bold tracking-wider text-slate-400 uppercase leading-none block select-none">
+                  {toast.type === 'success' ? 'Sukses' : toast.type === 'error' ? 'Pemberitahuan Gagal' : 'Informasi'}
+                </span>
+                <p className="text-xs font-semibold text-slate-700 mt-0.5 leading-relaxed">{toast.message}</p>
+              </div>
+              <button 
+                onClick={() => setToast(null)} 
+                className="text-slate-400 hover:text-slate-600 hover:bg-slate-100 p-1 rounded-lg transition-all cursor-pointer shrink-0"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* 1. Startup Notification Toast Slide-In (Sleek Compact Bubble Form) */}
       {showToast && (
