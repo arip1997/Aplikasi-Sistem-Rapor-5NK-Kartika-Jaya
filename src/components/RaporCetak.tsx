@@ -6,6 +6,8 @@ import { QRCodeSVG } from 'qrcode.react';
 import { Student, Category, KopSekolah, scoreOptions } from '../types';
 import { Printer, Download, Eye, FileSpreadsheet, ArrowLeft, Heart, Award, Sparkles, FileText, Loader2, Archive, Search, Wrench, Sliders, Check, Layers, Cloud } from 'lucide-react';
 import html2pdf from 'html2pdf.js';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { uploadFileToDrive } from '../lib/drive.ts';
 import { googleSignIn, getAccessToken, initAuth } from '../firebase.ts';
 import ClassSelectorDropdown from './ClassSelectorDropdown';
@@ -37,6 +39,8 @@ interface RaporCetakProps {
   showFooterDate?: boolean;
   onUpdateShowFooterDate?: (value: boolean) => void;
   onForceSync?: () => Promise<void>;
+  paperSize: 'A4' | 'F4';
+  onUpdatePaperSize: (size: 'A4' | 'F4') => void;
 }
 
 export default function RaporCetak({
@@ -63,6 +67,8 @@ export default function RaporCetak({
   showFooterDate = true,
   onUpdateShowFooterDate,
   onForceSync,
+  paperSize,
+  onUpdatePaperSize,
 }: RaporCetakProps) {
   
   const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
@@ -92,15 +98,7 @@ export default function RaporCetak({
   const [marginRight, setMarginRight] = useState(15);
   const [showAutoTimeFooter, setShowAutoTimeFooter] = useState(showFooterDate);
 
-  const [paperSize, setPaperSize] = useState<'A4' | 'F4'>(() => {
-    const saved = localStorage.getItem('rapor_5nk_paper_size');
-    return (saved as 'A4' | 'F4') || 'A4';
-  });
 
-  const handleUpdatePaperSize = (size: 'A4' | 'F4') => {
-    setPaperSize(size);
-    localStorage.setItem('rapor_5nk_paper_size', size);
-  };
 
   const totalIndicators = categories.reduce((sum, cat) => sum + cat.indicators.length, 0);
 
@@ -685,7 +683,7 @@ export default function RaporCetak({
           : defaultFilename;
 
         console.log(`[PDF Generator] Starting iframe-based html2pdf with filename: "${filename}"`);
-        await generatePdfIframe(isLandscape, originalElement, filename, true, { top: 10, bottom: 10, left: 10, right: 10 }, paperSize);
+        await generatePdfIframe(isLandscape, originalElement, filename, true, pageMargin, paperSize);
         console.log("[PDF Generator] File generated via iframe and download triggered successfully.");
 
         if (onMarkAsPrinted && selectedStudents.length > 0) {
@@ -815,7 +813,7 @@ export default function RaporCetak({
             const filename = `Rapor_5NK_${cleanStudentName}_${curStudent.nis}.pdf`;
 
             console.log(` - Generating iframe-based pdf blob for ${curStudent.name}...`);
-            const pdfBlob = await generatePdfIframe(isLandscape, originalElement, filename, false, { top: 10, bottom: 10, left: 10, right: 10 }, paperSize) as Blob;
+            const pdfBlob = await generatePdfIframe(isLandscape, originalElement, filename, false, pageMargin, paperSize) as Blob;
             
             if (pdfBlob && pdfBlob.size > 0) {
               await uploadFileToDrive(token, pdfBlob, filename);
@@ -954,7 +952,7 @@ export default function RaporCetak({
             
             // Generate Blob directly from the iframe element
             console.log(` - Generating iframe-based pdf blob for ${curStudent.name}...`);
-            const pdfBlob = await generatePdfIframe(isLandscape, originalElement, safeFilename, false, { top: 10, bottom: 10, left: 10, right: 10 }, paperSize) as Blob;
+            const pdfBlob = await generatePdfIframe(isLandscape, originalElement, safeFilename, false, pageMargin, paperSize) as Blob;
             
             if (pdfBlob && pdfBlob.size > 0) {
               console.log(` ✅ Blob generated successfully: ${pdfBlob.size} bytes. MIME: ${pdfBlob.type}`);
@@ -978,6 +976,54 @@ export default function RaporCetak({
       setBatchStudent(null);
 
       console.log("[Batch PDF Engine] Compiling ZIP archive...");
+      
+      // EXPORT EXCEL GRID (RECAP) KE PDF (jsPDF + autoTable)
+      try {
+        const doc = new jsPDF('landscape');
+        
+        doc.setFontSize(14);
+        doc.text(`Laporan Data Rekap Nilai 5NK - Kelas ${selectedClass}`, 14, 15);
+        doc.setFontSize(10);
+        doc.text(`Total Siswa: ${validStudents.length}`, 14, 22);
+        
+        const headRow = ['Nama Lengkap', 'NIS', 'L/P'];
+        categories.forEach(c => {
+          c.indicators.forEach(ind => {
+            headRow.push(ind.id);
+          });
+        });
+        
+        const tableBody = validStudents.map(student => {
+          const row = [student.name || '-', student.nis || '-', student.gender || '-'];
+          categories.forEach(c => {
+            c.indicators.forEach(ind => {
+              row.push(student.grades?.[ind.id] || '-');
+            });
+          });
+          return row;
+        });
+        
+        autoTable(doc, {
+          startY: 28,
+          head: [headRow],
+          body: tableBody,
+          theme: 'grid',
+          headStyles: { fillColor: [4, 120, 87] },
+          styles: { fontSize: 6, cellPadding: 1, halign: 'center' },
+          columnStyles: {
+            0: { halign: 'left', cellWidth: 35 },
+            1: { cellWidth: 18 },
+            2: { cellWidth: 8 }
+          }
+        });
+        
+        const recapBlob = doc.output('blob');
+        folder.file(`Laporan_Data_Kelas_${selectedClass}.pdf`, recapBlob);
+        console.log("✅ Berhasil menambahkan Laporan_Data.pdf (Grid Rekap) ke dalam ZIP");
+      } catch (errRecap) {
+        console.error("Gagal membuat PDF Laporan Data (Rekap) untuk ZIP:", errRecap);
+      }
+
       const fileKeys = Object.keys(folder.files).filter(k => !k.endsWith('/'));
       const fileCount = fileKeys.length;
       if (fileCount === 0) {
@@ -1260,7 +1306,7 @@ export default function RaporCetak({
                           name="paper_size"
                           value="A4"
                           checked={paperSize === 'A4'}
-                          onChange={() => handleUpdatePaperSize('A4')}
+                          onChange={() => onUpdatePaperSize('A4')}
                           className="text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
                         />
                         A4 (210 x 297 mm)
@@ -1271,7 +1317,7 @@ export default function RaporCetak({
                           name="paper_size"
                           value="F4"
                           checked={paperSize === 'F4'}
-                          onChange={() => handleUpdatePaperSize('F4')}
+                          onChange={() => onUpdatePaperSize('F4')}
                           className="text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
                         />
                         F4 / Folio (215 x 330 mm)
@@ -1494,14 +1540,17 @@ export default function RaporCetak({
                   >
                   
                   {/* PRINT PAGE 1 SIMULATION */}
-                  <div className="print-page relative group"
+                  <div className="print-page relative group box-border bg-white"
                        style={{ 
                          width: `${paperWidth}mm`, 
                          height: `${paperHeight}mm`, 
                          maxHeight: `${paperHeight}mm`, 
-                         padding: `${pageMargin.top}mm ${pageMargin.right}mm ${pageMargin.bottom}mm ${pageMargin.left}mm` 
+                         padding: `${pageMargin.top}mm ${pageMargin.right}mm ${pageMargin.bottom}mm ${pageMargin.left}mm`,
+                         display: 'grid',
+                         gridTemplateRows: 'auto 1fr auto',
+                         alignContent: 'space-between'
                        }}>
-                    <div className="flex flex-col h-full w-full justify-between">
+                    <div className="flex flex-col w-full h-full justify-start">
                       {/* Header, title & info */}
                       <div className="avoid-break select-none relative">
                         <div className="flex items-start gap-4 mb-0.5">
@@ -1742,14 +1791,17 @@ export default function RaporCetak({
                   </div>
 
                   {/* PRINT PAGE 2 SIMULATION */}
-                  <div className="print-page relative group"
+                  <div className="print-page relative group box-border bg-white"
                        style={{ 
                          width: `${paperWidth}mm`, 
                          height: `${paperHeight}mm`, 
                          maxHeight: `${paperHeight}mm`, 
-                         padding: `${pageMargin.top}mm ${pageMargin.right}mm ${pageMargin.bottom}mm ${pageMargin.left}mm` 
+                         padding: `${pageMargin.top}mm ${pageMargin.right}mm ${pageMargin.bottom}mm ${pageMargin.left}mm`,
+                         display: 'grid',
+                         gridTemplateRows: '1fr auto',
+                         alignContent: 'space-between'
                        }}>
-                    <div className="flex flex-col h-full w-full justify-between gap-4">
+                    <div className="flex flex-col w-full h-full justify-start gap-4">
                       <div className="flex flex-col gap-4">
                         {/* Table continuation on Page 2 */}
                         <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
@@ -2535,15 +2587,17 @@ export default function RaporCetak({
             {pdfRenderStudents.map((selSt) => (
               <div key={selSt.nis} className="student-pdf-group">
                 {/* PRINT PAGE 1 */}
-                <div className="print-page relative overflow-visible box-border text-[11pt] leading-relaxed flex flex-col justify-between group"
+                <div className="print-page relative overflow-visible box-border text-[11pt] leading-relaxed group grid"
                      style={{ 
                        width: `${paperWidth}mm`, 
                        height: `${paperHeight}mm`, 
                        minHeight: `${paperHeight}mm`, 
                        maxHeight: `${paperHeight}mm`, 
-                       padding: `${pageMargin.top}mm ${pageMargin.right}mm ${pageMargin.bottom}mm ${pageMargin.left}mm` 
+                       padding: `${pageMargin.top}mm ${pageMargin.right}mm ${pageMargin.bottom}mm ${pageMargin.left}mm`,
+                       gridTemplateRows: 'auto 1fr auto',
+                       alignContent: 'space-between'
                      }}>
-                  <div className="flex flex-col h-full w-full justify-between">
+                  <div className="flex flex-col w-full justify-start">
                     {/* Header, title & info wrapped with avoid-break */}
                     <div className="avoid-break select-none relative">
                       {/* Header block with organization logo & info */}
@@ -2786,15 +2840,17 @@ export default function RaporCetak({
                 </div>
 
                 {/* PRINT PAGE 2 */}
-                <div className="print-page relative overflow-visible box-border text-[11pt] leading-relaxed flex flex-col justify-between group"
+                <div className="print-page relative overflow-visible box-border text-[11pt] leading-relaxed group grid"
                      style={{ 
                        width: `${paperWidth}mm`, 
                        height: `${paperHeight}mm`, 
                        minHeight: `${paperHeight}mm`, 
                        maxHeight: `${paperHeight}mm`, 
-                       padding: `${pageMargin.top}mm ${pageMargin.right}mm ${pageMargin.bottom}mm ${pageMargin.left}mm` 
+                       padding: `${pageMargin.top}mm ${pageMargin.right}mm ${pageMargin.bottom}mm ${pageMargin.left}mm`,
+                       gridTemplateRows: 'auto 1fr auto',
+                       alignContent: 'space-between'
                      }}>
-                  <div className="flex flex-col h-full w-full justify-between gap-4">
+                  <div className="flex flex-col w-full justify-start gap-4">
                     <div className="flex flex-col gap-4">
                       {/* Table continuation on Page 2 */}
                     <table className="w-full text-left text-[9pt] border border-black border-collapse font-sans leading-snug avoid-break">
@@ -3577,6 +3633,9 @@ async function generatePdfIframe(
         position: relative !important;
         overflow: hidden !important;
         background-color: #ffffff !important;
+      }
+      .print-page:last-child, .print-page:last-of-type {
+        page-break-after: avoid !important;
       }
     `;
     iframeDoc.head.appendChild(pdfStyle);

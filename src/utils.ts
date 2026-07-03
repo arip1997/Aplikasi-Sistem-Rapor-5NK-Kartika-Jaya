@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
-import { Student, Teacher, Category, ScoreKey, scoreOptions } from './types';
+import JSZip from 'jszip';
+import { Student, Teacher, Category, ScoreKey, scoreOptions, KopSekolah } from './types';
 import { uploadFileToDrive, getOrCreateFolder } from './lib/drive.ts';
 import { auth } from './firebase';
 
@@ -672,6 +673,93 @@ export async function uploadExcelToGoogleDrive(students: Student[], teachers: Te
     console.warn('Could not upload to target folder, uploading to root instead:', e);
     return uploadFileToDrive(accessToken, blob, filename);
   }
+}
+
+export async function createSnapshotZipBlob(snapshot: any) {
+  const zip = new JSZip();
+  const folderName = `Snapshot_${snapshot.label.replace(/[^a-zA-Z0-9_-]/g, '_')}_${new Date().getTime()}`;
+  const folder = zip.folder(folderName);
+  
+  if (!folder) throw new Error("Gagal membuat folder zip");
+
+  // Add Excel Backup
+  const workbook = XLSX.utils.book_new();
+  const studentRows = snapshot.data.students.map((s: Student) => {
+    const gradesCols: Record<string, string> = {};
+    Object.keys(s.grades).forEach(indId => {
+      gradesCols[`Indicator_${indId}`] = s.grades[indId];
+    });
+    return {
+      'ID': s.id,
+      'Nama Siswa': s.name,
+      'NIS': s.nis,
+      'Kelas': s.kelas,
+      'L/P': s.gender,
+      'Semester': s.semester,
+      ...gradesCols,
+      'Kesimpulan': s.kesimpulan,
+      'Catatan Wali': s.catatanWali,
+      'Catatan Orang Tua': s.catatanOrangTua,
+    };
+  });
+  const wsStudents = XLSX.utils.json_to_sheet(studentRows);
+  XLSX.utils.book_append_sheet(workbook, wsStudents, 'Master_Siswa');
+
+  const teacherRows = snapshot.data.teachers.map((t: Teacher) => ({
+    'ID': t.id,
+    'Nama Guru': t.name,
+    'Role': t.role,
+    'Wali Kelas': t.classAssigned || '',
+    'NIP': t.nip || '',
+  }));
+  const wsTeachers = XLSX.utils.json_to_sheet(teacherRows);
+  XLSX.utils.book_append_sheet(workbook, wsTeachers, 'Master_Guru');
+
+  const excelBase64Str = XLSX.write(workbook, { bookType: 'xlsx', type: 'base64' });
+  folder.file(`Database_Backup_5NK.xlsx`, excelBase64Str, { base64: true });
+
+  // Add Metadata JSON
+  const metadata = {
+    label: snapshot.label,
+    timestamp: snapshot.timestamp,
+    studentsCount: snapshot.studentsCount,
+    teachersCount: snapshot.teachersCount,
+    kopSekolah: snapshot.data.kopSekolah,
+    classes: snapshot.data.classes,
+    categories: snapshot.data.categories
+  };
+  folder.file('metadata.json', JSON.stringify(metadata, null, 2));
+
+  // Add Encrypted Full JSON Dump
+  const rawJson = JSON.stringify(snapshot.data);
+  const encryptedJson = encryptData(rawJson, 'KARTIKA_5NK_DEFAULT_SALT');
+  folder.file('full_snapshot_encrypted.json', encryptedJson);
+
+  const blob = await zip.generateAsync({ type: 'blob' });
+  return { blob, filename: `${folderName}.zip` };
+}
+
+export async function uploadZipSnapshotToGoogleDrive(snapshot: any, accessToken: string) {
+  const { blob, filename } = await createSnapshotZipBlob(snapshot);
+  try {
+    const driveFolderId = await getOrCreateFolder(accessToken, 'Snapshot Rapor 5NK');
+    return uploadFileToDrive(accessToken, blob, filename, driveFolderId);
+  } catch (e) {
+    console.warn('Could not upload to target folder, uploading to root instead:', e);
+    return uploadFileToDrive(accessToken, blob, filename);
+  }
+}
+
+export async function downloadZipSnapshotLocally(snapshot: any) {
+  const { blob, filename } = await createSnapshotZipBlob(snapshot);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 export interface ChangeLog {

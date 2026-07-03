@@ -27,7 +27,7 @@ import DatabaseCrud from './components/DatabaseCrud';
 import UserGuideModal from './components/UserGuideModal';
 import { HighlightText } from './components/HighlightText';
 import ClassSelectorDropdown from './components/ClassSelectorDropdown';
-import { exportClassToExcel, generateClassExcelBlob, exportSingleStudentToExcel, addChangeLog } from './utils';
+import { exportClassToExcel, generateClassExcelBlob, exportSingleStudentToExcel, addChangeLog, runIntegrityCheck } from './utils';
 import { getAccessToken, initAuth, auth, db } from './firebase';
 import { doc, setDoc } from 'firebase/firestore';
 import { uploadFileToDrive, getOrCreateFolder } from './lib/drive';
@@ -69,7 +69,8 @@ import {
   Keyboard,
   DownloadCloud,
   Download,
-  Loader2
+  Loader2,
+  Menu
 } from 'lucide-react';
 
 export default function App() {
@@ -177,6 +178,20 @@ export default function App() {
   };
 
   useEffect(() => {
+    // Validasi integritas otomatis saat students/teachers/categories dimodifikasi
+    const report = runIntegrityCheck(students, teachers, categories, classes);
+    if (!report.isValid) {
+      const msg = `⚠️ Peringatan Integritas Data!\n\nDitemukan inkonsistensi relasi:\n` +
+                  (report.brokenStudentClasses.length > 0 ? `- ${report.brokenStudentClasses.length} siswa memiliki kelas yang tidak terdaftar di sistem.\n` : '') +
+                  (report.brokenGradeIndicators.length > 0 ? `- ${report.brokenGradeIndicators.length} entri nilai memiliki ID indikator usang/terhapus.\n` : '') +
+                  `\nHarap buka tab 'Pengaturan Database' -> 'Cek Integritas' untuk memulihkan dan merapikan data.`;
+      console.warn(msg);
+      // Optional: uncomment to show native alert if strictly necessary
+      // alert(msg);
+    }
+  }, [students, teachers, categories, classes]);
+
+  useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'p') {
         e.preventDefault();
@@ -204,6 +219,9 @@ export default function App() {
   });
 
   const [isExportHistoryOpen, setIsExportHistoryOpen] = useState(false);
+  const [exportFormatFilter, setExportFormatFilter] = useState<'ALL' | 'EXCEL' | 'PDF' | 'CSV'>('ALL');
+  const [exportStartDate, setExportStartDate] = useState<string>('');
+  const [exportEndDate, setExportEndDate] = useState<string>('');
 
   const addExportLog = (type: 'EXCEL' | 'PDF' | 'CSV', description: string, fileName: string, studentCount: number) => {
     const newLog = {
@@ -215,7 +233,7 @@ export default function App() {
       studentCount,
     };
     setExportHistory(prev => {
-      const next = [newLog, ...prev].slice(0, 5);
+      const next = [newLog, ...prev].slice(0, 100);
       localStorage.setItem('5nk_export_history', JSON.stringify(next));
       return next;
     });
@@ -257,12 +275,37 @@ export default function App() {
   // AI & Sync History state overrides
   const [isGeneratingAiComments, setIsGeneratingAiComments] = useState<boolean>(false);
   const [isSyncHistoryOpen, setIsSyncHistoryOpen] = useState<boolean>(false);
+  const [isNavbarToolsOpen, setIsNavbarToolsOpen] = useState<boolean>(false);
   const [isQuickSearchOpen, setIsQuickSearchOpen] = useState<boolean>(false);
   const [quickSearchQuery, setQuickSearchQuery] = useState<string>('');
   const [searchSortBy, setSearchSortBy] = useState<'NAME' | 'NIS'>('NAME');
   const [searchClassFilter, setSearchClassFilter] = useState<string>('ALL');
-  const [recentSearches, setRecentSearches] = useState<Student[]>([]);
+  const [recentSearches, setRecentSearches] = useState<Student[]>(() => {
+    try {
+      const saved = localStorage.getItem('rapor_5nk_recent_searches');
+      if (saved) return JSON.parse(saved);
+    } catch(e) {}
+    return [];
+  });
+  
+  useEffect(() => {
+    localStorage.setItem('rapor_5nk_recent_searches', JSON.stringify(recentSearches));
+  }, [recentSearches]);
   const [hoveredStudent, setHoveredStudent] = useState<Student | null>(null);
+
+  const [paperSize, setPaperSize] = useState<'A4' | 'F4'>(() => {
+    try {
+      const saved = localStorage.getItem('rapor_5nk_paper_size');
+      return (saved as 'A4' | 'F4') || 'A4';
+    } catch (e) {
+      return 'A4';
+    }
+  });
+
+  const handleUpdatePaperSize = (size: 'A4' | 'F4') => {
+    setPaperSize(size);
+    localStorage.setItem('rapor_5nk_paper_size', size);
+  };
 
   // Footer date configuration shared between CRUD and RaporCetak
   const [showFooterDate, setShowFooterDate] = useState<boolean>(() => {
@@ -525,39 +568,53 @@ export default function App() {
 
     setCloudSyncState({ status: 'syncing', provider: 'Firebase & Cloud SQL' });
     
-    try {
-      // Execute as a single atomic transaction attempt
-      await Promise.all([
-        (async () => {
-          const { doc, setDoc } = await import('firebase/firestore');
-          await setDoc(doc(db, 'workspaces', uid), {
-            ...finalPayload,
-            email: userEmail,
-            updatedAt: new Date().toISOString()
-          }, { merge: true });
-        })(),
-        (async () => {
-          const res = await fetch('/api/save-workspace', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: userEmail, ...finalPayload })
-          });
-          if (!res.ok) throw new Error(`Cloud SQL sync failed: ${res.status}`);
-        })()
-      ]);
+    let attempt = 0;
+    const maxRetries = 3;
+    let success = false;
 
-      setCloudSyncState({ status: 'success', provider: 'Firebase & Cloud SQL', lastSaved: new Date() });
-      setSyncLogs(prev => [{
-        timestamp: new Date(),
-        firebaseStatus: 'success' as 'success' | 'failed' | 'skipped',
-        sqlStatus: 'success' as 'success' | 'failed' | 'skipped',
-        driveStatus: 'skipped' as 'success' | 'failed' | 'skipped',
-        details: 'Sinkronisasi atomik berhasil.'
-      }, ...prev].slice(0, 10));
+    while (attempt < maxRetries && !success) {
+      try {
+        attempt++;
+        // Execute as a single atomic transaction attempt
+        await Promise.all([
+          (async () => {
+            const { doc, setDoc } = await import('firebase/firestore');
+            await setDoc(doc(db, 'workspaces', uid), {
+              ...finalPayload,
+              email: userEmail,
+              updatedAt: new Date().toISOString()
+            }, { merge: true });
+          })(),
+          (async () => {
+            const res = await fetch('/api/save-workspace', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email: userEmail, ...finalPayload })
+            });
+            if (!res.ok) throw new Error(`Cloud SQL sync failed: ${res.status}`);
+          })()
+        ]);
 
-    } catch (err) {
-      console.error('[Cloud Sync] Atomic transaction failed:', err);
-      setCloudSyncState(prev => ({ ...prev, status: 'error' }));
+        success = true;
+        setCloudSyncState({ status: 'success', provider: 'Firebase & Cloud SQL', lastSaved: new Date() });
+        setSyncLogs(prev => [{
+          timestamp: new Date(),
+          firebaseStatus: 'success' as 'success' | 'failed' | 'skipped',
+          sqlStatus: 'success' as 'success' | 'failed' | 'skipped',
+          driveStatus: 'skipped' as 'success' | 'failed' | 'skipped',
+          details: `Sinkronisasi atomik berhasil pada percobaan ke-${attempt}.`
+        }, ...prev].slice(0, 10));
+
+      } catch (err) {
+        console.error(`[Cloud Sync] Atomic transaction failed on attempt ${attempt}:`, err);
+        if (attempt < maxRetries) {
+          // Exponential backoff
+          setCloudSyncState({ status: 'syncing', provider: `Menunggu Retry (${attempt}/${maxRetries})...` });
+          await new Promise(res => setTimeout(res, 2000 * attempt));
+        } else {
+          setCloudSyncState(prev => ({ ...prev, status: 'error', provider: 'Gagal Sinkronisasi' }));
+        }
+      }
     }
   };
 
@@ -971,14 +1028,20 @@ export default function App() {
     const targetStudent = students.find(s => s.id === studentId);
 
     if (targetStudent) {
+      let changedCount = 0;
       allIndicatorIds.forEach(id => {
         if (targetStudent.grades[id] !== nextGrades[id]) {
+          changedCount++;
           setDirtyCells(prev => ({
             ...prev,
             [`${studentId}_${id}`]: true
           }));
         }
       });
+      
+      if (changedCount > 0) {
+        addChangeLog('UBAH_NILAI', `Mengubah nilai pada ${changedCount} indikator untuk siswa ${targetStudent.name} (${targetStudent.nis})`);
+      }
     }
     
     const updated = students.map(s => {
@@ -1281,61 +1344,99 @@ export default function App() {
       
       {/* 1. Global Navigation Navbar */}
       <header className="bg-emerald-50 text-slate-800 border-b border-emerald-200 px-4 py-2.5 sticky top-0 z-40 no-print backdrop-blur-md bg-opacity-95 shadow-xs">
-        <div className="max-w-7xl mx-auto flex flex-col lg:flex-row gap-3 items-center justify-between">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row gap-2.5 items-center justify-between">
           
           {/* Logo & School Branding */}
-          <div className="flex items-center gap-3">
-            <div className="bg-gradient-to-tr from-emerald-600 to-teal-500 p-2 rounded-xl text-white shadow-xs">
-              <GraduationCap className="h-5 w-5 font-black" />
-            </div>
-            <div>
-              <h1 id="app-heading" className="text-sm md:text-base font-extrabold tracking-tight flex items-center gap-1.5 text-emerald-950">
-                Sistem Rapor 5NK <span className="text-[9px] bg-emerald-100 border border-emerald-200/60 px-2 py-0.5 rounded-lg text-emerald-800 font-mono font-bold">Versi SMA</span>
-              </h1>
-              <p className="text-[10px] text-emerald-700 font-semibold">
-                {kopSekolah.yayasan} • {kopSekolah.namaSekolah}
-              </p>
-            </div>
-          </div>
-
-          {/* Interaction & Status Hub */}
-          <div className="flex flex-wrap items-center justify-center lg:justify-end gap-3 text-xs w-full lg:w-auto">
-            
-            {/* Realtime Syncer & Auto-Save Badge */}
-            <div className="flex items-center gap-2 bg-emerald-100/50 border border-emerald-200/80 px-2.5 py-1.5 rounded-xl">
-              <span className="relative flex h-1.5 w-1.5">
-                <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${cloudSyncState.status === 'syncing' ? 'bg-amber-400' : 'bg-emerald-400'}`}></span>
-                <span className={`relative inline-flex rounded-full h-1.5 w-1.5 ${cloudSyncState.status === 'syncing' ? 'bg-amber-500' : 'bg-emerald-500'}`}></span>
-              </span>
-              <div className="text-left leading-none">
-                <p className="text-[9px] font-bold text-emerald-900 uppercase tracking-wide">
-                  {cloudSyncState.status === 'syncing' ? 'Sinkron Cloud...' : 'Auto-Save Aktif'}
-                </p>
-                <p className="text-[8px] text-emerald-600 font-mono mt-0.5">
-                  {cloudSyncState.status === 'success' ? `Terakhir: ${cloudSyncState.lastSaved ? cloudSyncState.lastSaved.toLocaleTimeString() : 'Tersimpan'}` : 'Local Safe'}
+          <div className="flex items-center justify-between w-full md:w-auto">
+            <div className="flex items-center gap-2.5">
+              <div className="bg-gradient-to-tr from-emerald-600 to-teal-500 p-1.5 rounded-xl text-white shadow-xs">
+                <GraduationCap className="h-4 w-4 font-black" />
+              </div>
+              <div>
+                <h1 id="app-heading" className="text-xs sm:text-sm font-extrabold tracking-tight flex items-center gap-1 text-emerald-950 leading-tight">
+                  Sistem Rapor 5NK <span className="text-[7.5px] bg-emerald-100 border border-emerald-200/60 px-1 py-0.2 rounded text-emerald-800 font-mono font-bold">SMA</span>
+                </h1>
+                <p className="text-[9px] text-emerald-700 font-semibold max-w-[200px] sm:max-w-none truncate leading-none mt-0.5">
+                  {kopSekolah.namaSekolah}
                 </p>
               </div>
             </div>
 
-            {/* Undo / Redo Global Toolbars */}
-            <div className="flex items-center gap-1 bg-white px-2 py-0.5 rounded-xl border border-emerald-200 shadow-xs">
+            {/* Mobile Controls Header Bar */}
+            <div className="flex items-center gap-2 md:hidden">
+              <div className="flex items-center gap-0.5 bg-white px-1.5 py-0.5 rounded-lg border border-emerald-200 shadow-xs">
+                <button
+                  onClick={handleUndo}
+                  disabled={historyPointer <= 0}
+                  className="p-1 rounded hover:bg-emerald-50 text-emerald-700 disabled:opacity-25"
+                  title="Undo (Ctrl+Z)"
+                >
+                  <Undo className="h-3 w-3" />
+                </button>
+                <button
+                  onClick={handleRedo}
+                  disabled={historyPointer < 0 || historyPointer >= studentsHistory.length - 1}
+                  className="p-1 rounded hover:bg-emerald-50 text-emerald-700 disabled:opacity-25"
+                  title="Redo (Ctrl+Y)"
+                >
+                  <Redo className="h-3 w-3" />
+                </button>
+              </div>
+              
+              <button
+                onClick={() => setIsNavbarToolsOpen(!isNavbarToolsOpen)}
+                className="p-1.5 rounded-lg bg-emerald-600 text-white border border-emerald-700 hover:bg-emerald-700"
+                title="Menu Utilitas"
+              >
+                <Menu className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Interaction & Status Hub (Collapsible on Mobile, Flexible inline on Desktop) */}
+          <div className={`${
+            isNavbarToolsOpen ? 'flex animate-in slide-in-from-top duration-200' : 'hidden'
+          } md:flex flex-col sm:flex-row flex-wrap items-center justify-center md:justify-end gap-2 text-xs w-full md:w-auto mt-2 md:mt-0 pt-2.5 md:pt-0 border-t border-emerald-100 md:border-none`}>
+            
+            {/* Realtime Syncer & Auto-Save Badge */}
+            <div className={`flex items-center gap-1.5 px-2 py-1 rounded-xl border ${cloudSyncState.status === 'error' ? 'bg-rose-100/50 border-rose-300' : 'bg-emerald-100/50 border-emerald-200/80'}`}>
+              <span className="relative flex h-1.5 w-1.5">
+                <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${cloudSyncState.status === 'syncing' ? 'bg-amber-400' : cloudSyncState.status === 'error' ? 'bg-rose-400' : 'bg-emerald-400'}`}></span>
+                <span className={`relative inline-flex rounded-full h-1.5 w-1.5 ${cloudSyncState.status === 'syncing' ? 'bg-amber-500' : cloudSyncState.status === 'error' ? 'bg-rose-500' : 'bg-emerald-500'}`}></span>
+              </span>
+              <div className="text-left leading-none">
+                <p className={`text-[8.5px] font-bold uppercase tracking-wide ${cloudSyncState.status === 'error' ? 'text-rose-900' : 'text-emerald-900'}`}>
+                  {cloudSyncState.status === 'syncing' ? 'Sinkron Cloud...' : cloudSyncState.status === 'error' ? 'Gagal Sinkron' : 'Auto-Save'}
+                </p>
+                <p className={`text-[7.5px] font-mono mt-0.5 ${cloudSyncState.status === 'error' ? 'text-rose-600' : 'text-emerald-600'}`}>
+                  {cloudSyncState.status === 'syncing' && cloudSyncState.provider.includes('Menunggu Retry') 
+                    ? cloudSyncState.provider 
+                    : cloudSyncState.status === 'success' 
+                      ? `${cloudSyncState.lastSaved ? cloudSyncState.lastSaved.toLocaleTimeString() : 'Tersimpan'}` 
+                      : cloudSyncState.status === 'error' ? 'Offline' : 'Ready'}
+                </p>
+              </div>
+            </div>
+
+            {/* Undo / Redo Global Toolbars (Desktop only) */}
+            <div className="hidden md:flex items-center gap-1 bg-white px-1.5 py-0.5 rounded-xl border border-emerald-200 shadow-xs">
                <button
                   onClick={handleUndo}
                   disabled={historyPointer <= 0}
-                  className="p-1.5 rounded-lg hover:bg-emerald-50 text-emerald-700 hover:text-emerald-900 transition-all cursor-pointer disabled:opacity-20 disabled:pointer-events-none"
-                  title="Batal perubahan (Ctrl+Z)"
+                  className="p-1 rounded-lg hover:bg-emerald-50 text-emerald-700 hover:text-emerald-900 transition-all cursor-pointer disabled:opacity-20 disabled:pointer-events-none"
+                  title="Undo (Ctrl+Z)"
                   aria-label="Undo"
                >
-                  <Undo className="h-3.5 w-3.5" />
+                  <Undo className="h-3 w-3" />
                </button>
                <button
                   onClick={handleRedo}
                   disabled={historyPointer < 0 || historyPointer >= studentsHistory.length - 1}
-                  className="p-1.5 rounded-lg hover:bg-emerald-50 text-emerald-700 hover:text-emerald-900 transition-all cursor-pointer disabled:opacity-20 disabled:pointer-events-none"
-                  title="Ulangi perubahan (Ctrl+Y)"
+                  className="p-1 rounded-lg hover:bg-emerald-50 text-emerald-700 hover:text-emerald-900 transition-all cursor-pointer disabled:opacity-20 disabled:pointer-events-none"
+                  title="Redo (Ctrl+Y)"
                   aria-label="Redo"
                >
-                  <Redo className="h-3.5 w-3.5" />
+                  <Redo className="h-3 w-3" />
                </button>
             </div>
 
@@ -1346,37 +1447,42 @@ export default function App() {
                 setIsAutoBackupEnabled(nextVal);
                 localStorage.setItem('rapor_5nk_auto_backup_enabled', String(nextVal));
               }}
-              className={`flex items-center gap-1 px-2.5 py-1.5 rounded-xl border text-[10px] uppercase font-bold tracking-wide transition-all duration-200 cursor-pointer shadow-xs ${
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-xl border text-[9.5px] uppercase font-bold tracking-wide transition-all duration-200 cursor-pointer shadow-xs ${
                 isAutoBackupEnabled
                   ? 'bg-emerald-600 border-emerald-700 text-white hover:bg-emerald-700'
                   : 'bg-white border-emerald-200 text-emerald-600 hover:text-emerald-800 hover:bg-emerald-50'
               }`}
               title="Cadangan otomatis lokal berupa unduhan file JSON berkala"
             >
-              <span>Auto-Backup: {isAutoBackupEnabled ? 'On' : 'Off'}</span>
+              <span>Backup: {isAutoBackupEnabled ? 'On' : 'Off'}</span>
             </button>
 
             {/* Progress Bar */}
-            <div className="hidden sm:flex items-center gap-2 bg-emerald-100/40 px-3 py-1.5 rounded-xl border border-emerald-200/80">
-              <CheckCircle className="h-3.5 w-3.5 text-emerald-600" />
+            <div className="hidden sm:flex items-center gap-1.5 bg-emerald-100/40 px-2 py-1 rounded-xl border border-emerald-200/80">
+              <CheckCircle className="h-3 w-3 text-emerald-600" />
               <div className="text-left">
-                <p className="text-[9px] text-emerald-800 font-bold leading-none">Rapor Selesai: {totalCompletedCount}/{students.length}</p>
-                <div className="w-16 bg-emerald-200/50 h-1 rounded-full mt-1 overflow-hidden">
+                <p className="text-[8.5px] text-emerald-800 font-bold leading-none">Rapor: {totalCompletedCount}/{students.length}</p>
+                <div className="w-12 bg-emerald-200/50 h-1 rounded-full mt-1 overflow-hidden">
                   <div className="bg-emerald-600 h-full transition-all duration-500" style={{ width: `${totalPercentage}%` }}></div>
                 </div>
               </div>
             </div>
 
+            {/* Hidden Data Health Score Indicator (Runs quietly in the background) */}
+            <div className="hidden" aria-hidden="true">
+              Health: {runIntegrityCheck(students, teachers, categories, classes).isValid ? '100%' : '⚠️ ERROR'}
+            </div>
+
             {/* Riwayat Ekspor */}
             <button
               onClick={() => setIsExportHistoryOpen(true)}
-              className="bg-white hover:bg-emerald-50 border border-emerald-200 font-bold px-3 py-1.5 rounded-xl text-emerald-700 hover:text-emerald-900 flex items-center gap-1.5 transition-all text-[11px] cursor-pointer relative shadow-xs"
+              className="bg-white hover:bg-emerald-50 border border-emerald-200 font-bold px-2.5 py-1 rounded-xl text-emerald-700 hover:text-emerald-900 flex items-center gap-1 transition-all text-[10px] cursor-pointer relative shadow-xs"
               title="Riwayat Ekspor"
             >
-              <History className="h-3.5 w-3.5 text-emerald-500" />
-              <span className="hidden sm:inline">Riwayat</span>
+              <History className="h-3 w-3 text-emerald-500" />
+              <span>Riwayat</span>
               {exportHistory.length > 0 && (
-                <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[9px] font-extrabold text-slate-950 border border-white shadow-xs">
+                <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-amber-500 text-[8px] font-extrabold text-slate-950 border border-white shadow-xs">
                   {exportHistory.length}
                 </span>
               )}
@@ -1385,21 +1491,21 @@ export default function App() {
             {/* Panduan Button */}
             <button
               onClick={() => setIsGuideOpen(true)}
-              className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3.5 py-1.5 rounded-xl flex items-center gap-1.5 transition-all text-[11px] cursor-pointer shadow-xs active:scale-95 border border-emerald-700"
+              className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-2.5 py-1 rounded-xl flex items-center gap-1 transition-all text-[10px] cursor-pointer shadow-xs active:scale-95 border border-emerald-700"
               title="Panduan Guru & Helpdesk"
             >
-              <Info className="h-3.5 w-3.5" />
+              <Info className="h-3 w-3" />
               <span>Panduan</span>
             </button>
 
             {/* Reset Database */}
             <button
               onClick={handleResetToDefault}
-              className="bg-white hover:bg-rose-50 border border-emerald-200 hover:border-rose-200 text-emerald-700 hover:text-rose-600 font-bold px-2.5 py-1.5 rounded-xl transition-all text-[11px] cursor-pointer shadow-xs"
+              className="bg-white hover:bg-rose-50 border border-emerald-200 hover:border-rose-200 text-emerald-700 hover:text-rose-600 font-bold px-2 py-1 rounded-xl transition-all text-[10px] cursor-pointer shadow-xs"
               title="Reset data ke default"
             >
-              <RefreshCw className="h-3.5 w-3.5" />
-              <span className="hidden md:inline ml-1">Reset DB</span>
+              <RefreshCw className="h-3 w-3" />
+              <span>Reset</span>
             </button>
           </div>
 
@@ -1992,6 +2098,8 @@ export default function App() {
               setRowHeightMode={setRowHeightMode}
               showFooterDate={showFooterDate}
               onUpdateShowFooterDate={handleUpdateShowFooterDate}
+              paperSize={paperSize}
+              onUpdatePaperSize={handleUpdatePaperSize}
             />
           </motion.div>
         )}
@@ -2054,6 +2162,8 @@ export default function App() {
               }}
               showFooterDate={showFooterDate}
               onUpdateShowFooterDate={handleUpdateShowFooterDate}
+              paperSize={paperSize}
+              onUpdatePaperSize={handleUpdatePaperSize}
             />
           </motion.div>
         )}
@@ -2073,10 +2183,38 @@ export default function App() {
                 <History className="h-5 w-5 text-emerald-400 font-bold" />
                 <div>
                   <h3 className="font-bold text-sm tracking-wide">Riwayat Pengunduhan & Ekspor</h3>
-                  <p className="text-[10px] text-emerald-300">Menampilkan 5 riwayat ekspor (Excel/PDF) terakhir Anda</p>
+                  <p className="text-[10px] text-emerald-300">Menampilkan riwayat ekspor (Excel/PDF/CSV) Anda</p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
+                {exportHistory.length > 0 && (
+                  <button
+                    onClick={() => {
+                      const csvRows = [
+                        ['ID', 'Timestamp', 'Type', 'Description', 'FileName', 'StudentCount'],
+                        ...exportHistory.map(log => [
+                          log.id,
+                          log.timestamp,
+                          log.type,
+                          `"${log.description}"`,
+                          `"${log.fileName}"`,
+                          log.studentCount
+                        ])
+                      ];
+                      const csvContent = "data:text/csv;charset=utf-8," + csvRows.map(e => e.join(",")).join("\n");
+                      const encodedUri = encodeURI(csvContent);
+                      const link = document.createElement("a");
+                      link.setAttribute("href", encodedUri);
+                      link.setAttribute("download", `Export_History_${new Date().getTime()}.csv`);
+                      document.body.appendChild(link);
+                      link.click();
+                      document.body.removeChild(link);
+                    }}
+                    className="text-xs px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded-md transition-colors cursor-pointer flex items-center gap-1 font-semibold shadow-xs border border-emerald-600"
+                  >
+                    <DownloadCloud className="h-3.5 w-3.5" /> CSV
+                  </button>
+                )}
                 {exportHistory.length > 0 && (
                   <button
                     onClick={() => {
@@ -2100,75 +2238,137 @@ export default function App() {
               </div>
             </div>
 
+            {/* Filter controls inside modal */}
+            <div className="bg-slate-50 border-b border-slate-200 p-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-bold text-slate-500 uppercase">Format File</label>
+                <select
+                  value={exportFormatFilter}
+                  onChange={(e) => setExportFormatFilter(e.target.value as any)}
+                  className="bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 font-bold focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                >
+                  <option value="ALL">Semua Format</option>
+                  <option value="PDF">PDF saja</option>
+                  <option value="EXCEL">Excel saja</option>
+                  <option value="CSV">CSV saja</option>
+                </select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-bold text-slate-500 uppercase">Dari Tanggal</label>
+                <input
+                  type="date"
+                  value={exportStartDate}
+                  onChange={(e) => setExportStartDate(e.target.value)}
+                  className="bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 font-bold focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label className="text-[10px] font-bold text-slate-500 uppercase">Sampai Tanggal</label>
+                <input
+                  type="date"
+                  value={exportEndDate}
+                  onChange={(e) => setExportEndDate(e.target.value)}
+                  className="bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 font-bold focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                />
+              </div>
+            </div>
+
             <div className="p-5 max-h-[400px] overflow-y-auto">
-              {exportHistory.length === 0 ? (
-                <div className="text-center py-10 flex flex-col items-center justify-center gap-3">
-                  <div className="h-12 w-12 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center text-xl text-slate-400">
-                    📂
-                  </div>
-                  <div>
-                    <p className="text-xs font-bold text-slate-700">Tidak Ada Riwayat Ekspor</p>
-                    <p className="text-[10.5px] text-slate-400 mt-1 max-w-xs leading-relaxed">Ekspor atau cetak file Excel/PDF rapor pertama Anda untuk merekam riwayat pelacakan.</p>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-3">
-                  {exportHistory.map((log) => (
-                    <div key={log.id} className="p-3.5 rounded-xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50/100 hover:border-slate-200 flex items-start gap-3 transition-all">
-                      <div className={`h-8 w-8 rounded-lg flex items-center justify-center shrink-0 border uppercase font-mono font-bold text-[9.5px] ${
-                        log.type === 'EXCEL' 
-                          ? 'bg-emerald-50 border-emerald-200 text-emerald-700' 
-                          : 'bg-rose-50 border-rose-200 text-rose-700'
-                      }`}>
-                        {log.type}
+              {(() => {
+                const filteredHistory = exportHistory.filter((log) => {
+                  if (exportFormatFilter !== 'ALL' && log.type !== exportFormatFilter) {
+                    return false;
+                  }
+                  if (exportStartDate) {
+                    const logDate = new Date(log.timestamp);
+                    const start = new Date(exportStartDate);
+                    start.setHours(0, 0, 0, 0);
+                    if (logDate < start) return false;
+                  }
+                  if (exportEndDate) {
+                    const logDate = new Date(log.timestamp);
+                    const end = new Date(exportEndDate);
+                    end.setHours(23, 59, 59, 999);
+                    if (logDate > end) return false;
+                  }
+                  return true;
+                });
+
+                if (filteredHistory.length === 0) {
+                  return (
+                    <div className="text-center py-10 flex flex-col items-center justify-center gap-3">
+                      <div className="h-12 w-12 rounded-full bg-slate-50 border border-slate-100 flex items-center justify-center text-xl text-slate-400">
+                        📂
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-[11px] font-bold text-slate-800 truncate block" title={log.fileName}>
-                            {log.fileName}
-                          </span>
-                          <div className="flex items-center gap-2">
-                            <span className="text-[9.5px] text-slate-400 font-medium whitespace-nowrap">
-                              {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                            </span>
-                            <button
-                              onClick={() => {
-                                if (confirm(`Hapus item riwayat "${log.fileName}"?`)) {
-                                  const updatedHistory = exportHistory.filter(item => item.id !== log.id);
-                                  setExportHistory(updatedHistory);
-                                  localStorage.setItem('5nk_export_history', JSON.stringify(updatedHistory));
-                                  triggerAlert('success', '✓ Item riwayat ekspor berhasil dihapus.');
-                                }
-                              }}
-                              className="text-slate-400 hover:text-rose-600 p-0.5 rounded-md hover:bg-slate-100 transition-colors cursor-pointer"
-                              title="Hapus riwayat ekspor ini"
-                              aria-label="Hapus riwayat ekspor ini"
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                        </div>
-                        <p className="text-[10.5px] text-slate-500 mt-0.5 leading-snug">
-                          {log.description}
-                        </p>
-                        <div className="flex items-center gap-3 mt-1.5 pt-1.5 border-t border-slate-100">
-                          <div className="flex items-center gap-1 text-[9.5px] font-mono text-slate-400">
-                            <span>Siswa:</span>
-                            <span className="font-bold text-slate-600">{log.studentCount}</span>
-                          </div>
-                          <div className="flex items-center gap-1 text-[9.5px] font-mono text-slate-400">
-                            <span>Waktu:</span>
-                            <span className="font-bold text-slate-600">{new Date(log.timestamp).toLocaleDateString()}</span>
-                          </div>
-                          <span className="ml-auto inline-flex items-center gap-0.5 px-1 py-0.5 rounded text-[8.5px] font-semibold bg-emerald-100 text-emerald-700 border border-emerald-200/50">
-                            ✓ Berhasil diunduh
-                          </span>
-                        </div>
+                      <div>
+                        <p className="text-xs font-bold text-slate-700">Tidak Ada Riwayat Ekspor Sesuai Filter</p>
+                        <p className="text-[10.5px] text-slate-400 mt-1 max-w-xs leading-relaxed">Sesuaikan filter format atau rentang tanggal Anda untuk mencari log pengunduhan.</p>
                       </div>
                     </div>
-                  ))}
-                </div>
-              )}
+                  );
+                }
+
+                return (
+                  <div className="flex flex-col gap-3">
+                    {filteredHistory.map((log) => (
+                      <div key={log.id} className="p-3.5 rounded-xl border border-slate-100 bg-slate-50/50 hover:bg-slate-50/100 hover:border-slate-200 flex items-start gap-3 transition-all">
+                        <div className={`h-8 w-8 rounded-lg flex items-center justify-center shrink-0 border uppercase font-mono font-bold text-[9.5px] ${
+                          log.type === 'EXCEL' 
+                            ? 'bg-emerald-50 border-emerald-200 text-emerald-700' 
+                            : log.type === 'CSV'
+                            ? 'bg-teal-50 border-teal-200 text-teal-700'
+                            : 'bg-rose-50 border-rose-200 text-rose-700'
+                        }`}>
+                          {log.type}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[11px] font-bold text-slate-800 truncate block" title={log.fileName}>
+                              {log.fileName}
+                            </span>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[9.5px] text-slate-400 font-medium whitespace-nowrap">
+                                {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                              <button
+                                onClick={() => {
+                                  if (confirm(`Hapus item riwayat "${log.fileName}"?`)) {
+                                    const updatedHistory = exportHistory.filter(item => item.id !== log.id);
+                                    setExportHistory(updatedHistory);
+                                    localStorage.setItem('5nk_export_history', JSON.stringify(updatedHistory));
+                                    triggerAlert('success', '✓ Item riwayat ekspor berhasil dihapus.');
+                                  }
+                                }}
+                                className="text-slate-400 hover:text-rose-600 p-0.5 rounded-md hover:bg-slate-100 transition-colors cursor-pointer"
+                                title="Hapus riwayat ekspor ini"
+                                aria-label="Hapus riwayat ekspor ini"
+                              >
+                                <X className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                          <p className="text-[10.5px] text-slate-500 mt-0.5 leading-snug">
+                            {log.description}
+                          </p>
+                          <div className="flex items-center gap-3 mt-1.5 pt-1.5 border-t border-slate-100">
+                            <div className="flex items-center gap-1 text-[9.5px] font-mono text-slate-400">
+                              <span>Siswa:</span>
+                              <span className="font-bold text-slate-600">{log.studentCount}</span>
+                            </div>
+                            <div className="flex items-center gap-1 text-[9.5px] font-mono text-slate-400">
+                              <span>Waktu:</span>
+                              <span className="font-bold text-slate-600">{new Date(log.timestamp).toLocaleDateString()}</span>
+                            </div>
+                            <span className="ml-auto inline-flex items-center gap-0.5 px-1 py-0.5 rounded text-[8.5px] font-semibold bg-emerald-100 text-emerald-700 border border-emerald-200/50">
+                              ✓ Berhasil diunduh
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
 
             <div className="bg-slate-50 px-5 py-3 border-t border-slate-200 flex justify-between items-center text-[10px] text-slate-400 font-medium">
@@ -2274,7 +2474,7 @@ export default function App() {
                         <button
                           key={s.id}
                           onClick={() => {
-                            setRecentSearches(prev => [s, ...prev.filter(recent => recent.id !== s.id)].slice(0,3));
+                            setRecentSearches(prev => [s, ...prev.filter(recent => recent.id !== s.id)].slice(0, 5));
                             setSelectedClass(s.kelas);
                             setSelectedStudentId(s.id);
                             setIsQuickSearchOpen(false);
@@ -2328,22 +2528,36 @@ export default function App() {
             
             {/* Recent Searches */}
             {recentSearches.length > 0 && (
-                <div className="border-t p-2">
-                    <p className="text-[9px] font-bold text-slate-500 uppercase px-2 py-1">Recent Searches</p>
-                    {recentSearches.map(s => (
-                        <button key={s.id} onClick={() => {
-                            setRecentSearches(prev => [s, ...prev.filter(recent => recent.id !== s.id)].slice(0,3));
-                            setSelectedClass(s.kelas);
-                            setSelectedStudentId(s.id);
-                            setIsQuickSearchOpen(false);
-                            setQuickSearchQuery('');
-                            if (viewMode === 'crud_manager' || viewMode === 'rekap_nilai') {
-                                setViewMode('spreadsheet');
-                            }
-                            triggerAlert('success', `✓ Terpilih: ${s.name} (Kelas ${s.kelas})`);
-                        }} className="w-full text-left p-1 text-[10px] hover:bg-slate-100 rounded text-slate-600">{s.name}</button>
-                    ))}
+              <div className="border-t border-slate-100 p-2 bg-slate-50/50">
+                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest px-2 py-1 flex items-center gap-1.5">
+                  <span>⏱️</span>
+                  <span>Riwayat Pencarian Terakhir</span>
+                </p>
+                <div className="grid grid-cols-1 gap-0.5 mt-1">
+                  {recentSearches.map(s => (
+                    <button
+                      key={s.id}
+                      onClick={() => {
+                        setRecentSearches(prev => [s, ...prev.filter(recent => recent.id !== s.id)].slice(0, 5));
+                        setSelectedClass(s.kelas);
+                        setSelectedStudentId(s.id);
+                        setIsQuickSearchOpen(false);
+                        setQuickSearchQuery('');
+                        if (viewMode === 'crud_manager' || viewMode === 'rekap_nilai') {
+                          setViewMode('spreadsheet');
+                        }
+                        triggerAlert('success', `✓ Terpilih: ${s.name} (Kelas ${s.kelas})`);
+                      }}
+                      className="w-full text-left px-3 py-1.5 text-[10.5px] hover:bg-indigo-50/80 hover:text-indigo-700 rounded-md transition-colors font-semibold text-slate-600 flex items-center justify-between cursor-pointer"
+                    >
+                      <span className="truncate max-w-[280px]">{s.name}</span>
+                      <span className="text-[8.5px] font-mono text-slate-400 bg-slate-100 border border-slate-200/50 px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider">
+                        Kelas {s.kelas} • NIS {s.nis}
+                      </span>
+                    </button>
+                  ))}
                 </div>
+              </div>
             )}
             
             {/* Modal footer shortcut help text */}

@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import * as XLSX from 'xlsx';
 import { Student, Teacher, Category, Indicator, ScoreKey, KopSekolah } from '../types';
 import { SCHOOL_CLASSES, DEFAULT_KOP } from '../data';
-import { exportDatabaseBackupConfig, parseExcelDatabase, uploadExcelToGoogleDrive, encryptData, decryptData, addChangeLog, getChangeLogs, clearChangeLogs, deleteChangeLog, exportLocalJsonBackup, ChangeLog, formatProperName, runIntegrityCheck, IntegrityReport, fixIntegrity, exportAllStudentsToCsv } from '../utils';
+import { exportDatabaseBackupConfig, parseExcelDatabase, uploadExcelToGoogleDrive, encryptData, decryptData, addChangeLog, getChangeLogs, clearChangeLogs, deleteChangeLog, exportLocalJsonBackup, ChangeLog, formatProperName, runIntegrityCheck, IntegrityReport, fixIntegrity, exportAllStudentsToCsv, uploadZipSnapshotToGoogleDrive, downloadZipSnapshotLocally } from '../utils';
 import { normalizeAllData, hasValidAcademicTitle } from '../normalization';
 import { initAuth, googleSignIn, getAccessToken, logout } from '../firebase';
 import { 
@@ -31,7 +31,8 @@ import {
   SpellCheck,
   AlertCircle,
   Camera,
-  Database
+  Database,
+  Cloud
 } from 'lucide-react';
 
 interface DatabaseCrudProps {
@@ -52,6 +53,8 @@ interface DatabaseCrudProps {
   setIsHighContrast: (value: boolean) => void;
   rowHeightMode: 'compact' | 'comfortable';
   setRowHeightMode: (value: 'compact' | 'comfortable') => void;
+  paperSize: 'A4' | 'F4';
+  onUpdatePaperSize: (size: 'A4' | 'F4') => void;
 }
 
 export default function DatabaseCrud({
@@ -72,10 +75,16 @@ export default function DatabaseCrud({
   setIsHighContrast,
   rowHeightMode,
   setRowHeightMode,
+  paperSize,
+  onUpdatePaperSize,
 }: DatabaseCrudProps) {
   const [activeSubTab, setActiveSubTab] = useState<'siswa' | 'guru' | 'indikator' | 'kop' | 'backup' | 'riwayat' | 'snapshot' | 'integritas'>('siswa');
   const [changeLogs, setChangeLogs] = useState<ChangeLog[]>([]);
   const [logSearchQuery, setLogSearchQuery] = useState('');
+  const [logActionFilter, setLogActionFilter] = useState('ALL');
+  const [logDateFilter, setLogDateFilter] = useState('ALL');
+  
+  const [isUploadingSnapshot, setIsUploadingSnapshot] = useState<string | null>(null);
 
   // States for Snapshot Manual & Yayasan Report
   const [snapshotLabel, setSnapshotLabel] = useState('');
@@ -87,6 +96,8 @@ export default function DatabaseCrud({
       return [];
     }
   });
+
+
 
   const [yayasanWaliFilter, setYayasanWaliFilter] = useState('');
   const [yayasanCabangFilter, setYayasanCabangFilter] = useState(kopSekolah.cabang || '');
@@ -157,6 +168,118 @@ export default function DatabaseCrud({
     const updated = snapshots.filter(s => s.id !== id);
     setSnapshots(updated);
     localStorage.setItem('rapor_5nk_manual_snapshots', JSON.stringify(updated));
+  };
+
+  const handleUploadSnapshotToDrive = async (snap: any) => {
+    try {
+      setIsUploadingSnapshot(snap.id);
+      let token = await getAccessToken();
+      if (!token) {
+        await googleSignIn();
+        token = await getAccessToken();
+      }
+      if (!token) {
+        alert("Gagal masuk ke Google Account, tidak dapat mengunggah snapshot.");
+        return;
+      }
+      
+      const fileId = await uploadZipSnapshotToGoogleDrive(snap, token);
+      alert(`Snapshot "${snap.label}" berhasil diunggah ke Google Drive (ID: ${fileId})`);
+      addChangeLog(
+        'UPLOAD SNAPSHOT',
+        `Berhasil mengunggah snapshot "${snap.label}" ke Google Drive dalam bentuk ZIP (ID: ${fileId})`
+      );
+    } catch (e: any) {
+      alert("Gagal mengunggah snapshot ke Google Drive: " + e.message);
+    } finally {
+      setIsUploadingSnapshot(null);
+    }
+  };
+
+  const handleDownloadSnapshotLocally = async (snap: any) => {
+    try {
+      await downloadZipSnapshotLocally(snap);
+      addChangeLog(
+        'DOWNLOAD SNAPSHOT',
+        `Berhasil mengunduh snapshot "${snap.label}" secara lokal dalam bentuk ZIP.`
+      );
+    } catch (e: any) {
+      alert("Gagal mengunduh snapshot ZIP: " + e.message);
+    }
+  };
+
+  const handleDownloadMissingDataReport = async () => {
+    const report = runIntegrityCheck(students, teachers, categories, classes);
+    
+    const missingDataList = students.filter(s => {
+       const hasMissingName = !s.name || s.name === '-';
+       const hasMissingNis = !s.nis || s.nis === '-';
+       const hasMissingKelas = !s.kelas || !classes.includes(s.kelas);
+       const missingIndicatorsCount = categories.reduce((total, cat) => total + cat.indicators.length, 0) - Object.keys(s.grades).length;
+       return hasMissingName || hasMissingNis || hasMissingKelas || missingIndicatorsCount > 0;
+    });
+
+    if (missingDataList.length === 0 && report.isValid) {
+        alert("Semua data siswa sudah lengkap! Tidak ada yang perlu diunduh.");
+        return;
+    }
+
+    const div = document.createElement('div');
+    div.innerHTML = `
+      <div style="font-family: sans-serif; padding: 20px; font-size: 12px; color: #1e293b;">
+        <h2 style="text-align: center; color: #0f172a; margin-bottom: 5px;">Laporan Kekurangan Data Siswa</h2>
+        <p style="text-align: center; color: #64748b; margin-top: 0; margin-bottom: 20px;">Dicetak pada: ${new Date().toLocaleString('id-ID')}</p>
+        <table border="1" style="width: 100%; border-collapse: collapse; margin-top: 20px; border-color: #cbd5e1;">
+          <tr style="background-color: #f8fafc;">
+            <th style="padding: 10px; text-align: left;">NIS</th>
+            <th style="padding: 10px; text-align: left;">Nama Siswa</th>
+            <th style="padding: 10px; text-align: left;">Kelas</th>
+            <th style="padding: 10px; text-align: left;">Rincian Kekurangan</th>
+          </tr>
+          ${missingDataList.map(s => {
+             const missing = [];
+             if (!s.name || s.name === '-') missing.push('Nama kosong/invalid');
+             if (!s.nis || s.nis === '-') missing.push('NIS kosong/invalid');
+             if (!s.kelas || !classes.includes(s.kelas)) missing.push('Kelas tidak valid atau kosong');
+             const missingIndicatorsCount = categories.reduce((total, cat) => total + cat.indicators.length, 0) - Object.keys(s.grades).length;
+             if (missingIndicatorsCount > 0) missing.push(`Kurang ${missingIndicatorsCount} nilai indikator`);
+             
+             return `
+              <tr>
+                <td style="padding: 8px;">${s.nis || '-'}</td>
+                <td style="padding: 8px; font-weight: bold;">${s.name || '-'}</td>
+                <td style="padding: 8px;">${s.kelas || '-'}</td>
+                <td style="padding: 8px; color: #dc2626;">${missing.join(', ')}</td>
+              </tr>
+             `;
+          }).join('')}
+        </table>
+        
+        <div style="margin-top: 30px; padding: 15px; border: 1px solid #cbd5e1; background-color: #f1f5f9; border-radius: 8px;">
+            <h3 style="margin-top:0; color: #0f172a;">Ringkasan Integritas Data Sistem</h3>
+            <ul style="margin-bottom: 0;">
+                <li>Total Siswa: ${students.length}</li>
+                <li>Siswa dengan kekurangan data: ${missingDataList.length}</li>
+                <li>Status Validitas Referensi (Kelas/Guru/Nilai): ${report.isValid ? 'Valid' : 'Tidak Valid (Ada Relasi Rusak)'}</li>
+            </ul>
+        </div>
+      </div>
+    `;
+    
+    try {
+        const html2pdf = (await import('html2pdf.js')).default;
+        await html2pdf().set({
+            margin: 15,
+            filename: `Laporan_Kekurangan_Data_${new Date().getTime()}.pdf`,
+            image: { type: 'jpeg', quality: 0.98 },
+            html2canvas: { scale: 2, useCORS: true },
+            jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
+        }).from(div).save();
+        addChangeLog('EKSPOR', 'Mengunduh Laporan Kekurangan Data Siswa dalam format PDF');
+    } catch(e) {
+        console.error(e);
+        alert('Gagal membuat PDF. Coba kembali.');
+    }
   };
 
   const handleExportYayasan = () => {
@@ -426,6 +549,12 @@ export default function DatabaseCrud({
       }
     }
 
+    // 🛡 Validasi relasi Kelas
+    if (newSiswa.kelas && !classes.includes(newSiswa.kelas)) {
+      alert(`Gagal menyimpan data! Kelas "${newSiswa.kelas}" tidak ditemukan di database. Pastikan kelas telah didaftarkan.`);
+      return;
+    }
+
     if (editingSiswa) {
       // Update existing
       const updated = students.map(s => {
@@ -575,6 +704,19 @@ export default function DatabaseCrud({
       const isDuplicate = teachers.some(t => t.nip?.replace(/\s+/g, '') === cleanedNip && (!editingGuru || t.id !== editingGuru.id));
       if (isDuplicate) {
         alert(`Gagal menyimpan data! NIP "${cleanedNip}" sudah digunakan oleh guru lain di database.\nSetiap NIP harus bersifat unik.`);
+        return;
+      }
+    }
+
+    // 🛡️ Validasi Duplikasi Wali Kelas / Guru Kelas: Cegah jika kelas tersebut sudah ditugaskan ke guru lain
+    if (newGuru.classAssigned) {
+      const existingTeacherWithClass = teachers.find(
+        t => t.classAssigned === newGuru.classAssigned && (!editingGuru || t.id !== editingGuru.id)
+      );
+      if (existingTeacherWithClass) {
+        alert(
+          `[VALIDASI GAGAL] Kelas "${newGuru.classAssigned}" sudah terisi!\nWali kelas / Guru kelas untuk kelas ini sudah ditugaskan kepada: "${existingTeacherWithClass.name}".\n\nSilakan hapus atau ubah penugasan kelas pada guru tersebut terlebih dahulu sebelum menugaskannya kepada guru ini.`
+        );
         return;
       }
     }
@@ -2185,6 +2327,25 @@ export default function DatabaseCrud({
               </label>
             </div>
 
+            {/* Paper Size Setting */}
+            <div className="mt-4 p-4 bg-white border border-slate-200 rounded-xl flex items-center justify-between">
+              <div>
+                <h5 className="font-bold text-slate-700 text-xs">Ukuran Kertas Cetak Fisik</h5>
+                <p className="text-[11px] text-slate-400 mt-0.5">Mengubah proporsi dan dimensi kertas pada komponen cetak untuk PDF dan pencetakan fisik agar tata letak tidak terpotong.</p>
+              </div>
+              <select
+                value={paperSize}
+                onChange={(e) => {
+                  const val = e.target.value as 'A4' | 'F4';
+                  onUpdatePaperSize(val);
+                }}
+                className="bg-slate-50 border border-slate-300 rounded-lg p-2 text-xs font-bold focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              >
+                <option value="A4">A4 (210 × 297 mm)</option>
+                <option value="F4">F4 / Folio (215 × 330 mm)</option>
+              </select>
+            </div>
+
             <div className="mt-6 p-4 bg-white border border-slate-200 rounded-xl">
               <h5 className="font-bold text-slate-700 text-xs mb-3">Penyesuaian Margin Cetak (mm)</h5>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -2487,17 +2648,37 @@ export default function DatabaseCrud({
             )}
           </div>
 
-          <div className="mb-4">
-            <div className="relative">
+          <div className="mb-4 flex flex-col sm:flex-row gap-3">
+            <div className="relative flex-1">
               <input
                 type="text"
                 placeholder="Cari kata kunci riwayat atau jenis perubahan..."
                 value={logSearchQuery}
                 onChange={(e) => setLogSearchQuery(e.target.value)}
-                className="w-full pl-9 pr-4 py-3 text-xs border border-slate-300 rounded-lg bg-white placeholder-slate-400 focus:outline-hidden"
+                className="w-full pl-9 pr-4 py-2.5 text-xs border border-slate-300 rounded-lg bg-white placeholder-slate-400 focus:outline-hidden"
               />
-              <Search className="absolute left-3 top-3.5 h-3.5 w-3.5 text-slate-400" />
+              <Search className="absolute left-3 top-3 h-3.5 w-3.5 text-slate-400" />
             </div>
+            <select
+              value={logActionFilter}
+              onChange={(e) => setLogActionFilter(e.target.value)}
+              className="px-3 py-2.5 text-xs border border-slate-300 rounded-lg bg-white focus:outline-hidden"
+            >
+              <option value="ALL">Semua Aksi</option>
+              <option value="TAMBAH">Tambah (Create)</option>
+              <option value="EDIT">Ubah (Update)</option>
+              <option value="HAPUS">Hapus (Delete)</option>
+            </select>
+            <select
+              value={logDateFilter}
+              onChange={(e) => setLogDateFilter(e.target.value)}
+              className="px-3 py-2.5 text-xs border border-slate-300 rounded-lg bg-white focus:outline-hidden"
+            >
+              <option value="ALL">Semua Waktu</option>
+              <option value="TODAY">Hari Ini</option>
+              <option value="WEEK">7 Hari Terakhir</option>
+              <option value="MONTH">30 Hari Terakhir</option>
+            </select>
           </div>
 
           {changeLogs.length === 0 ? (
@@ -2521,14 +2702,35 @@ export default function DatabaseCrud({
                 <tbody className="divide-y divide-slate-100">
                   {changeLogs
                     .filter(log => {
-                      if (!logSearchQuery) return true;
-                      const query = logSearchQuery.toLowerCase();
-                      return (
-                        log.type.toLowerCase().includes(query) ||
-                        log.description.toLowerCase().includes(query) ||
-                        log.timestamp.toLowerCase().includes(query) ||
-                        (log.operator && log.operator.toLowerCase().includes(query))
-                      );
+                      let matchesAction = true;
+                      if (logActionFilter !== 'ALL') {
+                        matchesAction = log.type.includes(logActionFilter);
+                      }
+                      
+                      let matchesDate = true;
+                      if (logDateFilter !== 'ALL') {
+                        // Very simple date comparison assuming "DD/MM/YYYY, HH:mm:ss" format roughly
+                        const logDate = new Date(log.timestamp.replace(/(\d{2})\/(\d{2})\/(\d{4})/, '$3-$2-$1'));
+                        const now = new Date();
+                        const diffTime = Math.abs(now.getTime() - logDate.getTime());
+                        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                        if (logDateFilter === 'TODAY') matchesDate = diffDays <= 1;
+                        if (logDateFilter === 'WEEK') matchesDate = diffDays <= 7;
+                        if (logDateFilter === 'MONTH') matchesDate = diffDays <= 30;
+                      }
+
+                      let matchesSearch = true;
+                      if (logSearchQuery) {
+                        const query = logSearchQuery.toLowerCase();
+                        matchesSearch = (
+                          log.type.toLowerCase().includes(query) ||
+                          log.description.toLowerCase().includes(query) ||
+                          log.timestamp.toLowerCase().includes(query) ||
+                          (log.operator && log.operator.toLowerCase().includes(query))
+                        );
+                      }
+                      
+                      return matchesAction && matchesDate && matchesSearch;
                     })
                     .map((log) => {
                       let badgeColor = "bg-slate-100 text-slate-700 border-slate-200";
@@ -2709,13 +2911,38 @@ export default function DatabaseCrud({
                           onClick={() => handleRestoreSnapshot(snap)}
                           className="bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 font-bold px-2.5 py-1.5 rounded-lg text-[10px] flex items-center gap-1 cursor-pointer transition-colors active:scale-95"
                           title="Restore data ke snapshot ini"
+                          disabled={isUploadingSnapshot === snap.id}
                         >
-                          <RotateCcw className="h-3 w-3 animate-spin-slow" /> Pulihkan
+                          <RotateCcw className="h-3 w-3" /> Pulihkan
+                        </button>
+                        <button
+                          onClick={() => handleUploadSnapshotToDrive(snap)}
+                          className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 font-bold px-2.5 py-1.5 rounded-lg text-[10px] flex items-center gap-1 cursor-pointer transition-colors active:scale-95"
+                          title="Upload ZIP ke Google Drive"
+                          disabled={isUploadingSnapshot === snap.id}
+                        >
+                          {isUploadingSnapshot === snap.id ? (
+                            <div className="flex items-center gap-1">
+                              <span className="h-3 w-3 rounded-full border-2 border-indigo-500 border-t-transparent animate-spin"></span>
+                              Mengunggah...
+                            </div>
+                          ) : (
+                            <><Cloud className="h-3 w-3" /> Drive</>
+                          )}
+                        </button>
+                        <button
+                          onClick={() => handleDownloadSnapshotLocally(snap)}
+                          className="bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-bold px-2.5 py-1.5 rounded-lg text-[10px] flex items-center gap-1 cursor-pointer transition-colors active:scale-95"
+                          title="Unduh backup snapshot ZIP secara lokal"
+                          disabled={isUploadingSnapshot === snap.id}
+                        >
+                          <Download className="h-3 w-3" /> Unduh ZIP
                         </button>
                         <button
                           onClick={() => handleDeleteSnapshot(snap.id)}
                           className="p-1.5 rounded-lg hover:bg-rose-50 text-slate-400 hover:text-rose-600 border border-transparent hover:border-rose-200 transition-all cursor-pointer active:scale-95"
                           title="Hapus snapshot ini"
+                          disabled={isUploadingSnapshot === snap.id}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
@@ -2748,12 +2975,18 @@ export default function DatabaseCrud({
                   </p>
                 </div>
 
-                <div className="flex-none">
+                <div className="flex-none flex flex-col sm:flex-row gap-2">
+                  <button
+                    onClick={handleDownloadMissingDataReport}
+                    className="w-full sm:w-auto bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold px-4 py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 shadow-xs transition-all active:scale-95 cursor-pointer border border-slate-300"
+                  >
+                    <Download className="h-4 w-4" /> Unduh PDF Kekurangan Data
+                  </button>
                   <button
                     onClick={handleExecuteProactiveRepair}
-                    className="w-full md:w-auto bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold px-4 py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 shadow-xs transition-all active:scale-95 cursor-pointer"
+                    className="w-full sm:w-auto bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold px-4 py-2.5 rounded-xl text-xs flex items-center justify-center gap-2 shadow-xs transition-all active:scale-95 cursor-pointer"
                   >
-                    ⚡ Jalankan Pembersihan & Perbaikan Otomatis
+                    ⚡ Jalankan Pembersihan
                   </button>
                 </div>
               </div>

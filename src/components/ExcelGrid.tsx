@@ -616,8 +616,32 @@ export default function ExcelGrid({
                 const hClass = hoverColors[idx % hoverColors.length];
                 
                 return cat.indicators.map((ind) => (
-                  <th key={ind.id} title={ind.text} className={`border-r border-b border-slate-300 px-1 text-center font-bold ${tClass} cursor-help ${hClass} sticky top-[38px] z-10 min-w-[45px]`}>
-                    {ind.id}
+                  <th key={ind.id} title={ind.text} className={`border-r border-b border-slate-300 px-0.5 text-center font-bold ${tClass} cursor-help ${hClass} sticky top-[38px] z-10 min-w-[55px]`}>
+                    <div className="flex flex-col items-center justify-between h-full py-0.5">
+                      <span className="text-[9px] font-bold">{ind.id}</span>
+                      <select
+                        onChange={(e) => {
+                          const val = e.target.value as ScoreKey | '';
+                          if (!val) return;
+                          if (confirm(`Apakah Anda yakin ingin mengisi otomatis nilai "${val}" pada Indikator ${ind.id} untuk SEMUA SISWA di Kelas ${selectedClass}?`)) {
+                            filteredStudents.forEach(s => {
+                              const nextGrades = { ...s.grades, [ind.id]: val };
+                              onUpdateStudentGrades(s.id, nextGrades);
+                            });
+                            alert(`✓ Berhasil mengisi otomatis nilai "${val}" ke semua siswa di Kelas ${selectedClass}!`);
+                          }
+                          e.target.value = ''; // Reset select
+                        }}
+                        className="text-[8px] font-bold bg-white border border-slate-200 text-slate-700 rounded h-4 px-0 w-8.5 mt-0.5 cursor-pointer text-center focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                        title={`Isi otomatis nilai indikator ${ind.id} untuk semua siswa kelas ini`}
+                      >
+                        <option value="">⚡</option>
+                        <option value="BSB">BSB</option>
+                        <option value="B">B</option>
+                        <option value="MB">MB</option>
+                        <option value="BB">BB</option>
+                      </select>
+                    </div>
                   </th>
                 ));
               })}
