@@ -3431,7 +3431,10 @@ async function generatePdfIframe(
         background-color: #ffffff !important;
       }
       .print-page {
-        display: block !important;
+        display: flex !important;
+        flex-direction: column !important;
+        justify-content: space-between !important;
+        align-items: stretch !important;
         width: ${paperWidth}mm !important;
         height: ${paperHeight}mm !important;
         padding: ${pageMargin.top}mm ${pageMargin.right}mm ${pageMargin.bottom}mm ${pageMargin.left}mm !important;
@@ -3467,6 +3470,21 @@ async function generatePdfIframe(
       }
       #rapor-pdf-content .grid-cols-3 > * {
         width: 33.333% !important;
+        flex: 1 !important;
+      }
+      #rapor-pdf-content .signature-container {
+        display: flex !important;
+        flex-direction: row !important;
+        width: 100% !important;
+        justify-content: space-between !important;
+        gap: 1.5rem !important;
+      }
+      #rapor-pdf-content .signature-container > * {
+        width: 33.333% !important;
+        flex: 1 !important;
+      }
+      #rapor-pdf-content .signature-container.grid-cols-2 > * {
+        width: 50% !important;
         flex: 1 !important;
       }
       .student-pdf-group:last-child .print-page:last-child {

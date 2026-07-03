@@ -1558,6 +1558,14 @@ export default function DatabaseCrud({
               </button>
 
               <button
+                onClick={() => csvFileInputRef.current?.click()}
+                className="bg-teal-600 hover:bg-teal-700 text-white font-bold px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
+                title="Impor daftar siswa massal dari file CSV (.csv)"
+              >
+                <Upload className="h-4 w-4" /> Impor Siswa CSV
+              </button>
+
+              <button
                 onClick={handleOpenAddWaliKelasForCurrentClass}
                 className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
                 title={`Tambah Wali Kelas baru untuk Kelas ${selectedClass}`}

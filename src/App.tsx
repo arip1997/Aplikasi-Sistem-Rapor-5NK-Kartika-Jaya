@@ -2362,6 +2362,7 @@ export default function App() {
                 const firstStudent = classStudentsRef[0];
                 if (firstStudent) {
                   setSelectedStudentId(firstStudent.id);
+                  setAutoPrintImmediately(true);
                   setAutoTriggerBatchPdf(true);
                   setViewMode('print');
                 } else {
@@ -2451,7 +2452,10 @@ export default function App() {
               }}
               autoTriggerBatchPdf={autoTriggerBatchPdf}
               autoPrintImmediately={autoPrintImmediately}
-              onResetAutoTrigger={() => setAutoTriggerBatchPdf(false)}
+              onResetAutoTrigger={() => {
+                setAutoTriggerBatchPdf(false);
+                setAutoPrintImmediately(false);
+              }}
               classes={classes}
               selectedClass={selectedClass}
               onClassChange={(nextCls) => {

@@ -47,6 +47,63 @@ export default function EvaluationForm({
   // Focus Tracker for active Indicator card keyboard operations
   const [focusedIndicatorId, setFocusedIndicatorId] = useState<string | null>(null);
 
+  // State and persistence for teacher note templates
+  const [customTemplates, setCustomTemplates] = useState<{ kesimpulan: string[]; catatanWali: string[] }>(() => {
+    try {
+      const saved = localStorage.getItem('rapor_5nk_custom_templates');
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    return {
+      kesimpulan: [
+        "Ananda menunjukkan keteladanan luar biasa dalam sikap nasionalisme, kemandirian, dan kedisiplinan beribadah sehari-hari.",
+        "Sangat aktif berpartisipasi dalam kegiatan sosial, menunjukkan budi pekerti luhur serta toleransi yang kuat terhadap perbedaan.",
+        "Mengembangkan keterampilan kolaboratif yang hebat, kreatif dalam memecahkan masalah, serta ulet menyelesaikan tugas-tugas kelompok.",
+        "Menunjukkan kemajuan yang sangat pesat dalam kedisiplinan belajar serta kepedulian sosial di lingkungan sekolah.",
+        "Selalu bersikap sopan, mengedepankan etika komunikasi digital yang baik, serta menghargai pendapat orang lain."
+      ],
+      catatanWali: [
+        "Pertahankan prestasi hebat ini! Teruslah menginspirasi teman-teman di sekitarmu dengan kerendahan hatimu.",
+        "Bapak/Ibu guru sangat bangga dengan perkembangan belajarmu. Teruslah asah potensimu tanpa ragu!",
+        "Semangat belajarmu adalah kunci kesuksesanmu. Terus berjuang dan jangan mudah menyerah, raih mimpi-mimpimu!",
+        "Tingkatkan terus keaktifanmu dalam diskusi kelas. Kamu memiliki potensi besar untuk menjadi pemimpin masa depan.",
+        "Kedisiplinan dan kesantunanmu adalah modal berharga. Tetap rendah hati dan bersahaja dalam bergaul."
+      ]
+    };
+  });
+
+  const handleSaveAsTemplate = (type: 'kesimpulan' | 'catatanWali', text: string) => {
+    if (!text || !text.trim()) {
+      alert("Teks untuk template tidak boleh kosong!");
+      return;
+    }
+    const cleanText = text.trim();
+    if (customTemplates[type].includes(cleanText)) {
+      alert("Template serupa sudah ada dalam daftar.");
+      return;
+    }
+    const nextTemplates = {
+      ...customTemplates,
+      [type]: [...customTemplates[type], cleanText]
+    };
+    setCustomTemplates(nextTemplates);
+    localStorage.setItem('rapor_5nk_custom_templates', JSON.stringify(nextTemplates));
+    alert("✓ Berhasil menyimpan teks ini sebagai template baru!");
+  };
+
+  const handleDeleteTemplate = (type: 'kesimpulan' | 'catatanWali', indexToDelete: number) => {
+    const list = customTemplates[type].filter((_, i) => i !== indexToDelete);
+    const nextTemplates = {
+      ...customTemplates,
+      [type]: list
+    };
+    setCustomTemplates(nextTemplates);
+    localStorage.setItem('rapor_5nk_custom_templates', JSON.stringify(nextTemplates));
+  };
+
   // Sync focus when active category changes
   const activeCategory = categories[activeCategoryIndex];
 
@@ -625,6 +682,58 @@ export default function EvaluationForm({
                       placeholder="Tulis uraian kesimpulan perilaku siswa..."
                       className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-sans leading-relaxed focus:outline-none focus:ring-1 focus:ring-emerald-500"
                     />
+
+                    {/* Template Catatan Cepat - Uraian Kesimpulan */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 mt-1 bg-emerald-50/30 p-2 rounded-lg border border-emerald-100/60 text-[11px]">
+                      <div className="flex flex-wrap gap-1.5 items-center">
+                        <span className="text-[10px] font-bold text-emerald-800 uppercase">💡 Template Cepat:</span>
+                        <select
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (val) {
+                              handleCommentChange('kesimpulan', val);
+                              e.target.value = ''; // Reset select
+                            }
+                          }}
+                          className="bg-white border border-slate-200 rounded text-[10px] py-1 px-1.5 font-semibold text-slate-700 focus:outline-none focus:ring-1 focus:ring-emerald-500 max-w-[200px] sm:max-w-[320px] truncate"
+                        >
+                          <option value="">-- Pilih Template Kesimpulan --</option>
+                          {customTemplates.kesimpulan.map((tpl, i) => (
+                            <option key={i} value={tpl}>
+                              {i + 1}. {tpl.length > 60 ? `${tpl.slice(0, 60)}...` : tpl}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleSaveAsTemplate('kesimpulan', student.kesimpulan || '')}
+                          className="text-[10px] text-emerald-700 font-bold hover:underline cursor-pointer flex items-center gap-1"
+                          title="Simpan ulasan di atas sebagai template baru Anda"
+                        >
+                          💾 Simpan Ulasan Ini
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const ans = prompt(`Ketik nomor template yang ingin dihapus (1 - ${customTemplates.kesimpulan.length}):`);
+                            if (ans) {
+                              const num = parseInt(ans);
+                              if (num >= 1 && num <= customTemplates.kesimpulan.length) {
+                                handleDeleteTemplate('kesimpulan', num - 1);
+                                alert("✓ Template kesimpulan berhasil dihapus.");
+                              } else {
+                                alert("Nomor template tidak valid.");
+                              }
+                            }
+                          }}
+                          className="text-[10px] text-rose-600 hover:text-rose-800 font-bold hover:underline cursor-pointer"
+                        >
+                          🗑️ Hapus
+                        </button>
+                      </div>
+                    </div>
                   </div>
  
                   {/* Catatan wali kelas */}
@@ -649,7 +758,60 @@ export default function EvaluationForm({
                       placeholder="Uraian motivasi bagi perkembangan siswa..."
                       className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 font-sans leading-relaxed focus:outline-none focus:ring-1 focus:ring-emerald-500"
                     />
+
+                    {/* Template Catatan Cepat - Catatan Wali Kelas */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 mt-1 bg-emerald-50/30 p-2 rounded-lg border border-emerald-100/60 text-[11px]">
+                      <div className="flex flex-wrap gap-1.5 items-center">
+                        <span className="text-[10px] font-bold text-emerald-800 uppercase">💡 Template Cepat:</span>
+                        <select
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (val) {
+                              handleCommentChange('catatanWali', val);
+                              e.target.value = ''; // Reset select
+                            }
+                          }}
+                          className="bg-white border border-slate-200 rounded text-[10px] py-1 px-1.5 font-semibold text-slate-700 focus:outline-none focus:ring-1 focus:ring-emerald-500 max-w-[200px] sm:max-w-[320px] truncate"
+                        >
+                          <option value="">-- Pilih Template Motivasi --</option>
+                          {customTemplates.catatanWali.map((tpl, i) => (
+                            <option key={i} value={tpl}>
+                              {i + 1}. {tpl.length > 60 ? `${tpl.slice(0, 60)}...` : tpl}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleSaveAsTemplate('catatanWali', student.catatanWali || '')}
+                          className="text-[10px] text-emerald-700 font-bold hover:underline cursor-pointer flex items-center gap-1"
+                          title="Simpan catatan motivasi di atas sebagai template baru Anda"
+                        >
+                          💾 Simpan Catatan Ini
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const ans = prompt(`Ketik nomor template yang ingin dihapus (1 - ${customTemplates.catatanWali.length}):`);
+                            if (ans) {
+                              const num = parseInt(ans);
+                              if (num >= 1 && num <= customTemplates.catatanWali.length) {
+                                handleDeleteTemplate('catatanWali', num - 1);
+                                alert("✓ Template catatan wali berhasil dihapus.");
+                              } else {
+                                alert("Nomor template tidak valid.");
+                              }
+                            }
+                          }}
+                          className="text-[10px] text-rose-600 hover:text-rose-800 font-bold hover:underline cursor-pointer"
+                        >
+                          🗑️ Hapus
+                        </button>
+                      </div>
+                    </div>
                   </div>
+
 
                   {/* Catatan Orang Tua */}
                   <div className="flex flex-col gap-1.5 text-xs">
