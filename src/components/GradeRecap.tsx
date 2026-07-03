@@ -836,6 +836,9 @@ export default function GradeRecap({
                       stroke="#4f46e5" 
                       fill="#818cf8" 
                       fillOpacity={0.35} 
+                      isAnimationActive={true}
+                      animationDuration={800}
+                      animationEasing="ease-out"
                     />
                     <Radar 
                       name="Rata-rata Kelas" 
@@ -843,6 +846,9 @@ export default function GradeRecap({
                       stroke="#10b981" 
                       fill="#34d399" 
                       fillOpacity={0.15} 
+                      isAnimationActive={true}
+                      animationDuration={800}
+                      animationEasing="ease-out"
                     />
                     <Tooltip
                       contentStyle={{ backgroundColor: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '8px', fontSize: '11px' }}

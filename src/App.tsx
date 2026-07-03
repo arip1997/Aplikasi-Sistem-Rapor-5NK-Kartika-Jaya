@@ -73,8 +73,10 @@ import {
   DownloadCloud,
   Download,
   Loader2,
-  Menu
-, AlertTriangle } from 'lucide-react';
+  Menu,
+  AlertTriangle,
+  ArrowUpDown
+} from 'lucide-react';
 
 export default function App() {
   const [isPending, startTransition] = useTransition();
@@ -275,6 +277,8 @@ export default function App() {
   const [isOnline, setIsOnline] = useState<boolean>(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [serverVersion, setServerVersion] = useState<string | null>(null);
 
+  const [isQuickActionsOpen, setIsQuickActionsOpen] = useState<boolean>(false);
+
   // AI & Sync History state overrides
   const [isGeneratingAiComments, setIsGeneratingAiComments] = useState<boolean>(false);
   const [isSyncHistoryOpen, setIsSyncHistoryOpen] = useState<boolean>(false);
@@ -282,6 +286,7 @@ export default function App() {
   const [isQuickSearchOpen, setIsQuickSearchOpen] = useState<boolean>(false);
   const [quickSearchQuery, setQuickSearchQuery] = useState<string>('');
   const [searchSortBy, setSearchSortBy] = useState<'NAME' | 'NIS'>('NAME');
+  const [classSortBy, setClassSortBy] = useState<'NAME' | 'NIS'>('NAME');
   const [searchClassFilter, setSearchClassFilter] = useState<string>('ALL');
   const [recentSearches, setRecentSearches] = useState<Student[]>(() => {
     try {
@@ -320,6 +325,40 @@ export default function App() {
     setShowFooterDate(val);
     localStorage.setItem('rapor_5nk_show_footer_date', String(val));
   };
+
+  // Customizable Quick Actions state & storage sync listeners
+  const [quickActions, setQuickActions] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('rapor_quick_actions');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } catch(e) {}
+    return ['print', 'excel', 'contrast'];
+  });
+
+  useEffect(() => {
+    const syncActions = () => {
+      try {
+        const saved = localStorage.getItem('rapor_quick_actions');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setQuickActions(parsed);
+          }
+        }
+      } catch(e) {}
+    };
+    window.addEventListener('storage', syncActions);
+    window.addEventListener('quickActionsChanged', syncActions);
+    return () => {
+      window.removeEventListener('storage', syncActions);
+      window.removeEventListener('quickActionsChanged', syncActions);
+    };
+  }, []);
 
   // Undo / Redo History States
   const [studentsHistory, setStudentsHistory] = useState<Student[][]>([]);
@@ -1017,7 +1056,15 @@ export default function App() {
     signatureUrl: ''
   };
 
-  const filteredStudents = students.filter(s => s.kelas === selectedClass);
+  const filteredStudents = [...students]
+    .filter(s => s.kelas === selectedClass)
+    .sort((a, b) => {
+      if (classSortBy === 'NIS') {
+        return (a.nis || '').localeCompare(b.nis || '', 'id', { numeric: true });
+      } else {
+        return (a.name || '').toLowerCase().localeCompare((b.name || '').toLowerCase(), 'id');
+      }
+    });
   const studentsWithMissingData = filteredStudents.filter(s => !s.nis || !s.gender || !s.kesimpulan?.trim() || !s.catatanWali?.trim());
   const selectedStudent = students.find(s => s.id === selectedStudentId) || null;
 
@@ -1520,13 +1567,31 @@ export default function App() {
 
       {/* Alert banner */}
       {alert && (
-        <div className={`p-4 font-semibold text-xs text-center border-b no-print animate-in slide-in-from-top duration-200 flex justify-center items-center gap-2 ${
-          alert.type === 'success' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' 
-          : alert.type === 'error' ? 'bg-rose-50 text-rose-800 border-rose-200'
-          : 'bg-blue-50 text-blue-800 border-blue-200'
-        }`}>
-          <Info className="h-4 w-4 flex-none" />
-          <span>{alert.message}</span>
+        <div className="bg-slate-50 border-b border-slate-200/60 no-print">
+          <div className="max-w-7xl mx-auto px-4 py-2.5">
+            <div className={`rounded-xl border p-2 px-4 text-xs font-bold flex justify-between items-center gap-2 animate-in slide-in-from-top-1 duration-300 ${
+              alert.type === 'success' ? 'bg-emerald-500/5 text-emerald-800 border-emerald-500/20' 
+              : alert.type === 'error' ? 'bg-rose-500/5 text-rose-800 border-rose-500/20'
+              : 'bg-blue-500/5 text-blue-800 border-blue-500/20'
+            }`}>
+              <div className="flex items-center gap-2.5">
+                <span className={`p-1 rounded-lg ${
+                  alert.type === 'success' ? 'bg-emerald-500/10 text-emerald-600'
+                  : alert.type === 'error' ? 'bg-rose-500/10 text-rose-600'
+                  : 'bg-blue-500/10 text-blue-600'
+                }`}>
+                  <Info className="h-3.5 w-3.5" />
+                </span>
+                <span>{alert.message}</span>
+              </div>
+              <button 
+                onClick={() => setAlert(null)}
+                className="p-1 rounded-lg text-slate-450 hover:text-slate-600 hover:bg-slate-100 transition-all cursor-pointer"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1785,15 +1850,15 @@ export default function App() {
                 className="flex flex-col gap-4 flex-1 h-auto md:h-full overflow-visible md:overflow-hidden print:overflow-visible no-print"
               >
               {studentsWithMissingData.length > 0 && (
-                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center justify-between shadow-sm">
-                  <div className="flex items-center gap-3">
-                    <div className="bg-amber-100 p-1.5 rounded-full">
-                      <AlertTriangle className="h-4 w-4 text-amber-600" />
+                <div className="bg-gradient-to-r from-amber-500/5 to-amber-600/5 border border-amber-500/15 rounded-2xl p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs animate-in slide-in-from-top-2 duration-300">
+                  <div className="flex items-start gap-3">
+                    <div className="bg-amber-500/10 p-2 rounded-xl text-amber-600 mt-0.5 shrink-0">
+                      <AlertTriangle className="h-4 w-4 animate-pulse" />
                     </div>
                     <div>
-                      <p className="text-xs font-bold text-amber-800">Data Siswa Belum Lengkap ({studentsWithMissingData.length} siswa)</p>
-                      <p className="text-[10px] text-amber-700 mt-0.5 font-sans">
-                        Beberapa siswa memiliki data NIS, Jenis Kelamin, atau Ulasan Rapor yang masih kosong.
+                      <p className="text-xs font-bold text-amber-900 tracking-tight">Data Profil Siswa Belum Lengkap ({studentsWithMissingData.length} siswa)</p>
+                      <p className="text-[10px] text-amber-700/80 mt-0.5 leading-relaxed font-medium">
+                        Beberapa siswa memiliki data NIS, Jenis Kelamin, atau Ulasan Rapor yang masih kosong. Lengkapi sekarang agar cetakan dokumen rapor Anda rapi dan sempurna.
                       </p>
                     </div>
                   </div>
@@ -1801,12 +1866,17 @@ export default function App() {
                     onClick={() => {
                       const firstMissing = studentsWithMissingData[0];
                       setSelectedStudentId(firstMissing.id);
-                      const el = document.getElementById(`edit-kesimpulan`);
-                      if (el) el.focus();
+                      setTimeout(() => {
+                        const el = document.getElementById(`edit-kesimpulan`);
+                        if (el) {
+                          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                          el.focus();
+                        }
+                      }, 100);
                     }}
-                    className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold rounded-lg shadow-sm transition-colors flex items-center gap-1.5"
+                    className="px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white text-xs font-extrabold rounded-xl transition-all cursor-pointer shadow-xs hover:shadow hover:scale-[1.02] active:scale-[0.98] shrink-0 w-full sm:w-auto text-center"
                   >
-                    <span>Lengkapi Sekarang</span>
+                    Lengkapi Sekarang
                   </button>
                 </div>
               )}
@@ -2039,37 +2109,90 @@ export default function App() {
             </div>
             
             {/* Quick Actions Floating Button */}
-            <div className="fixed bottom-6 right-6 z-50 group">
-              <button className="h-12 w-12 bg-indigo-600 hover:bg-indigo-700 text-white rounded-full shadow-lg shadow-indigo-600/30 flex items-center justify-center transition-transform group-hover:scale-110 active:scale-95">
+            <div 
+              className="fixed bottom-6 right-6 z-50 group"
+              onMouseEnter={() => setIsQuickActionsOpen(true)}
+              onMouseLeave={() => setIsQuickActionsOpen(false)}
+            >
+              <button 
+                className="h-12 w-12 bg-indigo-600 hover:bg-indigo-700 text-white rounded-full shadow-lg shadow-indigo-600/30 flex items-center justify-center transition-all duration-300 group-hover:scale-110 active:scale-95 cursor-pointer relative"
+                onClick={() => setIsQuickActionsOpen(!isQuickActionsOpen)}
+              >
                 <span className="text-xl">⚡</span>
               </button>
-              <div className="absolute bottom-16 right-0 flex-col gap-2 mb-2 w-48 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-all translate-y-4 group-hover:translate-y-0 hidden group-hover:flex">
-                <button 
-                  onClick={() => {
-                    const classStudentsRef = students.filter(s => s.kelas === selectedClass);
-                    const firstStudent = classStudentsRef[0];
-                    if (firstStudent) {
-                      setSelectedStudentId(firstStudent.id);
-                      setAutoTriggerBatchPdf(true);
-                      setViewMode('print');
-                    } else {
-                      triggerAlert('error', "Tidak ada siswa terdaftar di dalam kelas ini untuk diunduh!");
-                    }
-                  }}
-                  className="w-full text-left px-4 py-2 bg-white text-slate-700 hover:bg-indigo-50 border border-slate-200 rounded-xl shadow-lg shadow-slate-200/50 text-xs font-bold transition-colors flex items-center gap-2">
-                  <Printer className="h-4 w-4 text-indigo-600" /> Bulk Print Current Class
-                </button>
-                <button 
-                  onClick={() => exportClassToExcel(filteredStudents, selectedClass, activeWaliKelas.name, categories)}
-                  className="w-full text-left px-4 py-2 bg-white text-slate-700 hover:bg-emerald-50 border border-slate-200 rounded-xl shadow-lg shadow-slate-200/50 text-xs font-bold transition-colors flex items-center gap-2">
-                  <FileSpreadsheet className="h-4 w-4 text-emerald-600" /> Download Class Excel
-                </button>
-                <button 
-                  onClick={() => setIsHighContrast(!isHighContrast)}
-                  className="w-full text-left px-4 py-2 bg-white text-slate-700 hover:bg-amber-50 border border-slate-200 rounded-xl shadow-lg shadow-slate-200/50 text-xs font-bold transition-colors flex items-center gap-2">
-                  <span className="text-amber-600 text-sm">◐</span> Toggle High Contrast Mode
-                </button>
-              </div>
+
+              <AnimatePresence>
+                {isQuickActionsOpen && (
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.8, y: 15 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.85, y: 10 }}
+                    transition={{ type: 'spring', stiffness: 350, damping: 22 }}
+                    className="absolute bottom-16 right-0 flex flex-col gap-2 mb-1 w-52 z-50"
+                  >
+                    {quickActions.map(actionId => {
+                      if (actionId === 'print') {
+                        return (
+                          <button 
+                            key="print"
+                            onClick={() => {
+                              const classStudentsRef = students.filter(s => s.kelas === selectedClass);
+                              const firstStudent = classStudentsRef[0];
+                              if (firstStudent) {
+                                setSelectedStudentId(firstStudent.id);
+                                setAutoTriggerBatchPdf(true);
+                                setViewMode('print');
+                              } else {
+                                triggerAlert('error', "Tidak ada siswa terdaftar di dalam kelas ini untuk diunduh!");
+                              }
+                            }}
+                            className="w-full text-left px-3.5 py-2.5 bg-white text-slate-800 hover:bg-indigo-50 border border-slate-200 rounded-xl shadow-lg shadow-slate-200/40 text-xs font-bold transition-all duration-200 flex items-center gap-2 cursor-pointer hover:-translate-y-0.5"
+                          >
+                            <Printer className="h-4 w-4 text-indigo-600 shrink-0" /> Cetak Massal Kelas
+                          </button>
+                        );
+                      }
+                      if (actionId === 'excel') {
+                        return (
+                          <button 
+                            key="excel"
+                            onClick={() => exportClassToExcel(filteredStudents, selectedClass, activeWaliKelas.name, categories)}
+                            className="w-full text-left px-3.5 py-2.5 bg-white text-slate-800 hover:bg-emerald-50 border border-slate-200 rounded-xl shadow-lg shadow-slate-200/40 text-xs font-bold transition-all duration-200 flex items-center gap-2 cursor-pointer hover:-translate-y-0.5"
+                          >
+                            <FileSpreadsheet className="h-4 w-4 text-emerald-600 shrink-0" /> Unduh Excel Kelas
+                          </button>
+                        );
+                      }
+                      if (actionId === 'contrast') {
+                        return (
+                          <button 
+                            key="contrast"
+                            onClick={() => setIsHighContrast(!isHighContrast)}
+                            className="w-full text-left px-3.5 py-2.5 bg-white text-slate-800 hover:bg-amber-50 border border-slate-200 rounded-xl shadow-lg shadow-slate-200/40 text-xs font-bold transition-all duration-200 flex items-center gap-2 cursor-pointer hover:-translate-y-0.5"
+                          >
+                            <span className="text-amber-600 text-sm font-black shrink-0">◐</span> Mode Kontras Tinggi
+                          </button>
+                        );
+                      }
+                      if (actionId === 'sort') {
+                        return (
+                          <button 
+                            key="sort"
+                            onClick={() => {
+                              setClassSortBy(prev => prev === 'NAME' ? 'NIS' : 'NAME');
+                              triggerToast('success', `Daftar kelas diurutkan berdasarkan ${classSortBy === 'NAME' ? 'NIS' : 'Nama siswa'}!`);
+                            }}
+                            className="w-full text-left px-3.5 py-2.5 bg-white text-slate-800 hover:bg-pink-50 border border-slate-200 rounded-xl shadow-lg shadow-slate-200/40 text-xs font-bold transition-all duration-200 flex items-center gap-2 cursor-pointer hover:-translate-y-0.5"
+                          >
+                            <ArrowUpDown className="h-4 w-4 text-pink-600 shrink-0" /> Urut: {classSortBy === 'NAME' ? 'Urut NIS' : 'Urut Nama'}
+                          </button>
+                        );
+                      }
+                      return null;
+                    })}
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           </div>
         </motion.div>
@@ -2592,39 +2715,67 @@ export default function App() {
               })()}
             </div>
             
-            {/* Recent Searches */}
-            {recentSearches.length > 0 && (
-              <div className="border-t border-slate-100 p-2 bg-slate-50/50">
-                <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest px-2 py-1 flex items-center gap-1.5">
-                  <span>⏱️</span>
-                  <span>Riwayat Pencarian Terakhir</span>
-                </p>
-                <div className="grid grid-cols-1 gap-0.5 mt-1">
-                  {recentSearches.map(s => (
-                    <button
-                      key={s.id}
-                      onClick={() => {
-                        setRecentSearches(prev => [s, ...prev.filter(recent => recent.id !== s.id)].slice(0, 5));
-                        setSelectedClass(s.kelas);
-                        setSelectedStudentId(s.id);
-                        setIsQuickSearchOpen(false);
-                        setQuickSearchQuery('');
-                        if (viewMode === 'crud_manager' || viewMode === 'rekap_nilai') {
-                          setViewMode('spreadsheet');
-                        }
-                        triggerAlert('success', `✓ Terpilih: ${s.name} (Kelas ${s.kelas})`);
-                      }}
-                      className="w-full text-left px-3 py-1.5 text-[10.5px] hover:bg-indigo-50/80 hover:text-indigo-700 rounded-md transition-colors font-semibold text-slate-600 flex items-center justify-between cursor-pointer"
-                    >
-                      <span className="truncate max-w-[280px]">{s.name}</span>
-                      <span className="text-[8.5px] font-mono text-slate-400 bg-slate-100 border border-slate-200/50 px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider">
-                        Kelas {s.kelas} • NIS {s.nis}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
+             {/* Recent Searches */}
+             {recentSearches.length > 0 && (
+               <div className="border-t border-slate-100 p-2 bg-slate-50/50">
+                 <div className="flex items-center justify-between px-2 py-1">
+                   <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
+                     <span>⏱️</span>
+                     <span>Riwayat Pencarian Terakhir</span>
+                   </p>
+                   <button
+                     onClick={(e) => {
+                       e.stopPropagation();
+                       if (window.confirm("Hapus seluruh riwayat pencarian siswa?")) {
+                         setRecentSearches([]);
+                         triggerToast('success', "Riwayat pencarian berhasil dihapus!");
+                       }
+                     }}
+                     className="text-[9px] text-rose-600 hover:text-rose-700 hover:underline font-extrabold cursor-pointer transition-colors"
+                   >
+                     Hapus Semua
+                   </button>
+                 </div>
+                 <div className="grid grid-cols-1 gap-0.5 mt-1">
+                   {recentSearches.map(s => (
+                     <div
+                       key={s.id}
+                       className="group/item flex items-center justify-between rounded-md hover:bg-indigo-50/80 pr-1.5 transition-colors"
+                     >
+                       <button
+                         onClick={() => {
+                           setRecentSearches(prev => [s, ...prev.filter(recent => recent.id !== s.id)].slice(0, 5));
+                           setSelectedClass(s.kelas);
+                           setSelectedStudentId(s.id);
+                           setIsQuickSearchOpen(false);
+                           setQuickSearchQuery('');
+                           if (viewMode === 'crud_manager' || viewMode === 'rekap_nilai') {
+                             setViewMode('spreadsheet');
+                           }
+                           triggerAlert('success', `✓ Terpilih: ${s.name} (Kelas ${s.kelas})`);
+                         }}
+                         className="flex-1 text-left px-3 py-1.5 text-[10.5px] font-semibold text-slate-600 flex items-center justify-between cursor-pointer"
+                       >
+                         <span className="truncate max-w-[200px]">{s.name}</span>
+                         <span className="text-[8.5px] font-mono text-slate-400 bg-slate-100 border border-slate-200/50 px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider">
+                           Kelas {s.kelas} • NIS {s.nis}
+                         </span>
+                       </button>
+                       <button
+                         onClick={(e) => {
+                           e.stopPropagation();
+                           setRecentSearches(prev => prev.filter(r => r.id !== s.id));
+                         }}
+                         className="p-1 text-slate-450 hover:text-rose-600 hover:bg-rose-50 rounded-md cursor-pointer transition-all opacity-0 group-hover/item:opacity-100 flex-none"
+                         title="Hapus riwayat ini"
+                       >
+                         <X className="h-3 w-3" />
+                       </button>
+                     </div>
+                   ))}
+                 </div>
+               </div>
+             )}
             
             {/* Modal footer shortcut help text */}
             <div className="bg-slate-50 border-t border-slate-100 px-4 py-2 flex justify-between text-[9.5px] text-slate-400 font-medium">

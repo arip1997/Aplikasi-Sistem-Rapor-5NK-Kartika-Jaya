@@ -347,7 +347,7 @@ export default function RaporCetak({
         windowWidth: 1200,
         backgroundColor: '#ffffff',
         onclone: (clonedDoc: Document) => {
-          injectPrintStyles(clonedDoc, isLandscape, pageMargin);
+          injectPrintStyles(clonedDoc, isLandscape, pageMargin, paperSize);
           if (clonedDoc.defaultView) {
             const origClonedGcs = clonedDoc.defaultView.getComputedStyle;
             
@@ -3150,12 +3150,40 @@ function toSafeRgb(val, fallback = 'transparent') {
 }
 
 function loadIndexCssSynchronously(): string {
+  // First, extract from document.styleSheets for bulletproof actual rendered CSS (Vite dev/prod compliant)
+  let cssText = '';
+  try {
+    for (const sheet of Array.from(document.styleSheets)) {
+      try {
+        const rules = Array.from(sheet.cssRules);
+        for (const rule of rules) {
+          cssText += rule.cssText + '\n';
+        }
+      } catch (e) {
+        // Silently skip cross-origin restrictions
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to extract active CSS from document.styleSheets:', err);
+  }
+
+  if (cssText.trim().length > 0) {
+    return cssText;
+  }
+
+  // Fallback to fetch if stylesheets loop returned nothing
   try {
     const xhr = new XMLHttpRequest();
-    xhr.open('GET', '/src/index.css', false); // false means synchronous
+    xhr.open('GET', '/src/index.css', false);
     xhr.send(null);
     if (xhr.status === 200) {
-      return xhr.responseText;
+      const resp = xhr.responseText;
+      // If it looks like Vite dev JS module, don't use it
+      if (resp.includes('import') || resp.includes('__vite__')) {
+        console.warn('Fetched index.css is a Vite dev JS module. Stylesheet loop is preferred.');
+      } else {
+        return resp;
+      }
     }
   } catch (err) {
     console.warn('[loadIndexCssSynchronously] Gagal memuat index.css secara sinkron:', err);

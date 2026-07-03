@@ -32,7 +32,8 @@ import {
   AlertCircle,
   Camera,
   Database,
-  Cloud
+  Cloud,
+  Copy
 } from 'lucide-react';
 
 interface DatabaseCrudProps {
@@ -374,6 +375,25 @@ export default function DatabaseCrud({
   const [isAddClassModalOpen, setIsAddClassModalOpen] = useState(false);
   const [newClassName, setNewClassName] = useState('');
 
+  // Custom states for class duplication
+  const [isDuplicateClassModalOpen, setIsDuplicateClassModalOpen] = useState(false);
+  const [dupSourceClass, setDupSourceClass] = useState('');
+  const [dupTargetClass, setDupTargetClass] = useState('');
+
+  // Quick action customization state
+  const [quickActions, setQuickActions] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('rapor_quick_actions');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } catch(e) {}
+    return ['print', 'excel', 'contrast'];
+  });
+
   // Password-based Encrypted JSON backup controls
   const [backupPassword, setBackupPassword] = useState('');
   const [restorePassword, setRestorePassword] = useState('');
@@ -441,6 +461,7 @@ export default function DatabaseCrud({
         setIsGuruFormOpen(false);
         setIsIndicatorFormOpen(false);
         setIsAddClassModalOpen(false);
+        setIsDuplicateClassModalOpen(false);
         setIsCsvMappingOpen(false);
         setEditingSiswa(null);
         setEditingGuru(null);
@@ -677,6 +698,58 @@ export default function DatabaseCrud({
     addChangeLog('TAMBAH_KELAS', `Menambahkan kelas baru "${trimmed}"`);
     setIsAddClassModalOpen(false);
     setNewClassName('');
+  };
+
+  const handleDuplicateClassSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    const source = dupSourceClass;
+    const target = dupTargetClass.trim().toUpperCase();
+
+    if (!source) {
+      alert("Silakan pilih kelas asal!");
+      return;
+    }
+    if (!target) {
+      alert("Nama kelas baru wajib diisi!");
+      return;
+    }
+    if (classes.includes(target)) {
+      alert(`VALIDASI GAGAL:\nKelas "${target}" sudah terdaftar di database!`);
+      return;
+    }
+
+    // Find all students in source class
+    const sourceStudents = students.filter(s => s.kelas === source);
+    if (sourceStudents.length === 0) {
+      alert(`VALIDASI GAGAL:\nTidak ditemukan siswa di kelas asal "${source}" untuk diduplikasi!`);
+      return;
+    }
+
+    // Add target class to classes list
+    const nextClasses = [...classes, target];
+    onUpdateClasses(nextClasses);
+
+    // Duplicate students with reset evaluations for the new school year setup
+    const duplicatedStudents: Student[] = sourceStudents.map((s, idx) => ({
+      ...s,
+      id: `STUDENT_${Date.now()}_${idx}`,
+      kelas: target,
+      grades: {},
+      kesimpulan: '',
+      catatanWali: '',
+      catatanOrangTua: '',
+      completed: false,
+      printStatus: false
+    }));
+
+    onUpdateStudents([...students, ...duplicatedStudents]);
+    addChangeLog('DUPLIKASI_KELAS', `Menduplikasi struktur ${duplicatedStudents.length} siswa dari kelas "${source}" ke kelas baru "${target}"`);
+
+    alert(`[SUKSES] Berhasil menduplikasi struktur kelas "${source}" ke kelas baru "${target}"!\n\n${duplicatedStudents.length} siswa telah dibuat dengan NIS dan data diri yang sama, namun seluruh rekam nilai dan catatan wali kelas telah dikosongkan agar siap untuk setup tahun ajaran baru.`);
+    
+    setIsDuplicateClassModalOpen(false);
+    setDupSourceClass('');
+    setDupTargetClass('');
   };
 
   const handleOpenEditGuru = (g: Teacher) => {
@@ -1455,6 +1528,14 @@ export default function DatabaseCrud({
                 title="Tambah Kelas baru ke daftar sekolah"
               >
                 <Building2 className="h-4 w-4" /> Tambah Kelas
+              </button>
+
+              <button
+                onClick={() => setIsDuplicateClassModalOpen(true)}
+                className="bg-pink-600 hover:bg-pink-700 text-white font-bold px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
+                title="Duplikasi struktur siswa dari satu kelas ke kelas baru untuk mempercepat setup tahun ajaran baru"
+              >
+                <Copy className="h-4 w-4" /> Duplikasi Kelas
               </button>
             </div>
           </div>
@@ -2619,6 +2700,85 @@ export default function DatabaseCrud({
               </div>
             </div>
           </div>
+
+          {/* SEPARATOR */}
+          <div className="border-t border-slate-200/60 my-6"></div>
+
+          {/* QUICK ACTIONS CUSTOMIZER */}
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-5">
+            <div className="mb-4">
+              <h5 className="font-bold text-slate-850 text-xs uppercase tracking-wider flex items-center gap-2">
+                <span className="text-indigo-600 font-extrabold text-sm">⚙️</span>
+                KUSTOMISASI TOMBOL TINDAKAN CEPAT (QUICK ACTIONS)
+              </h5>
+              <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+                Tentukan tepat <strong>3 tindakan cepat</strong> yang akan muncul ketika Anda mengarahkan kursor ke tombol melayang (Quick Actions) di sudut kanan bawah halaman. Pilihan Anda akan disimpan secara otomatis.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+              {[
+                { id: 'print', label: 'Cetak Massal Kelas', desc: 'Membuka dialog cetak massal rapor PDF seluruh siswa di kelas saat ini.', icon: '🖨️' },
+                { id: 'excel', label: 'Unduh Excel Kelas', desc: 'Mengekspor data rekapitulasi nilai seluruh siswa kelas ke file Excel .xlsx.', icon: '📊' },
+                { id: 'contrast', label: 'Mode Kontras Tinggi', desc: 'Mengubah skema warna antarmuka aplikasi menjadi kontras tinggi hitam-putih.', icon: '◐' },
+                { id: 'sort', label: 'Urutkan Daftar Siswa', desc: 'Mengurutkan daftar siswa berdasarkan nama atau NIS secara alfabetis instan.', icon: '🔀' }
+              ].map(act => {
+                const isActive = quickActions.includes(act.id);
+                return (
+                  <div 
+                    key={act.id}
+                    onClick={() => {
+                      let next: string[];
+                      if (isActive) {
+                        if (quickActions.length <= 1) {
+                          alert("Minimal harus ada 1 tindakan cepat yang aktif!");
+                          return;
+                        }
+                        next = quickActions.filter(id => id !== act.id);
+                      } else {
+                        if (quickActions.length >= 3) {
+                          alert("Maksimal hanya 3 tindakan cepat yang dapat diaktifkan sekaligus! Silakan nonaktifkan salah satu tindakan terlebih dahulu.");
+                          return;
+                        }
+                        next = [...quickActions, act.id];
+                      }
+                      setQuickActions(next);
+                      localStorage.setItem('rapor_quick_actions', JSON.stringify(next));
+                      window.dispatchEvent(new Event('storage'));
+                      // Dispatch custom event for immediate response in current window context
+                      window.dispatchEvent(new CustomEvent('quickActionsChanged'));
+                    }}
+                    className={`border rounded-xl p-4 flex flex-col justify-between cursor-pointer transition-all hover:shadow-sm select-none ${
+                      isActive 
+                        ? 'bg-indigo-50/60 border-indigo-300 ring-1 ring-indigo-300' 
+                        : 'bg-white border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xl">{act.icon}</span>
+                        <div className={`w-4.5 h-4.5 rounded-full border flex items-center justify-center ${
+                          isActive ? 'bg-indigo-600 border-indigo-600 text-white font-bold' : 'border-slate-300'
+                        }`}>
+                          {isActive && <span className="text-[10px] font-black">✓</span>}
+                        </div>
+                      </div>
+                      <h5 className="font-bold text-slate-850 text-xs mb-1">{act.label}</h5>
+                      <p className="text-[10.5px] text-slate-400 leading-relaxed">{act.desc}</p>
+                    </div>
+                    <div className="mt-4 pt-2 border-t border-slate-150 flex items-center justify-between">
+                      <span className="text-[9.5px] font-bold uppercase tracking-wider text-slate-400">Status</span>
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                        isActive ? 'bg-indigo-100 text-indigo-800' : 'bg-slate-100 text-slate-500'
+                      }`}>
+                        {isActive ? 'AKTIF' : 'AKTIF'}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
       )}
 
@@ -3194,6 +3354,67 @@ export default function DatabaseCrud({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* ----------------- POPUP MODAL 0.5: DUPLIKASI KELAS ----------------- */}
+      {isDuplicateClassModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 animate-in fade-in duration-150">
+          <form onSubmit={handleDuplicateClassSubmit} className="bg-white rounded-xl border border-slate-300 shadow-2xl p-6 max-w-sm w-full flex flex-col gap-4 animate-in slide-in-from-bottom duration-200">
+            <div>
+              <h3 className="font-bold text-slate-800 text-sm">Duplikasi Struktur Kelas</h3>
+              <p className="text-[11px] text-slate-400 mt-1">Menyalin seluruh data siswa (Nama, NIS, Jenis Kelamin, dll) dari kelas asal ke kelas baru dengan nilai rapor dikosongkan.</p>
+            </div>
+
+            <div className="flex flex-col gap-3 text-xs">
+              <div className="flex flex-col gap-1">
+                <label className="font-bold text-slate-500">Pilih Kelas Asal (Sumber Data)</label>
+                <select
+                  value={dupSourceClass}
+                  onChange={(e) => setDupSourceClass(e.target.value)}
+                  className="bg-slate-50 border border-slate-200 rounded-lg p-2 font-semibold text-slate-700 focus:outline-none focus:ring-1 focus:ring-pink-500"
+                  required
+                >
+                  <option value="">-- Pilih Kelas Asal --</option>
+                  {classes.map(cls => (
+                    <option key={cls} value={cls}>Kelas {cls} ({students.filter(s => s.kelas === cls).length} Siswa)</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <label className="font-bold text-slate-500">Nama Kelas Baru (Contoh: X-B)</label>
+                <input
+                  type="text"
+                  placeholder="Masukkan nama kelas target"
+                  value={dupTargetClass}
+                  onChange={(e) => setDupTargetClass(e.target.value)}
+                  className="bg-slate-50 border border-slate-200 rounded-lg p-2 font-semibold uppercase text-slate-700 focus:outline-none focus:ring-1 focus:ring-pink-500"
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 mt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsDuplicateClassModalOpen(false);
+                  setDupSourceClass('');
+                  setDupTargetClass('');
+                }}
+                className="px-3 py-1.5 border border-slate-200 text-slate-600 rounded-lg text-xs font-semibold hover:bg-slate-50 cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="submit"
+                className="px-3 py-1.5 bg-pink-600 hover:bg-pink-700 text-white font-bold rounded-lg text-xs cursor-pointer transition-colors"
+              >
+                Duplikasikan Sekarang
+              </button>
+            </div>
+          </form>
         </div>
       )}
 
