@@ -110,6 +110,37 @@ export default function RaporCetak({
 
   const [isLandscape, setIsLandscape] = useState(getInitialLandscape());
 
+  const getHeaderData = () => {
+    const activeHeader = kopSekolah.customHeadersList?.find(hp => hp.isActive);
+    if (activeHeader) {
+      return {
+        yayasan: activeHeader.yayasan || kopSekolah.yayasan,
+        koordinator: activeHeader.koordinator || kopSekolah.koordinator,
+        cabang: activeHeader.cabang || kopSekolah.cabang,
+        namaSekolah: activeHeader.namaSekolah || kopSekolah.namaSekolah,
+        alamat: activeHeader.alamat || kopSekolah.alamat,
+        logoUrl: activeHeader.logoUrl || kopSekolah.logoUrl
+      };
+    }
+    return {
+      yayasan: kopSekolah.yayasan,
+      koordinator: kopSekolah.koordinator,
+      cabang: kopSekolah.cabang,
+      namaSekolah: kopSekolah.namaSekolah,
+      alamat: kopSekolah.alamat,
+      logoUrl: kopSekolah.logoUrl
+    };
+  };
+
+  const getFooterText = () => {
+    if (!kopSekolah.enableFooter) return '';
+    const activeFooter = kopSekolah.customFootersList?.find(fp => fp.isActive);
+    if (activeFooter) {
+      return activeFooter.text;
+    }
+    return kopSekolah.customFooterText || '';
+  };
+
   const paperWidth = paperSize === 'F4' ? (isLandscape ? 330 : 215) : (isLandscape ? 297 : 210);
   const paperHeight = paperSize === 'F4' ? (isLandscape ? 215 : 330) : (isLandscape ? 210 : 297);
 
@@ -863,7 +894,8 @@ export default function RaporCetak({
   );
 
   const renderKopLogo = (sizeClass = "h-20 w-20") => {
-    const logoSrc = kopSekolah.logoUrl || "https://lh3.googleusercontent.com/d/1S7UuyDpIDDTxOCqb1aOa1JNtmMQggUEC";
+    const headerData = getHeaderData();
+    const logoSrc = headerData.logoUrl || "https://lh3.googleusercontent.com/d/1S7UuyDpIDDTxOCqb1aOa1JNtmMQggUEC";
     return (
       <img 
         src={logoSrc} 
@@ -1032,7 +1064,7 @@ export default function RaporCetak({
                     ✕
                   </button>
                 </div>
-                <div className="p-6 flex flex-row justify-between w-full gap-4">
+                <div className="p-6 grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-slate-700 mb-1">Atas (Top)</label>
                     <input type="number" value={marginTop} onChange={e => setMarginTop(Number(e.target.value))} className="w-full border border-slate-300 rounded-lg p-2 text-sm focus:ring-2 focus:ring-indigo-500" />
@@ -1321,27 +1353,30 @@ export default function RaporCetak({
                     <div className="flex flex-col w-full h-full justify-start">
                       {/* Header, title & info */}
                       <div className="avoid-break select-none relative">
-                        <div className="flex items-start gap-4 mb-0.5">
-                          <div className="h-20 w-20 flex flex-col justify-center items-center flex-none">
-                            {renderKopLogo("max-h-20 max-w-20")}
-                          </div>
-                          <div className="flex-1 flex flex-col justify-start">
-                            <h1 className="font-bold text-[14pt] leading-tight font-sans text-black uppercase text-left">
-                              {kopSekolah.yayasan}
-                            </h1>
-                            <p className="font-bold text-black mt-0.5 leading-tight uppercase text-[11pt] text-left">
-                              KOORDINATOR <span className="mr-1">{kopSekolah.koordinator}</span> CABANG <span>{kopSekolah.cabang}</span>
-                            </p>
-                            <h2 className="font-bold text-[15pt] text-black mt-0.5 leading-tight uppercase text-left">
-                              {kopSekolah.namaSekolah}
-                            </h2>
-                            <p className="text-[10pt] font-medium text-black mt-0.5 leading-tight text-left">
-                              <span className="font-bold">Alamat:</span> {kopSekolah.alamat}
-                            </p>
-                          </div>
-                        </div>
-
-                        <hr className="border-t-[1.5px] border-black my-2" />
+                        {kopSekolah.enableHeader && (
+                          <>
+                            <div className="flex items-start gap-4 mb-0.5">
+                              <div className="h-20 w-20 flex flex-col justify-center items-center flex-none">
+                                {renderKopLogo("max-h-20 max-w-20")}
+                              </div>
+                              <div className="flex-1 flex flex-col justify-start">
+                                <h1 className="font-bold text-[14pt] leading-tight font-sans text-black uppercase text-left">
+                                  {getHeaderData().yayasan}
+                                </h1>
+                                <p className="font-bold text-black mt-0.5 leading-tight uppercase text-[11pt] text-left">
+                                  KOORDINATOR <span className="mr-1">{getHeaderData().koordinator}</span> CABANG <span>{getHeaderData().cabang}</span>
+                                </p>
+                                <h2 className="font-bold text-[15pt] text-black mt-0.5 leading-tight uppercase text-left">
+                                  {getHeaderData().namaSekolah}
+                                </h2>
+                                <p className="text-[10pt] font-medium text-black mt-0.5 leading-tight text-left">
+                                  <span className="font-bold">Alamat:</span> {getHeaderData().alamat}
+                                </p>
+                              </div>
+                            </div>
+                            <hr className="border-t-[1.5px] border-black my-2" />
+                          </>
+                        )}
 
                         <div className="text-center mt-1.5 mb-2.5">
                           <h2 className="text-[12.5pt] font-bold tracking-wide uppercase text-black">
@@ -1354,23 +1389,23 @@ export default function RaporCetak({
                       </div>
 
                       {/* Student metadata */}
-                      <div className="flex flex-wrap gap-y-1 justify-between text-[9pt] mb-2.5 font-medium avoid-break w-full">
-                        <div className="flex items-center w-[48%]">
+                      <div className="grid grid-cols-2 gap-x-11 gap-y-0.5 text-[9pt] mb-2.5 font-medium avoid-break">
+                        <div className="flex items-center">
                           <span className="w-24 font-bold flex-none text-left">NAMA</span>
                           <span className="mr-2 font-bold">:</span>
                           <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5 uppercase text-left">{activeStudent.name}</span>
                         </div>
-                        <div className="flex items-center text-[9pt] w-[48%]">
+                        <div className="flex items-center text-[9pt]">
                           <span className="w-28 font-bold flex-none text-left">NOMOR INDUK</span>
                           <span className="mr-2 font-bold">:</span>
                           <span className="border-b border-black flex-1 font-mono font-bold text-slate-800 pb-0.5 text-left">{activeStudent.nis}</span>
                         </div>
-                        <div className="flex items-center w-[48%] mt-0.5">
+                        <div className="flex items-center">
                           <span className="w-24 font-bold flex-none text-left">KELAS</span>
                           <span className="mr-2 font-bold">:</span>
                           <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5 text-left">{activeStudent.kelas}</span>
                         </div>
-                        <div className="flex items-center w-[48%] mt-0.5">
+                        <div className="flex items-center">
                           <span className="w-28 font-bold flex-none text-left">SEMESTER</span>
                           <span className="mr-2 font-bold">:</span>
                           <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5 text-left">{activeStudent.semester}</span>
@@ -1549,10 +1584,10 @@ export default function RaporCetak({
                     {/* Page Numbering & Date */}
                     <div className="absolute bottom-[8mm] left-[15mm] right-[15mm] flex justify-between items-center text-[8.5pt] font-mono font-bold text-slate-700 print:text-black select-none pointer-events-none">
                       <div className="flex flex-col gap-0.5">
-                        {kopSekolah.enableCustomFooter && kopSekolah.customFooterText && <span>{kopSekolah.customFooterText}</span>}
+                        {getFooterText() && <span>{getFooterText()}</span>}
                         {showAutoTimeFooter && <span>Dicetak: {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}</span>}
                       </div>
-                      {(kopSekolah.showPageNumbering ?? false) && (
+                      {(kopSekolah.showPageNumbering ?? true) && (
                         <span>Halaman 1 dari 2</span>
                       )}
                     </div>
@@ -1682,7 +1717,7 @@ export default function RaporCetak({
                           Mengetahui,
                         </p>
                         {kopSekolah.enableSignatureHeadmaster ? (
-                          <div className="signature-container flex flex-row justify-between w-full gap-6 text-center items-start relative z-10">
+                          <div className="signature-container grid-cols-3 gap-6 text-center items-start relative z-10">
                             {/* Orang Tua */}
                             <div className="flex flex-col items-center justify-between h-32 relative">
                               <p className="text-[10pt] font-bold text-center mb-1">Wali Murid</p>
@@ -1765,7 +1800,7 @@ export default function RaporCetak({
                             </div>
                           </div>
                         ) : (
-                          <div className="signature-container flex flex-row justify-between w-full gap-12 text-center text-sans relative z-10">
+                          <div className="signature-container grid-cols-2 gap-12 text-center text-sans relative z-10">
                             {/* Orang Tua */}
                             <div className="flex flex-col items-center justify-between h-32 relative">
                               <p className="text-[10pt] font-bold text-center mb-1">Wali Murid</p>
@@ -1824,10 +1859,10 @@ export default function RaporCetak({
                     {/* Page Numbering & Date */}
                     <div className="absolute bottom-[8mm] left-[15mm] right-[15mm] flex justify-between items-center text-[8.5pt] font-mono font-bold text-slate-700 print:text-black select-none pointer-events-none">
                       <div className="flex flex-col gap-0.5">
-                        {kopSekolah.enableCustomFooter && kopSekolah.customFooterText && <span>{kopSekolah.customFooterText}</span>}
+                        {getFooterText() && <span>{getFooterText()}</span>}
                         {showAutoTimeFooter && <span>Dicetak: {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}</span>}
                       </div>
-                      {(kopSekolah.showPageNumbering ?? false) && (
+                      {(kopSekolah.showPageNumbering ?? true) && (
                         <span>Halaman 2 dari 2</span>
                       )}
                     </div>
@@ -1844,27 +1879,30 @@ export default function RaporCetak({
              style={{ padding: `${pageMargin.top}mm ${pageMargin.right}mm ${pageMargin.bottom}mm ${pageMargin.left}mm` }}>
           <div>
             {/* Header block with organization logo & info */}
-            <div className="flex items-start gap-4 mb-1">
-              <div className="h-24 w-24 flex flex-col justify-center items-center flex-none">
-                {renderKopLogo("max-h-24 max-w-24")}
-              </div>
-              <div className="flex-1 flex flex-col justify-start">
-                <h1 className="font-bold text-[14pt] leading-tight font-sans text-black uppercase">
-                  {kopSekolah.yayasan}
-                </h1>
-                <p className="font-bold text-black mt-0.5 leading-tight uppercase text-[11pt]">
-                  KOORDINATOR <span className="mr-1">{kopSekolah.koordinator}</span> CABANG <span>{kopSekolah.cabang}</span>
-                </p>
-                <h2 className="font-bold text-[15pt] text-black mt-0.5 leading-tight uppercase">
-                  {kopSekolah.namaSekolah}
-                </h2>
-                <p className="text-[10pt] font-medium text-black mt-0.5 leading-tight">
-                  <span className="font-bold">Alamat:</span> {kopSekolah.alamat}
-                </p>
-              </div>
-            </div>
-
-            <hr className="border-t-[1.5px] border-black my-2.5" />
+            {kopSekolah.enableHeader && (
+              <>
+                <div className="flex items-start gap-4 mb-1">
+                  <div className="h-24 w-24 flex flex-col justify-center items-center flex-none">
+                    {renderKopLogo("max-h-24 max-w-24")}
+                  </div>
+                  <div className="flex-1 flex flex-col justify-start">
+                    <h1 className="font-bold text-[14pt] leading-tight font-sans text-black uppercase">
+                      {getHeaderData().yayasan}
+                    </h1>
+                    <p className="font-bold text-black mt-0.5 leading-tight uppercase text-[11pt]">
+                      KOORDINATOR <span className="mr-1">{getHeaderData().koordinator}</span> CABANG <span>{getHeaderData().cabang}</span>
+                    </p>
+                    <h2 className="font-bold text-[15pt] text-black mt-0.5 leading-tight uppercase">
+                      {getHeaderData().namaSekolah}
+                    </h2>
+                    <p className="text-[10pt] font-medium text-black mt-0.5 leading-tight">
+                      <span className="font-bold">Alamat:</span> {getHeaderData().alamat}
+                    </p>
+                  </div>
+                </div>
+                <hr className="border-t-[1.5px] border-black my-2.5" />
+              </>
+            )}
 
             {/* Document Title */}
             <div className="text-center mt-3 mb-4">
@@ -1877,26 +1915,26 @@ export default function RaporCetak({
             </div>
 
             {/* Student metadata tables */}
-            <div className="flex flex-wrap gap-y-1.5 justify-between text-[9.5pt] mb-5 font-medium w-full">
-              <div className="flex items-center w-[48%]">
-                <span className="w-[70px] font-bold flex-none text-left">NAMA</span>
+            <div className="grid grid-cols-2 gap-x-12 gap-y-1.5 text-[9.5pt] mb-5 font-medium">
+              <div className="flex items-center">
+                <span className="w-[70px] font-bold flex-none">NAMA</span>
                 <span className="mr-2 font-bold">:</span>
-                <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5 uppercase text-left">{activeStudent.name}</span>
+                <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5 uppercase">{activeStudent.name}</span>
               </div>
-              <div className="flex items-center w-[48%]">
-                <span className="w-[110px] font-bold flex-none text-left">NOMOR INDUK</span>
+              <div className="flex items-center">
+                <span className="w-[110px] font-bold flex-none">NOMOR INDUK</span>
                 <span className="mr-2 font-bold">:</span>
-                <span className="border-b border-black flex-1 font-mono font-bold text-slate-800 pb-0.5 text-left">{activeStudent.nis}</span>
+                <span className="border-b border-black flex-1 font-mono font-bold text-slate-800 pb-0.5">{activeStudent.nis}</span>
               </div>
-              <div className="flex items-center w-[48%] mt-0.5">
-                <span className="w-[70px] font-bold flex-none text-left">KELAS</span>
+              <div className="flex items-center">
+                <span className="w-[70px] font-bold flex-none">KELAS</span>
                 <span className="mr-2 font-bold">:</span>
-                <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5 text-left">{activeStudent.kelas}</span>
+                <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5">{activeStudent.kelas}</span>
               </div>
-              <div className="flex items-center w-[48%] mt-0.5">
-                <span className="w-[110px] font-bold flex-none text-left">SEMESTER</span>
+              <div className="flex items-center">
+                <span className="w-[110px] font-bold flex-none">SEMESTER</span>
                 <span className="mr-2 font-bold">:</span>
-                <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5 text-left">{activeStudent.semester}</span>
+                <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5">{activeStudent.semester}</span>
               </div>
             </div>
 
@@ -2198,7 +2236,7 @@ export default function RaporCetak({
                 Mengetahui,
               </p>
               {kopSekolah.enableSignatureHeadmaster ? (
-                <div className="flex flex-row justify-between gap-6 text-center items-start relative z-10">
+                <div className="grid grid-cols-3 gap-6 text-center items-start relative z-10">
                   {/* Orang Tua */}
                   <div className="flex flex-col items-center justify-between h-32 relative">
                     <p className="text-[10.5pt] text-black font-bold select-none">Orang Tua / Wali</p>
@@ -2281,7 +2319,7 @@ export default function RaporCetak({
                   </div>
                 </div>
               ) : (
-                <div className="flex flex-row justify-between w-full gap-12 text-center text-sans relative z-10">
+                <div className="grid grid-cols-2 gap-12 text-center text-sans relative z-10">
                   {/* Orang Tua */}
                   <div className="flex flex-col items-center justify-between h-32 relative">
                     <p className="text-[10.5pt] text-black font-bold select-none">Orang Tua / Wali</p>
@@ -2368,28 +2406,31 @@ export default function RaporCetak({
                   <div className="flex flex-col w-full justify-start">
                     {/* Header, title & info wrapped with avoid-break */}
                     <div className="avoid-break select-none relative">
-                      {/* Header block with organization logo & info */}
-                      <div className="flex items-start gap-4 mb-0.5">
-                        <div className="h-20 w-20 flex flex-col justify-center items-center flex-none">
-                          {renderKopLogo("max-h-20 max-w-20")}
-                        </div>
-                        <div className="flex-1 flex flex-col justify-start">
-                          <h1 className="font-bold text-[14pt] leading-tight font-sans text-black uppercase">
-                            {kopSekolah.yayasan}
-                          </h1>
-                          <p className="font-bold text-black mt-0.5 leading-tight uppercase text-[11pt]">
-                            KOORDINATOR <span className="mr-1">{kopSekolah.koordinator}</span> CABANG <span>{kopSekolah.cabang}</span>
-                          </p>
-                          <h2 className="font-bold text-[15pt] text-black mt-0.5 leading-tight uppercase">
-                            {kopSekolah.namaSekolah}
-                          </h2>
-                          <p className="text-[10pt] font-medium text-black mt-0.5 leading-tight">
-                            <span className="font-bold">Alamat:</span> {kopSekolah.alamat}
-                          </p>
-                        </div>
-                      </div>
-
-                      <hr className="border-t-[1.5px] border-black my-2" />
+                      {kopSekolah.enableHeader && (
+                        <>
+                          {/* Header block with organization logo & info */}
+                          <div className="flex items-start gap-4 mb-0.5">
+                            <div className="h-20 w-20 flex flex-col justify-center items-center flex-none">
+                              {renderKopLogo("max-h-20 max-w-20")}
+                            </div>
+                            <div className="flex-1 flex flex-col justify-start">
+                              <h1 className="font-bold text-[14pt] leading-tight font-sans text-black uppercase">
+                                {getHeaderData().yayasan}
+                              </h1>
+                              <p className="font-bold text-black mt-0.5 leading-tight uppercase text-[11pt]">
+                                KOORDINATOR <span className="mr-1">{getHeaderData().koordinator}</span> CABANG <span>{getHeaderData().cabang}</span>
+                              </p>
+                              <h2 className="font-bold text-[15pt] text-black mt-0.5 leading-tight uppercase">
+                                {getHeaderData().namaSekolah}
+                              </h2>
+                              <p className="text-[10pt] font-medium text-black mt-0.5 leading-tight">
+                                <span className="font-bold">Alamat:</span> {getHeaderData().alamat}
+                              </p>
+                            </div>
+                          </div>
+                          <hr className="border-t-[1.5px] border-black my-2" />
+                        </>
+                      )}
 
                       {/* Document Title */}
                       <div className="text-center mt-1.5 mb-2.5">
@@ -2403,26 +2444,26 @@ export default function RaporCetak({
                     </div>
 
                     {/* Student metadata tables */}
-                    <div className="flex flex-wrap gap-y-1 justify-between text-[9pt] mb-2.5 font-medium avoid-break w-full">
-                      <div className="flex items-center w-[48%]">
-                        <span className="w-[70px] font-bold flex-none text-left">NAMA</span>
+                    <div className="grid grid-cols-2 gap-x-11 gap-y-0.5 text-[9pt] mb-2.5 font-medium avoid-break">
+                      <div className="flex items-center">
+                        <span className="w-[70px] font-bold flex-none">NAMA</span>
                         <span className="mr-2 font-bold">:</span>
-                        <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5 uppercase text-left">{selSt.name}</span>
+                        <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5 uppercase">{selSt.name}</span>
                       </div>
-                      <div className="flex items-center text-[9pt] w-[48%]">
-                        <span className="w-[110px] font-bold flex-none text-left">NOMOR INDUK</span>
+                      <div className="flex items-center text-[9pt]">
+                        <span className="w-[110px] font-bold flex-none">NOMOR INDUK</span>
                         <span className="mr-2 font-bold">:</span>
-                        <span className="border-b border-black flex-1 font-mono font-bold text-slate-800 pb-0.5 text-left">{selSt.nis}</span>
+                        <span className="border-b border-black flex-1 font-mono font-bold text-slate-800 pb-0.5">{selSt.nis}</span>
                       </div>
-                      <div className="flex items-center w-[48%] mt-0.5">
-                        <span className="w-[70px] font-bold flex-none text-left">KELAS</span>
+                      <div className="flex items-center">
+                        <span className="w-[70px] font-bold flex-none">KELAS</span>
                         <span className="mr-2 font-bold">:</span>
-                        <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5 text-left">{selSt.kelas}</span>
+                        <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5">{selSt.kelas}</span>
                       </div>
-                      <div className="flex items-center w-[48%] mt-0.5">
-                        <span className="w-[110px] font-bold flex-none text-left">SEMESTER</span>
+                      <div className="flex items-center">
+                        <span className="w-[110px] font-bold flex-none">SEMESTER</span>
                         <span className="mr-2 font-bold">:</span>
-                        <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5 text-left">{selSt.semester}</span>
+                        <span className="border-b border-black flex-1 font-bold text-slate-800 pb-0.5">{selSt.semester}</span>
                       </div>
                     </div>
 
@@ -2598,10 +2639,10 @@ export default function RaporCetak({
                   {/* Page Numbering & Date */}
                   <div className="absolute bottom-[8mm] left-[15mm] right-[15mm] flex justify-between items-center text-[8.5pt] font-mono font-bold text-slate-700 print:text-black select-none pointer-events-none">
                     <div className="flex flex-col gap-0.5">
-                      {kopSekolah.enableCustomFooter && kopSekolah.customFooterText && <span>{kopSekolah.customFooterText}</span>}
+                      {getFooterText() && <span>{getFooterText()}</span>}
                       {showAutoTimeFooter && <span>Dicetak: {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}</span>}
                     </div>
-                    {(kopSekolah.showPageNumbering ?? false) && (
+                    {(kopSekolah.showPageNumbering ?? true) && (
                       <span className="page-number-display">Halaman 1 dari 2</span>
                     )}
                   </div>
@@ -2737,7 +2778,7 @@ export default function RaporCetak({
                         Mengetahui,
                       </p>
                       {kopSekolah.enableSignatureHeadmaster ? (
-                        <div className="flex flex-row justify-between gap-6 text-center items-start relative z-10 w-full col-span-full">
+                        <div className="grid grid-cols-3 gap-6 text-center items-start relative z-10 w-full col-span-full">
                           {/* Orang Tua */}
                           <div className="flex flex-col items-center justify-between h-32 relative">
                             <p className="text-[10px] font-bold text-black mb-1 select-none">Wali Murid</p>
@@ -2818,7 +2859,7 @@ export default function RaporCetak({
                           </div>
                         </div>
                       ) : (
-                        <div className="flex flex-row justify-between w-full gap-12 text-center text-sans relative z-10 w-full col-span-full">
+                        <div className="grid grid-cols-2 gap-12 text-center text-sans relative z-10 w-full col-span-full">
                           {/* Orang Tua */}
                           <div className="flex flex-col items-center justify-between h-32 relative">
                             <p className="text-[10px] font-bold text-black mb-1 select-none">Wali Murid</p>
@@ -2875,10 +2916,10 @@ export default function RaporCetak({
                   {/* Page Numbering & Date */}
                   <div className="absolute bottom-[8mm] left-[15mm] right-[15mm] flex justify-between items-center text-[8.5pt] font-mono font-bold text-slate-700 print:text-black select-none pointer-events-none">
                     <div className="flex flex-col gap-0.5">
-                      {kopSekolah.enableCustomFooter && kopSekolah.customFooterText && <span>{kopSekolah.customFooterText}</span>}
+                      {getFooterText() && <span>{getFooterText()}</span>}
                       {showAutoTimeFooter && <span>Dicetak: {new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}</span>}
                     </div>
-                    {(kopSekolah.showPageNumbering ?? false) && (
+                    {(kopSekolah.showPageNumbering ?? true) && (
                       <span className="page-number-display">Halaman 2 dari 2</span>
                     )}
                   </div>
@@ -3528,8 +3569,7 @@ async function generatePdfIframe(
         useCORS: true,
         letterRendering: true,
         logging: false,
-        backgroundColor: '#ffffff',
-        windowWidth: widthPx,
+        backgroundColor: '#ffffff'
       },
       jsPDF:        { unit: 'mm', format: paperSize === 'F4' ? (isLandscape ? [330, 215] : [215, 330]) : 'a4', orientation: isLandscape ? 'landscape' : 'portrait' }
     };

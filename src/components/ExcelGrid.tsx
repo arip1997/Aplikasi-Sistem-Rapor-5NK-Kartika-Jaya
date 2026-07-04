@@ -61,7 +61,7 @@ export default function ExcelGrid({
   const [filterCompleted, setFilterCompleted] = useState<'all' | 'completed' | 'pending'>('all');
   const [isBulkEditMode, setIsBulkEditMode] = useState(false);
   const [isFocusMode, setIsFocusMode] = useState(true);
-  const [sortConfig, setSortConfig] = useState<{ key: 'name' | 'nis', direction: 'asc' | 'desc' }>({ key: 'name', direction: 'asc' });
+  const [sortConfig, setSortConfig] = useState<{ key: 'name' | 'nis' | string, direction: 'asc' | 'desc' }>({ key: 'name', direction: 'asc' });
   const [checkedStudentIds, setCheckedStudentIds] = useState<Record<string, boolean>>({});
   
   const searchInputId = useId();
@@ -70,7 +70,7 @@ export default function ExcelGrid({
   const [containerHeight, setContainerHeight] = useState(600);
   
   // Sorting handler
-  const handleSort = (key: 'name' | 'nis') => {
+  const handleSort = (key: 'name' | 'nis' | string) => {
     setSortConfig(c => ({
       key,
       direction: c.key === key && c.direction === 'asc' ? 'desc' : 'asc'
@@ -219,11 +219,24 @@ export default function ExcelGrid({
     });
     
     return [...list].sort((a, b) => {
-      const valA = a[sortConfig.key].toLowerCase();
-      const valB = b[sortConfig.key].toLowerCase();
-      if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
-      if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
-      return 0;
+      if (sortConfig.key === 'name' || sortConfig.key === 'nis') {
+        const valA = (a[sortConfig.key as 'name' | 'nis'] || '').toLowerCase();
+        const valB = (b[sortConfig.key as 'name' | 'nis'] || '').toLowerCase();
+        if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
+        if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
+        return 0;
+      } else {
+        const gradeWeight: Record<ScoreKey, number> = { 'BSB': 4, 'B': 3, 'MB': 2, 'BB': 1 };
+        const valGradeA = a.grades[sortConfig.key];
+        const valGradeB = b.grades[sortConfig.key];
+        const scoreA = valGradeA ? gradeWeight[valGradeA] : 0;
+        const scoreB = valGradeB ? gradeWeight[valGradeB] : 0;
+        
+        if (scoreA !== scoreB) {
+          return sortConfig.direction === 'asc' ? scoreA - scoreB : scoreB - scoreA;
+        }
+        return (a.name || '').toLowerCase().localeCompare((b.name || '').toLowerCase());
+      }
     });
   }, [students, searchTerm, searchNis, filterCompleted, sortConfig]);
 
@@ -684,7 +697,16 @@ export default function ExcelGrid({
                 return cat.indicators.map((ind) => (
                   <th key={ind.id} title={ind.text} className={`border-r border-b border-slate-300 px-0.5 text-center font-bold ${tClass} cursor-help ${hClass} sticky top-[38px] z-10 min-w-[55px]`}>
                     <div className="flex flex-col items-center justify-between h-full py-0.5">
-                      <span className="text-[9px] font-bold">{ind.id}</span>
+                      <div 
+                        className="flex items-center justify-center gap-0.5 cursor-pointer select-none" 
+                        onClick={() => handleSort(ind.id)}
+                        title={`Urutkan berdasarkan nilai indikator ${ind.id}`}
+                      >
+                        <span className="text-[9px] font-bold">{ind.id}</span>
+                        <span className="text-[8px] opacity-70">
+                          {sortConfig.key === ind.id ? (sortConfig.direction === 'asc' ? '↑' : '↓') : '↕'}
+                        </span>
+                      </div>
                       <select
                         onChange={(e) => {
                           const val = e.target.value as ScoreKey | '';

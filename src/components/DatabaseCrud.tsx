@@ -1,7 +1,7 @@
 import { useState, useId, FormEvent, useRef, useEffect, ChangeEvent } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import * as XLSX from 'xlsx';
-import { Student, Teacher, Category, Indicator, ScoreKey, KopSekolah } from '../types';
+import { Student, Teacher, Category, Indicator, ScoreKey, KopSekolah, HeaderProfile, FooterProfile } from '../types';
 import { SCHOOL_CLASSES, DEFAULT_KOP } from '../data';
 import { exportDatabaseBackupConfig, parseExcelDatabase, uploadExcelToGoogleDrive, encryptData, decryptData, addChangeLog, getChangeLogs, clearChangeLogs, deleteChangeLog, exportLocalJsonBackup, ChangeLog, formatProperName, runIntegrityCheck, IntegrityReport, fixIntegrity, exportAllStudentsToCsv, exportAllTeachersToCsv, uploadZipSnapshotToGoogleDrive, downloadZipSnapshotLocally } from '../utils';
 import { normalizeAllData, hasValidAcademicTitle } from '../normalization';
@@ -34,8 +34,7 @@ import {
   Database,
   Cloud,
   Copy,
-  Settings,
-  Zap
+  Settings
 } from 'lucide-react';
 
 interface DatabaseCrudProps {
@@ -62,7 +61,6 @@ interface DatabaseCrudProps {
   setShortcuts?: (s: {search: string, tab: string}) => void;
   triggerAlert?: (type: 'success' | 'info' | 'error', message: string) => void;
   triggerToast?: (type: 'success' | 'info' | 'error', message: string) => void;
-  openAddStudentTrigger?: number;
 }
 
 export default function DatabaseCrud({
@@ -89,44 +87,9 @@ export default function DatabaseCrud({
   setShortcuts,
   triggerAlert,
   triggerToast,
-  openAddStudentTrigger,
 }: DatabaseCrudProps) {
   const [activeSubTab, setActiveSubTab] = useState<'siswa' | 'guru' | 'indikator' | 'kop' | 'backup' | 'riwayat' | 'snapshot' | 'integritas' | 'pengaturan'>('siswa');
   const [localAlert, setLocalAlert] = useState<{ type: 'success' | 'info' | 'error'; message: string } | null>(null);
-  
-  // Override native alert to use the beautiful global alert system if available
-  const alert = (message: string) => {
-    if (triggerAlert) {
-      // Determine type based on message content
-      const msg = message.toLowerCase();
-      let type: 'success' | 'info' | 'error' = 'info';
-      if (msg.includes('berhasil') || msg.includes('sukses')) type = 'success';
-      if (msg.includes('gagal') || msg.includes('error') || msg.includes('salah')) type = 'error';
-      triggerAlert(type, message);
-    } else {
-      window.alert(message);
-    }
-  };
-  
-  const [localQuickActions, setLocalQuickActions] = useState<string[]>(() => {
-    try {
-      const saved = localStorage.getItem('rapor_quick_actions');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
-        }
-      }
-    } catch(e) {}
-    return ['print', 'excel', 'contrast'];
-  });
-
-  const saveLocalQuickActions = (newActions: string[]) => {
-    setLocalQuickActions(newActions);
-    localStorage.setItem('rapor_quick_actions', JSON.stringify(newActions));
-    window.dispatchEvent(new Event('quickActionsChanged'));
-    if (triggerToast) triggerToast('success', '✓ Aksi cepat berhasil diperbarui');
-  };
 
   const notify = (message: string, type: 'success' | 'info' | 'error' = 'info') => {
     if (triggerAlert) {
@@ -479,6 +442,154 @@ export default function DatabaseCrud({
   useEffect(() => {
     setEditKop(kopSekolah);
   }, [kopSekolah]);
+
+  // Custom Header & Footer CRUD states
+  const [headerProfiles, setHeaderProfiles] = useState<HeaderProfile[]>(() => editKop.customHeadersList || []);
+  const [footerProfiles, setFooterProfiles] = useState<FooterProfile[]>(() => editKop.customFootersList || []);
+
+  const [newHeader, setNewHeader] = useState<Partial<HeaderProfile>>({
+    name: '', yayasan: '', koordinator: '', cabang: '', namaSekolah: '', alamat: '', logoUrl: ''
+  });
+  const [newFooter, setNewFooter] = useState<Partial<FooterProfile>>({
+    name: '', text: ''
+  });
+
+  const [editingHeaderId, setEditingHeaderId] = useState<string | null>(null);
+  const [editingFooterId, setEditingFooterId] = useState<string | null>(null);
+
+  // Sync state if editKop changes
+  useEffect(() => {
+    setHeaderProfiles(editKop.customHeadersList || []);
+    setFooterProfiles(editKop.customFootersList || []);
+  }, [editKop.customHeadersList, editKop.customFootersList]);
+
+  const handleSaveHeaderProfile = () => {
+    if (!newHeader.name || !newHeader.namaSekolah) {
+      alert("Nama Profil dan Nama Sekolah wajib diisi!");
+      return;
+    }
+    let updated: HeaderProfile[];
+    if (editingHeaderId) {
+      updated = headerProfiles.map(hp => hp.id === editingHeaderId ? {
+        ...hp,
+        name: newHeader.name || '',
+        yayasan: newHeader.yayasan || '',
+        koordinator: newHeader.koordinator || '',
+        cabang: newHeader.cabang || '',
+        namaSekolah: newHeader.namaSekolah || '',
+        alamat: newHeader.alamat || '',
+        logoUrl: newHeader.logoUrl || ''
+      } : hp);
+      setEditingHeaderId(null);
+      notify("Profil Header berhasil diperbarui!", "success");
+    } else {
+      const newProf: HeaderProfile = {
+        id: 'header_' + Date.now(),
+        name: newHeader.name || '',
+        yayasan: newHeader.yayasan || '',
+        koordinator: newHeader.koordinator || '',
+        cabang: newHeader.cabang || '',
+        namaSekolah: newHeader.namaSekolah || '',
+        alamat: newHeader.alamat || '',
+        logoUrl: newHeader.logoUrl || '',
+        isActive: headerProfiles.length === 0
+      };
+      updated = [...headerProfiles, newProf];
+      notify("Profil Header berhasil ditambahkan!", "success");
+    }
+
+    const nextKop = { ...editKop, customHeadersList: updated };
+    setEditKop(nextKop);
+    onUpdateKopSekolah(nextKop);
+    setNewHeader({ name: '', yayasan: '', koordinator: '', cabang: '', namaSekolah: '', alamat: '', logoUrl: '' });
+  };
+
+  const handleActiveHeaderProfile = (id: string) => {
+    const updated = headerProfiles.map(hp => ({
+      ...hp,
+      isActive: hp.id === id
+    }));
+    const nextKop = { ...editKop, customHeadersList: updated };
+    setEditKop(nextKop);
+    onUpdateKopSekolah(nextKop);
+    notify("Profil Header aktif berhasil diubah!", "success");
+  };
+
+  const handleDeleteHeaderProfile = (id: string) => {
+    if (!window.confirm("Apakah Anda yakin ingin menghapus profil header ini?")) return;
+    const updated = headerProfiles.filter(hp => hp.id !== id);
+    if (headerProfiles.find(hp => hp.id === id)?.isActive && updated.length > 0) {
+      updated[0].isActive = true;
+    }
+    const nextKop = { ...editKop, customHeadersList: updated };
+    setEditKop(nextKop);
+    onUpdateKopSekolah(nextKop);
+    notify("Profil Header berhasil dihapus!", "success");
+  };
+
+  const handleEditHeaderProfileClick = (hp: HeaderProfile) => {
+    setEditingHeaderId(hp.id);
+    setNewHeader(hp);
+  };
+
+  const handleSaveFooterProfile = () => {
+    if (!newFooter.name || !newFooter.text) {
+      alert("Nama Profil dan Isi Footer wajib diisi!");
+      return;
+    }
+    let updated: FooterProfile[];
+    if (editingFooterId) {
+      updated = footerProfiles.map(fp => fp.id === editingFooterId ? {
+        ...fp,
+        name: newFooter.name || '',
+        text: newFooter.text || ''
+      } : fp);
+      setEditingFooterId(null);
+      notify("Profil Footer berhasil diperbarui!", "success");
+    } else {
+      const newProf: FooterProfile = {
+        id: 'footer_' + Date.now(),
+        name: newFooter.name || '',
+        text: newFooter.text || '',
+        isActive: footerProfiles.length === 0
+      };
+      updated = [...footerProfiles, newProf];
+      notify("Profil Footer berhasil ditambahkan!", "success");
+    }
+
+    const nextKop = { ...editKop, customFootersList: updated };
+    setEditKop(nextKop);
+    onUpdateKopSekolah(nextKop);
+    setNewFooter({ name: '', text: '' });
+  };
+
+  const handleActiveFooterProfile = (id: string) => {
+    const updated = footerProfiles.map(fp => ({
+      ...fp,
+      isActive: fp.id === id
+    }));
+    const nextKop = { ...editKop, customFootersList: updated };
+    setEditKop(nextKop);
+    onUpdateKopSekolah(nextKop);
+    notify("Profil Footer aktif berhasil diubah!", "success");
+  };
+
+  const handleDeleteFooterProfile = (id: string) => {
+    if (!window.confirm("Apakah Anda yakin ingin menghapus profil footer ini?")) return;
+    const updated = footerProfiles.filter(fp => fp.id !== id);
+    if (footerProfiles.find(fp => fp.id === id)?.isActive && updated.length > 0) {
+      updated[0].isActive = true;
+    }
+    const nextKop = { ...editKop, customFootersList: updated };
+    setEditKop(nextKop);
+    onUpdateKopSekolah(nextKop);
+    notify("Profil Footer berhasil dihapus!", "success");
+  };
+
+  const handleEditFooterProfileClick = (fp: FooterProfile) => {
+    setEditingFooterId(fp.id);
+    setNewFooter(fp);
+  };
   const [printMargins, setPrintMargins] = useState(() => {
     const saved = localStorage.getItem('rapor_5nk_print_margins');
     return saved ? JSON.parse(saved) : { top: 12, bottom: 12, left: 15, right: 15 };
@@ -606,13 +717,6 @@ export default function DatabaseCrud({
     });
     setIsSiswaFormOpen(true);
   };
-
-  useEffect(() => {
-    if (openAddStudentTrigger && openAddStudentTrigger > 0) {
-      setActiveSubTab('siswa');
-      handleOpenAddSiswa();
-    }
-  }, [openAddStudentTrigger]);
 
   const handleOpenEditSiswa = (s: Student) => {
     setEditingSiswa(s);
@@ -1179,82 +1283,31 @@ export default function DatabaseCrud({
     return lines;
   };
 
-  const downloadStudentTemplate = () => {
-    const csvContent = "Nama Lengkap,NIS,Kelas,Jenis Kelamin\nBudi Santoso,1001,X-A,L\nSiti Aminah,1002,X-A,P";
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', 'Template_Data_Siswa.csv');
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
   const handleImportCsvAction = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     try {
-      if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          const data = event.target?.result;
-          const workbook = XLSX.read(data, { type: 'binary' });
-          const firstSheetName = workbook.SheetNames[0];
-          const worksheet = workbook.Sheets[firstSheetName];
-          
-          const rows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-          const validRows = rows.filter(r => r.length > 0 && r.some(c => c !== undefined && c !== null && String(c).trim() !== ''));
-          
-          if (validRows.length < 2) {
-            alert('Format Excel tidak valid atau baris data terlalu sedikit (harus memiliki baris header dan minimal 1 data siswa).');
-            return;
-          }
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const text = event.target?.result as string;
+        if (!text) {
+          alert('File CSV kosong atau gagal dibaca.');
+          return;
+        }
 
-          const headers = validRows[0].map(h => String(h || '').trim());
-          setCsvHeaders(headers);
-          setCsvRows(validRows.slice(1).map(r => {
-            const mappedRow = [...r];
-            while (mappedRow.length < headers.length) mappedRow.push('');
-            return mappedRow.map(c => String(c || '').trim());
-          }));
-          setCsvFileName(file.name);
-          
-          autoDetectColumnsAndOpen(headers);
-        };
-        reader.readAsBinaryString(file);
-      } else {
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          const text = event.target?.result as string;
-          if (!text) {
-            alert('File CSV kosong atau gagal dibaca.');
-            return;
-          }
+        const rows = parseCSVToRows(text);
+        if (rows.length < 2) {
+          alert('Format CSV tidak valid atau baris data terlalu sedikit (harus memiliki baris header dan minimal 1 data siswa).');
+          return;
+        }
 
-          const rows = parseCSVToRows(text);
-          if (rows.length < 2) {
-            alert('Format CSV tidak valid atau baris data terlalu sedikit (harus memiliki baris header dan minimal 1 data siswa).');
-            return;
-          }
+        const headers = rows[0];
+        setCsvHeaders(headers);
+        setCsvRows(rows.slice(1));
+        setCsvFileName(file.name);
 
-          const headers = rows[0];
-          setCsvHeaders(headers);
-          setCsvRows(rows.slice(1));
-          setCsvFileName(file.name);
-
-          autoDetectColumnsAndOpen(headers);
-        };
-        reader.readAsText(file);
-      }
-    } catch (err) {
-      alert('Gagal membaca file: ' + err);
-    }
-  };
-
-  const autoDetectColumnsAndOpen = (headers: string[]) => {
-    // Auto guessing the columns mapping based on common keywords
+        // Auto guessing the columns mapping based on common keywords
         let nameIdx = -1;
         let nisIdx = -1;
         let classIdx = -1;
@@ -1285,6 +1338,11 @@ export default function DatabaseCrud({
         });
 
         setIsCsvMappingOpen(true);
+      };
+      reader.readAsText(file, 'UTF-8');
+    } catch (err: any) {
+      alert(`Gagal memproses file CSV: ${err.message}`);
+    }
   };
 
   const handleConfirmImportCsv = () => {
@@ -1387,95 +1445,50 @@ export default function DatabaseCrud({
     }
   };
 
-  const downloadTeacherTemplate = () => {
-    const csvContent = "Nama Lengkap,NIP,Peran,Kelas Diajar\nAndi Wijaya,198001012010011001,Wali Kelas,X-A\nBudi Santoso,198202022010021002,Guru Mapel,";
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', 'Template_Data_Guru.csv');
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
   const handleImportTeacherCsvAction = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     try {
-      if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          const data = event.target?.result;
-          const workbook = XLSX.read(data, { type: 'binary' });
-          const firstSheetName = workbook.SheetNames[0];
-          const worksheet = workbook.Sheets[firstSheetName];
-          
-          const rows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-          const validRows = rows.filter(r => r.length > 0 && r.some(c => c !== undefined && c !== null && String(c).trim() !== ''));
-          
-          if (validRows.length < 2) {
-            alert('Format Excel tidak valid atau baris data terlalu sedikit (harus memiliki baris header dan minimal 1 data guru).');
-            return;
-          }
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const text = event.target?.result as string;
+        if (!text) {
+          alert('File CSV kosong atau gagal dibaca.');
+          return;
+        }
 
-          const headers = validRows[0].map(h => String(h || '').trim());
-          setCsvHeaders(headers);
-          setCsvRows(validRows.slice(1).map(r => {
-            const mappedRow = [...r];
-            while (mappedRow.length < headers.length) mappedRow.push('');
-            return mappedRow.map(c => String(c || '').trim());
-          }));
-          setCsvFileName(file.name);
-          
-          autoDetectTeacherColumnsAndOpen(headers);
-        };
-        reader.readAsBinaryString(file);
-      } else {
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          const text = event.target?.result as string;
-          if (!text) {
-            alert('File CSV kosong atau gagal dibaca.');
-            return;
-          }
+        const rows = parseCSVToRows(text);
+        if (rows.length < 2) {
+          alert('Format CSV tidak valid atau baris data terlalu sedikit (harus memiliki baris header dan minimal 1 data guru).');
+          return;
+        }
 
-          const rows = parseCSVToRows(text);
-          if (rows.length < 2) {
-            alert('Format CSV tidak valid atau baris data terlalu sedikit (harus memiliki baris header dan minimal 1 data guru).');
-            return;
-          }
+        const headers = rows[0].map(h => h.trim());
+        setCsvHeaders(headers);
+        setCsvRows(rows.slice(1));
+        setCsvFileName(file.name);
 
-          const headers = rows[0].map(h => h.trim());
-          setCsvHeaders(headers);
-          setCsvRows(rows.slice(1));
-          setCsvFileName(file.name);
+        // Auto-detect columns
+        const hLow = headers.map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ''));
+        const nameIdx = hLow.findIndex(h => h.includes('nama') || h.includes('name'));
+        const roleIdx = hLow.findIndex(h => h.includes('role') || h.includes('peran') || h.includes('jabatan'));
+        const classIdx = hLow.findIndex(h => h.includes('kelas') || h.includes('class') || h.includes('walikelas'));
+        const nipIdx = hLow.findIndex(h => h.includes('nip') || h.includes('id'));
 
-          autoDetectTeacherColumnsAndOpen(headers);
-        };
-        reader.readAsText(file);
-      }
+        setTeacherCsvColumnMapping({
+          nameIdx: nameIdx !== -1 ? nameIdx : 0,
+          roleIdx: roleIdx !== -1 ? roleIdx : 0,
+          classIdx: classIdx !== -1 ? classIdx : 0,
+          nipIdx: nipIdx !== -1 ? nipIdx : 0
+        });
+
+        setIsTeacherCsvMappingOpen(true);
+      };
+      reader.readAsText(file);
     } catch (err: any) {
-      alert(`Gagal memproses file: ${err.message}`);
+      alert(`Gagal memproses file CSV: ${err.message}`);
     }
-  };
-
-  const autoDetectTeacherColumnsAndOpen = (headers: string[]) => {
-    // Auto-detect columns
-    const hLow = headers.map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ''));
-    const nameIdx = hLow.findIndex(h => h.includes('nama') || h.includes('name'));
-    const roleIdx = hLow.findIndex(h => h.includes('role') || h.includes('peran') || h.includes('jabatan'));
-    const classIdx = hLow.findIndex(h => h.includes('kelas') || h.includes('class') || h.includes('walikelas'));
-    const nipIdx = hLow.findIndex(h => h.includes('nip') || h.includes('id'));
-
-    setTeacherCsvColumnMapping({
-      nameIdx: nameIdx !== -1 ? nameIdx : 0,
-      roleIdx: roleIdx !== -1 ? roleIdx : 0,
-      classIdx: classIdx !== -1 ? classIdx : 0,
-      nipIdx: nipIdx !== -1 ? nipIdx : 0
-    });
-    setIsTeacherCsvMappingOpen(true);
   };
 
   const handleConfirmImportTeacherCsv = () => {
@@ -1633,7 +1646,7 @@ export default function DatabaseCrud({
       />
       <input 
         type="file" 
-        accept=".csv, .xlsx, .xls" 
+        accept=".csv" 
         className="hidden" 
         ref={csvFileInputRef} 
         onChange={handleImportCsvAction} 
@@ -1767,17 +1780,9 @@ export default function DatabaseCrud({
           <button 
             onClick={() => csvFileInputRef.current?.click()}
             className="flex items-center gap-1 text-[11px] font-bold bg-emerald-50 border border-emerald-200 text-emerald-800 px-2 py-1.5 rounded-lg hover:bg-emerald-100 transition-colors shadow-xs cursor-pointer"
-            title="Impor daftar massal dari file CSV atau Excel"
+            title="Impor daftar siswa massal dari file CSV (.csv)"
           >
-            <Upload className="h-3 w-3 text-emerald-600" /> Impor (CSV/Excel)
-          </button>
-          
-          <button 
-            onClick={activeSubTab === 'guru' ? downloadTeacherTemplate : downloadStudentTemplate}
-            className="flex items-center gap-1 text-[11px] font-bold bg-slate-50 border border-slate-200 text-slate-700 px-2 py-1.5 rounded-lg hover:bg-slate-100 transition-colors shadow-xs cursor-pointer"
-            title="Download Template Format CSV/Excel"
-          >
-            <Download className="h-3 w-3 text-slate-500" /> Template {activeSubTab === 'guru' ? 'Guru' : 'Siswa'}
+            <Upload className="h-3 w-3 text-emerald-600" /> Impor CSV
           </button>
           
           <div className="hidden sm:block w-px h-4 bg-slate-300 mx-1"></div>
@@ -1845,9 +1850,9 @@ export default function DatabaseCrud({
               <button
                 onClick={() => csvFileInputRef.current?.click()}
                 className="bg-teal-600 hover:bg-teal-700 text-white font-bold px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
-                title="Impor daftar siswa massal dari file CSV (.csv) atau Excel (.xlsx/.xls)"
+                title="Impor daftar siswa massal dari file CSV (.csv)"
               >
-                <Upload className="h-4 w-4" /> Impor (CSV/Excel)
+                <Upload className="h-4 w-4" /> Impor Siswa CSV
               </button>
 
               <button
@@ -2667,7 +2672,7 @@ export default function DatabaseCrud({
               <label className="relative inline-flex items-center cursor-pointer select-none">
                 <input
                   type="checkbox"
-                  checked={editKop.showPageNumbering ?? false}
+                  checked={editKop.showPageNumbering ?? true}
                   onChange={(e) => setEditKop({ ...editKop, showPageNumbering: e.target.checked })}
                   className="sr-only peer"
                 />
@@ -2758,40 +2763,20 @@ export default function DatabaseCrud({
             </div>
 
             {/* Footer Date Display Toggle */}
-            <div className="mt-4 p-4 bg-white border border-slate-200 rounded-xl flex flex-col gap-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h5 className="font-bold text-slate-700 text-xs">Aktifkan Teks Footer Kustom</h5>
-                  <p className="text-[11px] text-slate-400 mt-0.5">Tampilkan teks kustom di bagian bawah halaman.</p>
-                </div>
-                <label className="relative inline-flex items-center cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={editKop.enableCustomFooter ?? false}
-                    onChange={(e) => setEditKop({...editKop, enableCustomFooter: e.target.checked})}
-                    className="sr-only peer"
-                  />
-                  <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
-                </label>
+            <div className="mt-4 p-4 bg-white border border-slate-200 rounded-xl flex items-center justify-between">
+              <div>
+                <h5 className="font-bold text-slate-700 text-xs">Tanggal Otomatis di Footer</h5>
+                <p className="text-[11px] text-slate-400 mt-0.5">Tampilkan tanggal cetak otomatis (Dicetak: DD MMMM YYYY) di sudut bawah halaman rapor.</p>
               </div>
-
-              <div className="w-full h-px bg-slate-100"></div>
-
-              <div className="flex items-center justify-between">
-                <div>
-                  <h5 className="font-bold text-slate-700 text-xs">Tanggal Otomatis di Footer</h5>
-                  <p className="text-[11px] text-slate-400 mt-0.5">Tampilkan tanggal cetak otomatis (Dicetak: DD MMMM YYYY) di sudut bawah halaman rapor.</p>
-                </div>
-                <label className="relative inline-flex items-center cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={editKop.enableAutoDate ?? false}
-                    onChange={(e) => setEditKop({...editKop, enableAutoDate: e.target.checked})}
-                    className="sr-only peer"
-                  />
-                  <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
-                </label>
-              </div>
+              <label className="relative inline-flex items-center cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={editKop.enableAutoDate ?? true}
+                  onChange={(e) => setEditKop({...editKop, enableAutoDate: e.target.checked})}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+              </label>
             </div>
 
             {/* Quick Actions & Print Settings Configuration */}
@@ -2812,21 +2797,12 @@ export default function DatabaseCrud({
                 </div>
 
                 {/* Toggles */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200">
-                    <span className="font-bold text-slate-700 text-xs">Aktifkan Teks Footer</span>
-                    <button
-                      onClick={() => onUpdateKopSekolah({...kopSekolah, enableCustomFooter: !kopSekolah.enableCustomFooter})}
-                      className={`w-10 h-5 rounded-full transition-colors flex items-center px-0.5 shrink-0 ${kopSekolah.enableCustomFooter ? 'bg-emerald-500' : 'bg-slate-300'}`}
-                    >
-                      <div className={`w-4 h-4 rounded-full bg-white transition-transform ${kopSekolah.enableCustomFooter ? 'translate-x-5' : ''}`} />
-                    </button>
-                  </div>
+                <div className="grid grid-cols-2 gap-4">
                   <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200">
                     <span className="font-bold text-slate-700 text-xs">Tanggal Otomatis</span>
                     <button
                       onClick={() => onUpdateKopSekolah({...kopSekolah, enableAutoDate: !kopSekolah.enableAutoDate})}
-                      className={`w-10 h-5 rounded-full transition-colors flex items-center px-0.5 shrink-0 ${kopSekolah.enableAutoDate ? 'bg-emerald-500' : 'bg-slate-300'}`}
+                      className={`w-10 h-5 rounded-full transition-colors flex items-center px-0.5 ${kopSekolah.enableAutoDate ? 'bg-emerald-500' : 'bg-slate-300'}`}
                     >
                       <div className={`w-4 h-4 rounded-full bg-white transition-transform ${kopSekolah.enableAutoDate ? 'translate-x-5' : ''}`} />
                     </button>
@@ -2835,7 +2811,7 @@ export default function DatabaseCrud({
                     <span className="font-bold text-slate-700 text-xs">No. Halaman</span>
                     <button
                       onClick={() => onUpdateKopSekolah({...kopSekolah, showPageNumbering: !kopSekolah.showPageNumbering})}
-                      className={`w-10 h-5 rounded-full transition-colors flex items-center px-0.5 shrink-0 ${kopSekolah.showPageNumbering ? 'bg-emerald-500' : 'bg-slate-300'}`}
+                      className={`w-10 h-5 rounded-full transition-colors flex items-center px-0.5 ${kopSekolah.showPageNumbering ? 'bg-emerald-500' : 'bg-slate-300'}`}
                     >
                       <div className={`w-4 h-4 rounded-full bg-white transition-transform ${kopSekolah.showPageNumbering ? 'translate-x-5' : ''}`} />
                     </button>
@@ -2905,6 +2881,318 @@ export default function DatabaseCrud({
               </button>
             </div>
           </form>
+
+          {/* CUSTOMIZABLE HEADERS SECTION */}
+          <div className="mt-8 bg-white border border-slate-200 rounded-2xl p-6 shadow-xs max-w-2xl">
+            <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-100">
+              <div>
+                <h4 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+                  <Building2 className="h-4 w-4 text-emerald-600" />
+                  Pengelola Kustom Header (Kop Sekolah)
+                </h4>
+                <p className="text-xs text-slate-400 mt-0.5">Buat, edit, dan pilih profil Kop Sekolah kustom untuk digunakan pada cetak rapor.</p>
+              </div>
+              
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-slate-600">{editKop.enableHeader ? 'Aktif' : 'Nonaktif'}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const updated = { ...editKop, enableHeader: !editKop.enableHeader };
+                    setEditKop(updated);
+                    onUpdateKopSekolah(updated);
+                    notify(`Header Kop Sekolah berhasil ${updated.enableHeader ? 'diaktifkan' : 'dinonaktifkan'}!`, 'info');
+                  }}
+                  className={`w-11 h-6 rounded-full transition-colors flex items-center px-0.5 cursor-pointer ${editKop.enableHeader ? 'bg-emerald-600' : 'bg-slate-300'}`}
+                >
+                  <div className={`w-5 h-5 rounded-full bg-white transition-transform ${editKop.enableHeader ? 'translate-x-5' : ''}`} />
+                </button>
+              </div>
+            </div>
+
+            {/* List of existing header profiles */}
+            <div className="space-y-3 mb-6">
+              {headerProfiles.length === 0 ? (
+                <p className="text-xs text-slate-400 italic bg-slate-50 border border-dashed border-slate-200 p-4 rounded-xl text-center">Belum ada profil header kustom. Silahkan tambahkan di bawah ini.</p>
+              ) : (
+                headerProfiles.map((hp) => (
+                  <div key={hp.id} className={`p-4 border rounded-xl transition-all flex items-start justify-between gap-3 ${hp.isActive ? 'border-emerald-500 bg-emerald-50/20' : 'border-slate-200 bg-white hover:bg-slate-50'}`}>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="font-extrabold text-slate-800 text-xs truncate">{hp.name}</span>
+                        {hp.isActive && (
+                          <span className="bg-emerald-100 text-emerald-800 text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">Aktif</span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-slate-500 space-y-0.5">
+                        <p><strong className="text-slate-700">Sekolah:</strong> {hp.namaSekolah}</p>
+                        <p><strong className="text-slate-700">Yayasan:</strong> {hp.yayasan || '-'}</p>
+                        <p className="truncate"><strong className="text-slate-700">Alamat:</strong> {hp.alamat}</p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {!hp.isActive && (
+                        <button
+                          type="button"
+                          onClick={() => handleActiveHeaderProfile(hp.id)}
+                          className="bg-white hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 text-emerald-600 px-2 py-1 rounded text-[10px] font-bold cursor-pointer transition-colors"
+                        >
+                          Pilih
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleEditHeaderProfileClick(hp)}
+                        className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-600 p-1.5 rounded cursor-pointer transition-colors"
+                        title="Edit Profil"
+                      >
+                        <Edit2 className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteHeaderProfile(hp.id)}
+                        className="bg-white hover:bg-rose-50 border border-slate-200 hover:border-rose-300 text-rose-600 p-1.5 rounded cursor-pointer transition-colors"
+                        title="Hapus Profil"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Header Profile Add/Edit Form */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+              <h5 className="font-bold text-slate-700 text-xs mb-3 uppercase tracking-wider">{editingHeaderId ? '📝 Edit Profil Header' : '➕ Tambah Profil Header Baru'}</h5>
+              
+              <div className="space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="flex flex-col gap-1 text-xs">
+                    <label className="font-bold text-slate-500">Nama Profil Header</label>
+                    <input
+                      type="text"
+                      placeholder="Contoh: Profil Utama Sekolah"
+                      value={newHeader.name || ''}
+                      onChange={(e) => setNewHeader({ ...newHeader, name: e.target.value })}
+                      className="bg-white border border-slate-300 rounded-lg p-2 font-semibold"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1 text-xs">
+                    <label className="font-bold text-slate-500">Nama Yayasan</label>
+                    <input
+                      type="text"
+                      placeholder="Contoh: YAYASAN KARTIKA JAYA"
+                      value={newHeader.yayasan || ''}
+                      onChange={(e) => setNewHeader({ ...newHeader, yayasan: e.target.value })}
+                      className="bg-white border border-slate-300 rounded-lg p-2"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1 text-xs">
+                    <label className="font-bold text-slate-500">Koordinator</label>
+                    <input
+                      type="text"
+                      placeholder="Contoh: KOREM SURABAYA"
+                      value={newHeader.koordinator || ''}
+                      onChange={(e) => setNewHeader({ ...newHeader, koordinator: e.target.value })}
+                      className="bg-white border border-slate-300 rounded-lg p-2"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1 text-xs">
+                    <label className="font-bold text-slate-500">Cabang</label>
+                    <input
+                      type="text"
+                      placeholder="Contoh: IV BRAWIJAYA"
+                      value={newHeader.cabang || ''}
+                      onChange={(e) => setNewHeader({ ...newHeader, cabang: e.target.value })}
+                      className="bg-white border border-slate-300 rounded-lg p-2"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1 text-xs sm:col-span-2">
+                    <label className="font-bold text-slate-500">Nama Sekolah</label>
+                    <input
+                      type="text"
+                      placeholder="Contoh: SMA KARTIKA SURABAYA"
+                      value={newHeader.namaSekolah || ''}
+                      onChange={(e) => setNewHeader({ ...newHeader, namaSekolah: e.target.value })}
+                      className="bg-white border border-slate-300 rounded-lg p-2 font-bold"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1 text-xs sm:col-span-2">
+                    <label className="font-bold text-slate-500">Alamat Lengkap</label>
+                    <textarea
+                      rows={2}
+                      placeholder="Contoh: Jl. Brawijaya No. 38..."
+                      value={newHeader.alamat || ''}
+                      onChange={(e) => setNewHeader({ ...newHeader, alamat: e.target.value })}
+                      className="bg-white border border-slate-300 rounded-lg p-2 text-xs"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1 text-xs sm:col-span-2">
+                    <label className="font-bold text-slate-500">Logo URL / Base64</label>
+                    <input
+                      type="text"
+                      placeholder="https://... atau biarkan kosong"
+                      value={newHeader.logoUrl || ''}
+                      onChange={(e) => setNewHeader({ ...newHeader, logoUrl: e.target.value })}
+                      className="bg-white border border-slate-300 rounded-lg p-2 text-xs"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
+                  {editingHeaderId && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingHeaderId(null);
+                        setNewHeader({ name: '', yayasan: '', koordinator: '', cabang: '', namaSekolah: '', alamat: '', logoUrl: '' });
+                      }}
+                      className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold px-3 py-1.5 rounded-lg text-xs cursor-pointer"
+                    >
+                      Batal
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleSaveHeaderProfile}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-1.5 rounded-lg text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  >
+                    <Save className="h-3.5 w-3.5" />
+                    {editingHeaderId ? 'Perbarui Profil' : 'Tambahkan Profil'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* CUSTOMIZABLE FOOTERS SECTION */}
+          <div className="mt-6 bg-white border border-slate-200 rounded-2xl p-6 shadow-xs max-w-2xl">
+            <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-100">
+              <div>
+                <h4 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+                  <Building2 className="h-4 w-4 text-emerald-600" />
+                  Pengelola Kustom Footer
+                </h4>
+                <p className="text-xs text-slate-400 mt-0.5">Buat, edit, dan pilih catatan kaki (footer text) kustom untuk lembar rapor PDF.</p>
+              </div>
+              
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-bold text-slate-600">{editKop.enableFooter ? 'Aktif' : 'Nonaktif'}</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const updated = { ...editKop, enableFooter: !editKop.enableFooter };
+                    setEditKop(updated);
+                    onUpdateKopSekolah(updated);
+                    notify(`Footer Kustom berhasil ${updated.enableFooter ? 'diaktifkan' : 'dinonaktifkan'}!`, 'info');
+                  }}
+                  className={`w-11 h-6 rounded-full transition-colors flex items-center px-0.5 cursor-pointer ${editKop.enableFooter ? 'bg-emerald-600' : 'bg-slate-300'}`}
+                >
+                  <div className={`w-5 h-5 rounded-full bg-white transition-transform ${editKop.enableFooter ? 'translate-x-5' : ''}`} />
+                </button>
+              </div>
+            </div>
+
+            {/* List of existing footer profiles */}
+            <div className="space-y-3 mb-6">
+              {footerProfiles.length === 0 ? (
+                <p className="text-xs text-slate-400 italic bg-slate-50 border border-dashed border-slate-200 p-4 rounded-xl text-center">Belum ada profil footer kustom. Silahkan tambahkan di bawah ini.</p>
+              ) : (
+                footerProfiles.map((fp) => (
+                  <div key={fp.id} className={`p-4 border rounded-xl transition-all flex items-start justify-between gap-3 ${fp.isActive ? 'border-emerald-500 bg-emerald-50/20' : 'border-slate-200 bg-white hover:bg-slate-50'}`}>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="font-extrabold text-slate-800 text-xs truncate">{fp.name}</span>
+                        {fp.isActive && (
+                          <span className="bg-emerald-100 text-emerald-800 text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider">Aktif</span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-slate-500 line-clamp-2 italic">"{fp.text}"</p>
+                    </div>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {!fp.isActive && (
+                        <button
+                          type="button"
+                          onClick={() => handleActiveFooterProfile(fp.id)}
+                          className="bg-white hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 text-emerald-600 px-2 py-1 rounded text-[10px] font-bold cursor-pointer transition-colors"
+                        >
+                          Pilih
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleEditFooterProfileClick(fp)}
+                        className="bg-white hover:bg-slate-100 border border-slate-200 text-slate-600 p-1.5 rounded cursor-pointer transition-colors"
+                        title="Edit Profil"
+                      >
+                        <Edit2 className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteFooterProfile(fp.id)}
+                        className="bg-white hover:bg-rose-50 border border-slate-200 hover:border-rose-300 text-rose-600 p-1.5 rounded cursor-pointer transition-colors"
+                        title="Hapus Profil"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Footer Profile Add/Edit Form */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+              <h5 className="font-bold text-slate-700 text-xs mb-3 uppercase tracking-wider">{editingFooterId ? '📝 Edit Profil Footer' : '➕ Tambah Profil Footer Baru'}</h5>
+              
+              <div className="space-y-3">
+                <div className="flex flex-col gap-1 text-xs">
+                  <label className="font-bold text-slate-500">Nama Profil Footer</label>
+                  <input
+                    type="text"
+                    placeholder="Contoh: Disclaimer Kelulusan / Kerahasiaan"
+                    value={newFooter.name || ''}
+                    onChange={(e) => setNewFooter({ ...newFooter, name: e.target.value })}
+                    className="bg-white border border-slate-300 rounded-lg p-2 font-semibold"
+                  />
+                </div>
+                <div className="flex flex-col gap-1 text-xs">
+                  <label className="font-bold text-slate-500">Teks Footer Kustom</label>
+                  <textarea
+                    rows={2}
+                    placeholder="Contoh: Dokumen ini diterbitkan secara sah oleh sekolah..."
+                    value={newFooter.text || ''}
+                    onChange={(e) => setNewFooter({ ...newFooter, text: e.target.value })}
+                    className="bg-white border border-slate-300 rounded-lg p-2 text-xs"
+                  />
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2 border-t border-slate-200">
+                  {editingFooterId && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEditingFooterId(null);
+                        setNewFooter({ name: '', text: '' });
+                      }}
+                      className="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold px-3 py-1.5 rounded-lg text-xs cursor-pointer"
+                    >
+                      Batal
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleSaveFooterProfile}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-4 py-1.5 rounded-lg text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  >
+                    <Save className="h-3.5 w-3.5" />
+                    {editingFooterId ? 'Perbarui Profil' : 'Tambahkan Profil'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -3847,50 +4135,6 @@ export default function DatabaseCrud({
               </div>
             )}
           </div>
-
-          <div className="mt-8 mb-6">
-            <h4 className="font-bold text-slate-800 text-sm flex items-center gap-2">
-              <Zap className="h-4 w-4 text-emerald-600" />
-              Pengaturan Tombol Aksi Cepat (Quick Actions)
-            </h4>
-            <p className="text-xs text-slate-400 mt-0.5">Pilih maksimal 3 aksi yang ingin ditampilkan di tombol melayang di pojok kanan bawah layar.</p>
-          </div>
-          <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs max-w-xl">
-            <div className="flex flex-col gap-3">
-              {[
-                { id: 'print', label: 'Cetak Massal Kelas', icon: 'Printer' },
-                { id: 'excel', label: 'Unduh Excel Kelas', icon: 'FileSpreadsheet' },
-                { id: 'add_student', label: 'Tambah Murid', icon: 'User' },
-                { id: 'contrast', label: 'Mode Kontras Tinggi', icon: '◐' },
-                { id: 'sort', label: 'Urutkan Grid Siswa', icon: 'ArrowUpDown' },
-              ].map(action => {
-                const isSelected = localQuickActions.includes(action.id);
-                return (
-                  <label key={action.id} className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${isSelected ? 'bg-indigo-50 border-indigo-200' : 'bg-white border-slate-200 hover:bg-slate-50'}`}>
-                    <input 
-                      type="checkbox" 
-                      className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
-                      checked={isSelected}
-                      onChange={(e) => {
-                        let next = [...localQuickActions];
-                        if (e.target.checked) {
-                          if (next.length >= 3) next.shift(); // keep max 3
-                          next.push(action.id);
-                        } else {
-                          next = next.filter(id => id !== action.id);
-                        }
-                        saveLocalQuickActions(next);
-                      }}
-                    />
-                    <span className={`text-sm font-bold ${isSelected ? 'text-indigo-900' : 'text-slate-700'}`}>
-                      {action.label}
-                    </span>
-                  </label>
-                );
-              })}
-            </div>
-            <p className="text-[10px] text-slate-400 mt-4 italic">Perubahan akan langsung diterapkan ke tombol melayang ⚡.</p>
-          </div>
         </div>
       )}
 
@@ -4320,7 +4564,7 @@ export default function DatabaseCrud({
           <div className="bg-white rounded-xl border border-slate-300 shadow-2xl p-6 max-w-md w-full flex flex-col gap-4 animate-in slide-in-from-bottom duration-200">
             <div>
               <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
-                <span className="text-lg">📋</span> Pemetaan Kolom Data Siswa
+                <span className="text-lg">📋</span> Pemetaan Kolom File CSV Siswa
               </h3>
               <p className="text-[11px] text-slate-400 mt-0.5">
                 File: {csvFileName} ({csvRows.length} baris data terdeteksi)
@@ -4427,7 +4671,7 @@ export default function DatabaseCrud({
           <div className="bg-white rounded-xl border border-slate-300 shadow-2xl p-6 max-w-md w-full flex flex-col gap-4 animate-in slide-in-from-bottom duration-200">
             <div>
               <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
-                <span className="text-lg">📋</span> Pemetaan Kolom Data Guru
+                <span className="text-lg">📋</span> Pemetaan Kolom File CSV Guru
               </h3>
               <p className="text-[11px] text-slate-400 mt-0.5">
                 File: {csvFileName} ({csvRows.length} baris data terdeteksi)

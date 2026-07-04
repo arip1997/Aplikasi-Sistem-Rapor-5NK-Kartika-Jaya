@@ -1,5 +1,24 @@
 export type ScoreKey = 'BSB' | 'B' | 'MB' | 'BB';
 
+export interface HeaderProfile {
+  id: string;
+  name: string; // e.g. "Profil Header Standard", "Profil Header Ujian"
+  yayasan: string;
+  koordinator: string;
+  cabang: string;
+  namaSekolah: string;
+  alamat: string;
+  logoUrl: string;
+  isActive: boolean;
+}
+
+export interface FooterProfile {
+  id: string;
+  name: string; // e.g. "Profil Footer Standard"
+  text: string;
+  isActive: boolean;
+}
+
 export interface KopSekolah {
   yayasan: string;
   koordinator: string;
@@ -18,9 +37,12 @@ export interface KopSekolah {
   showPageNumbering?: boolean;
   templateNotes?: string[];
   customFooterText?: string;
-  enableCustomFooter?: boolean;
   enableAutoDate?: boolean;
   forcedOrientation?: 'auto' | 'portrait' | 'landscape';
+  enableHeader?: boolean; // Master switch to enable/disable Header
+  enableFooter?: boolean; // Master switch to enable/disable Footer
+  customHeadersList?: HeaderProfile[]; // CRUD custom headers
+  customFootersList?: FooterProfile[]; // CRUD custom footers
 }
 
 export interface ScoreOption {

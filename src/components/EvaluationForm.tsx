@@ -28,7 +28,6 @@ interface EvaluationFormProps {
   selectedClass?: string;
   isGeneratingHiddenPdf?: boolean;
   onExportPdfPerSiswa?: (studentId: string) => void;
-  triggerAlert?: (type: 'success' | 'info' | 'error', message: string) => void;
 }
 
 export default function EvaluationForm({
@@ -42,24 +41,8 @@ export default function EvaluationForm({
   onClearClassGrades,
   selectedClass = '',
   isGeneratingHiddenPdf = false,
-  onExportPdfPerSiswa,
-  triggerAlert
+  onExportPdfPerSiswa
 }: EvaluationFormProps) {
-  
-  // Override native alert to use the beautiful global alert system if available
-  const alert = (message: string) => {
-    if (triggerAlert) {
-      // Determine type based on message content
-      const msg = message.toLowerCase();
-      let type: 'success' | 'info' | 'error' = 'info';
-      if (msg.includes('berhasil') || msg.includes('sukses')) type = 'success';
-      if (msg.includes('gagal') || msg.includes('error') || msg.includes('salah')) type = 'error';
-      triggerAlert(type, message);
-    } else {
-      window.alert(message);
-    }
-  };
-
   const [activeCategoryIndex, setActiveCategoryIndex] = useState(0);
   const [studentSearch, setStudentSearch] = useState('');
   const [showResetStudentConfirm, setShowResetStudentConfirm] = useState(false);
