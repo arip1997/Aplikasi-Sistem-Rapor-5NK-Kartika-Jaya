@@ -34,7 +34,8 @@ import {
   Database,
   Cloud,
   Copy,
-  Settings
+  Settings,
+  Zap
 } from 'lucide-react';
 
 interface DatabaseCrudProps {
@@ -61,6 +62,7 @@ interface DatabaseCrudProps {
   setShortcuts?: (s: {search: string, tab: string}) => void;
   triggerAlert?: (type: 'success' | 'info' | 'error', message: string) => void;
   triggerToast?: (type: 'success' | 'info' | 'error', message: string) => void;
+  openAddStudentTrigger?: number;
 }
 
 export default function DatabaseCrud({
@@ -87,9 +89,44 @@ export default function DatabaseCrud({
   setShortcuts,
   triggerAlert,
   triggerToast,
+  openAddStudentTrigger,
 }: DatabaseCrudProps) {
   const [activeSubTab, setActiveSubTab] = useState<'siswa' | 'guru' | 'indikator' | 'kop' | 'backup' | 'riwayat' | 'snapshot' | 'integritas' | 'pengaturan'>('siswa');
   const [localAlert, setLocalAlert] = useState<{ type: 'success' | 'info' | 'error'; message: string } | null>(null);
+  
+  // Override native alert to use the beautiful global alert system if available
+  const alert = (message: string) => {
+    if (triggerAlert) {
+      // Determine type based on message content
+      const msg = message.toLowerCase();
+      let type: 'success' | 'info' | 'error' = 'info';
+      if (msg.includes('berhasil') || msg.includes('sukses')) type = 'success';
+      if (msg.includes('gagal') || msg.includes('error') || msg.includes('salah')) type = 'error';
+      triggerAlert(type, message);
+    } else {
+      window.alert(message);
+    }
+  };
+  
+  const [localQuickActions, setLocalQuickActions] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('rapor_quick_actions');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } catch(e) {}
+    return ['print', 'excel', 'contrast'];
+  });
+
+  const saveLocalQuickActions = (newActions: string[]) => {
+    setLocalQuickActions(newActions);
+    localStorage.setItem('rapor_quick_actions', JSON.stringify(newActions));
+    window.dispatchEvent(new Event('quickActionsChanged'));
+    if (triggerToast) triggerToast('success', '✓ Aksi cepat berhasil diperbarui');
+  };
 
   const notify = (message: string, type: 'success' | 'info' | 'error' = 'info') => {
     if (triggerAlert) {
@@ -569,6 +606,13 @@ export default function DatabaseCrud({
     });
     setIsSiswaFormOpen(true);
   };
+
+  useEffect(() => {
+    if (openAddStudentTrigger && openAddStudentTrigger > 0) {
+      setActiveSubTab('siswa');
+      handleOpenAddSiswa();
+    }
+  }, [openAddStudentTrigger]);
 
   const handleOpenEditSiswa = (s: Student) => {
     setEditingSiswa(s);
@@ -1135,31 +1179,82 @@ export default function DatabaseCrud({
     return lines;
   };
 
+  const downloadStudentTemplate = () => {
+    const csvContent = "Nama Lengkap,NIS,Kelas,Jenis Kelamin\nBudi Santoso,1001,X-A,L\nSiti Aminah,1002,X-A,P";
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', 'Template_Data_Siswa.csv');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const handleImportCsvAction = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     try {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const text = event.target?.result as string;
-        if (!text) {
-          alert('File CSV kosong atau gagal dibaca.');
-          return;
-        }
+      if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const data = event.target?.result;
+          const workbook = XLSX.read(data, { type: 'binary' });
+          const firstSheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[firstSheetName];
+          
+          const rows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+          const validRows = rows.filter(r => r.length > 0 && r.some(c => c !== undefined && c !== null && String(c).trim() !== ''));
+          
+          if (validRows.length < 2) {
+            alert('Format Excel tidak valid atau baris data terlalu sedikit (harus memiliki baris header dan minimal 1 data siswa).');
+            return;
+          }
 
-        const rows = parseCSVToRows(text);
-        if (rows.length < 2) {
-          alert('Format CSV tidak valid atau baris data terlalu sedikit (harus memiliki baris header dan minimal 1 data siswa).');
-          return;
-        }
+          const headers = validRows[0].map(h => String(h || '').trim());
+          setCsvHeaders(headers);
+          setCsvRows(validRows.slice(1).map(r => {
+            const mappedRow = [...r];
+            while (mappedRow.length < headers.length) mappedRow.push('');
+            return mappedRow.map(c => String(c || '').trim());
+          }));
+          setCsvFileName(file.name);
+          
+          autoDetectColumnsAndOpen(headers);
+        };
+        reader.readAsBinaryString(file);
+      } else {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const text = event.target?.result as string;
+          if (!text) {
+            alert('File CSV kosong atau gagal dibaca.');
+            return;
+          }
 
-        const headers = rows[0];
-        setCsvHeaders(headers);
-        setCsvRows(rows.slice(1));
-        setCsvFileName(file.name);
+          const rows = parseCSVToRows(text);
+          if (rows.length < 2) {
+            alert('Format CSV tidak valid atau baris data terlalu sedikit (harus memiliki baris header dan minimal 1 data siswa).');
+            return;
+          }
 
-        // Auto guessing the columns mapping based on common keywords
+          const headers = rows[0];
+          setCsvHeaders(headers);
+          setCsvRows(rows.slice(1));
+          setCsvFileName(file.name);
+
+          autoDetectColumnsAndOpen(headers);
+        };
+        reader.readAsText(file);
+      }
+    } catch (err) {
+      alert('Gagal membaca file: ' + err);
+    }
+  };
+
+  const autoDetectColumnsAndOpen = (headers: string[]) => {
+    // Auto guessing the columns mapping based on common keywords
         let nameIdx = -1;
         let nisIdx = -1;
         let classIdx = -1;
@@ -1190,11 +1285,6 @@ export default function DatabaseCrud({
         });
 
         setIsCsvMappingOpen(true);
-      };
-      reader.readAsText(file, 'UTF-8');
-    } catch (err: any) {
-      alert(`Gagal memproses file CSV: ${err.message}`);
-    }
   };
 
   const handleConfirmImportCsv = () => {
@@ -1297,50 +1387,95 @@ export default function DatabaseCrud({
     }
   };
 
+  const downloadTeacherTemplate = () => {
+    const csvContent = "Nama Lengkap,NIP,Peran,Kelas Diajar\nAndi Wijaya,198001012010011001,Wali Kelas,X-A\nBudi Santoso,198202022010021002,Guru Mapel,";
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.setAttribute('href', url);
+    link.setAttribute('download', 'Template_Data_Guru.csv');
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   const handleImportTeacherCsvAction = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     try {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const text = event.target?.result as string;
-        if (!text) {
-          alert('File CSV kosong atau gagal dibaca.');
-          return;
-        }
+      if (file.name.endsWith('.xlsx') || file.name.endsWith('.xls')) {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const data = event.target?.result;
+          const workbook = XLSX.read(data, { type: 'binary' });
+          const firstSheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[firstSheetName];
+          
+          const rows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+          const validRows = rows.filter(r => r.length > 0 && r.some(c => c !== undefined && c !== null && String(c).trim() !== ''));
+          
+          if (validRows.length < 2) {
+            alert('Format Excel tidak valid atau baris data terlalu sedikit (harus memiliki baris header dan minimal 1 data guru).');
+            return;
+          }
 
-        const rows = parseCSVToRows(text);
-        if (rows.length < 2) {
-          alert('Format CSV tidak valid atau baris data terlalu sedikit (harus memiliki baris header dan minimal 1 data guru).');
-          return;
-        }
+          const headers = validRows[0].map(h => String(h || '').trim());
+          setCsvHeaders(headers);
+          setCsvRows(validRows.slice(1).map(r => {
+            const mappedRow = [...r];
+            while (mappedRow.length < headers.length) mappedRow.push('');
+            return mappedRow.map(c => String(c || '').trim());
+          }));
+          setCsvFileName(file.name);
+          
+          autoDetectTeacherColumnsAndOpen(headers);
+        };
+        reader.readAsBinaryString(file);
+      } else {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const text = event.target?.result as string;
+          if (!text) {
+            alert('File CSV kosong atau gagal dibaca.');
+            return;
+          }
 
-        const headers = rows[0].map(h => h.trim());
-        setCsvHeaders(headers);
-        setCsvRows(rows.slice(1));
-        setCsvFileName(file.name);
+          const rows = parseCSVToRows(text);
+          if (rows.length < 2) {
+            alert('Format CSV tidak valid atau baris data terlalu sedikit (harus memiliki baris header dan minimal 1 data guru).');
+            return;
+          }
 
-        // Auto-detect columns
-        const hLow = headers.map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ''));
-        const nameIdx = hLow.findIndex(h => h.includes('nama') || h.includes('name'));
-        const roleIdx = hLow.findIndex(h => h.includes('role') || h.includes('peran') || h.includes('jabatan'));
-        const classIdx = hLow.findIndex(h => h.includes('kelas') || h.includes('class') || h.includes('walikelas'));
-        const nipIdx = hLow.findIndex(h => h.includes('nip') || h.includes('id'));
+          const headers = rows[0].map(h => h.trim());
+          setCsvHeaders(headers);
+          setCsvRows(rows.slice(1));
+          setCsvFileName(file.name);
 
-        setTeacherCsvColumnMapping({
-          nameIdx: nameIdx !== -1 ? nameIdx : 0,
-          roleIdx: roleIdx !== -1 ? roleIdx : 0,
-          classIdx: classIdx !== -1 ? classIdx : 0,
-          nipIdx: nipIdx !== -1 ? nipIdx : 0
-        });
-
-        setIsTeacherCsvMappingOpen(true);
-      };
-      reader.readAsText(file);
+          autoDetectTeacherColumnsAndOpen(headers);
+        };
+        reader.readAsText(file);
+      }
     } catch (err: any) {
-      alert(`Gagal memproses file CSV: ${err.message}`);
+      alert(`Gagal memproses file: ${err.message}`);
     }
+  };
+
+  const autoDetectTeacherColumnsAndOpen = (headers: string[]) => {
+    // Auto-detect columns
+    const hLow = headers.map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ''));
+    const nameIdx = hLow.findIndex(h => h.includes('nama') || h.includes('name'));
+    const roleIdx = hLow.findIndex(h => h.includes('role') || h.includes('peran') || h.includes('jabatan'));
+    const classIdx = hLow.findIndex(h => h.includes('kelas') || h.includes('class') || h.includes('walikelas'));
+    const nipIdx = hLow.findIndex(h => h.includes('nip') || h.includes('id'));
+
+    setTeacherCsvColumnMapping({
+      nameIdx: nameIdx !== -1 ? nameIdx : 0,
+      roleIdx: roleIdx !== -1 ? roleIdx : 0,
+      classIdx: classIdx !== -1 ? classIdx : 0,
+      nipIdx: nipIdx !== -1 ? nipIdx : 0
+    });
+    setIsTeacherCsvMappingOpen(true);
   };
 
   const handleConfirmImportTeacherCsv = () => {
@@ -1498,7 +1633,7 @@ export default function DatabaseCrud({
       />
       <input 
         type="file" 
-        accept=".csv" 
+        accept=".csv, .xlsx, .xls" 
         className="hidden" 
         ref={csvFileInputRef} 
         onChange={handleImportCsvAction} 
@@ -1632,9 +1767,17 @@ export default function DatabaseCrud({
           <button 
             onClick={() => csvFileInputRef.current?.click()}
             className="flex items-center gap-1 text-[11px] font-bold bg-emerald-50 border border-emerald-200 text-emerald-800 px-2 py-1.5 rounded-lg hover:bg-emerald-100 transition-colors shadow-xs cursor-pointer"
-            title="Impor daftar siswa massal dari file CSV (.csv)"
+            title="Impor daftar massal dari file CSV atau Excel"
           >
-            <Upload className="h-3 w-3 text-emerald-600" /> Impor CSV
+            <Upload className="h-3 w-3 text-emerald-600" /> Impor (CSV/Excel)
+          </button>
+          
+          <button 
+            onClick={activeSubTab === 'guru' ? downloadTeacherTemplate : downloadStudentTemplate}
+            className="flex items-center gap-1 text-[11px] font-bold bg-slate-50 border border-slate-200 text-slate-700 px-2 py-1.5 rounded-lg hover:bg-slate-100 transition-colors shadow-xs cursor-pointer"
+            title="Download Template Format CSV/Excel"
+          >
+            <Download className="h-3 w-3 text-slate-500" /> Template {activeSubTab === 'guru' ? 'Guru' : 'Siswa'}
           </button>
           
           <div className="hidden sm:block w-px h-4 bg-slate-300 mx-1"></div>
@@ -1702,9 +1845,9 @@ export default function DatabaseCrud({
               <button
                 onClick={() => csvFileInputRef.current?.click()}
                 className="bg-teal-600 hover:bg-teal-700 text-white font-bold px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 shadow-xs cursor-pointer transition-colors"
-                title="Impor daftar siswa massal dari file CSV (.csv)"
+                title="Impor daftar siswa massal dari file CSV (.csv) atau Excel (.xlsx/.xls)"
               >
-                <Upload className="h-4 w-4" /> Impor Siswa CSV
+                <Upload className="h-4 w-4" /> Impor (CSV/Excel)
               </button>
 
               <button
@@ -2524,7 +2667,7 @@ export default function DatabaseCrud({
               <label className="relative inline-flex items-center cursor-pointer select-none">
                 <input
                   type="checkbox"
-                  checked={editKop.showPageNumbering ?? true}
+                  checked={editKop.showPageNumbering ?? false}
                   onChange={(e) => setEditKop({ ...editKop, showPageNumbering: e.target.checked })}
                   className="sr-only peer"
                 />
@@ -2615,20 +2758,106 @@ export default function DatabaseCrud({
             </div>
 
             {/* Footer Date Display Toggle */}
-            <div className="mt-4 p-4 bg-white border border-slate-200 rounded-xl flex items-center justify-between">
-              <div>
-                <h5 className="font-bold text-slate-700 text-xs">Tanggal Otomatis di Footer</h5>
-                <p className="text-[11px] text-slate-400 mt-0.5">Tampilkan tanggal cetak otomatis (Dicetak: DD MMMM YYYY) di sudut bawah halaman rapor.</p>
+            <div className="mt-4 p-4 bg-white border border-slate-200 rounded-xl flex flex-col gap-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h5 className="font-bold text-slate-700 text-xs">Aktifkan Teks Footer Kustom</h5>
+                  <p className="text-[11px] text-slate-400 mt-0.5">Tampilkan teks kustom di bagian bawah halaman.</p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={editKop.enableCustomFooter ?? false}
+                    onChange={(e) => setEditKop({...editKop, enableCustomFooter: e.target.checked})}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                </label>
               </div>
-              <label className="relative inline-flex items-center cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={editKop.enableAutoDate ?? true}
-                  onChange={(e) => setEditKop({...editKop, enableAutoDate: e.target.checked})}
-                  className="sr-only peer"
-                />
-                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
-              </label>
+
+              <div className="w-full h-px bg-slate-100"></div>
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <h5 className="font-bold text-slate-700 text-xs">Tanggal Otomatis di Footer</h5>
+                  <p className="text-[11px] text-slate-400 mt-0.5">Tampilkan tanggal cetak otomatis (Dicetak: DD MMMM YYYY) di sudut bawah halaman rapor.</p>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={editKop.enableAutoDate ?? false}
+                    onChange={(e) => setEditKop({...editKop, enableAutoDate: e.target.checked})}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                </label>
+              </div>
+            </div>
+
+            {/* Quick Actions & Print Settings Configuration */}
+            <div className="mt-6 p-6 bg-white border border-slate-200 rounded-2xl">
+              <h5 className="font-bold text-slate-700 text-sm mb-4">Pengaturan Cetak & Footer</h5>
+              
+              <div className="space-y-4">
+                {/* Custom Footer Text */}
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-bold text-slate-700 text-xs">Teks Footer Kustom</label>
+                  <input
+                    type="text"
+                    value={kopSekolah.customFooterText || ''}
+                    onChange={(e) => onUpdateKopSekolah({...kopSekolah, customFooterText: e.target.value})}
+                    placeholder="Contoh: Dokumen rahasia sekolah..."
+                    className="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-xs"
+                  />
+                </div>
+
+                {/* Toggles */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200">
+                    <span className="font-bold text-slate-700 text-xs">Aktifkan Teks Footer</span>
+                    <button
+                      onClick={() => onUpdateKopSekolah({...kopSekolah, enableCustomFooter: !kopSekolah.enableCustomFooter})}
+                      className={`w-10 h-5 rounded-full transition-colors flex items-center px-0.5 shrink-0 ${kopSekolah.enableCustomFooter ? 'bg-emerald-500' : 'bg-slate-300'}`}
+                    >
+                      <div className={`w-4 h-4 rounded-full bg-white transition-transform ${kopSekolah.enableCustomFooter ? 'translate-x-5' : ''}`} />
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200">
+                    <span className="font-bold text-slate-700 text-xs">Tanggal Otomatis</span>
+                    <button
+                      onClick={() => onUpdateKopSekolah({...kopSekolah, enableAutoDate: !kopSekolah.enableAutoDate})}
+                      className={`w-10 h-5 rounded-full transition-colors flex items-center px-0.5 shrink-0 ${kopSekolah.enableAutoDate ? 'bg-emerald-500' : 'bg-slate-300'}`}
+                    >
+                      <div className={`w-4 h-4 rounded-full bg-white transition-transform ${kopSekolah.enableAutoDate ? 'translate-x-5' : ''}`} />
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-200">
+                    <span className="font-bold text-slate-700 text-xs">No. Halaman</span>
+                    <button
+                      onClick={() => onUpdateKopSekolah({...kopSekolah, showPageNumbering: !kopSekolah.showPageNumbering})}
+                      className={`w-10 h-5 rounded-full transition-colors flex items-center px-0.5 shrink-0 ${kopSekolah.showPageNumbering ? 'bg-emerald-500' : 'bg-slate-300'}`}
+                    >
+                      <div className={`w-4 h-4 rounded-full bg-white transition-transform ${kopSekolah.showPageNumbering ? 'translate-x-5' : ''}`} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Orientation */}
+                <div className="flex flex-col gap-1.5">
+                  <label className="font-bold text-slate-700 text-xs">Orientasi Kertas</label>
+                  <div className="flex bg-slate-100 p-1 rounded-lg">
+                    {['auto', 'portrait', 'landscape'].map(o => (
+                      <button
+                        key={o}
+                        onClick={() => onUpdateKopSekolah({...kopSekolah, forcedOrientation: o as any})}
+                        className={`flex-1 py-1.5 text-xs font-bold rounded-md capitalize ${kopSekolah.forcedOrientation === o ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-500'}`}
+                      >
+                        {o}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
             </div>
 
             {/* Paper Size Setting */}
@@ -3618,6 +3847,50 @@ export default function DatabaseCrud({
               </div>
             )}
           </div>
+
+          <div className="mt-8 mb-6">
+            <h4 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+              <Zap className="h-4 w-4 text-emerald-600" />
+              Pengaturan Tombol Aksi Cepat (Quick Actions)
+            </h4>
+            <p className="text-xs text-slate-400 mt-0.5">Pilih maksimal 3 aksi yang ingin ditampilkan di tombol melayang di pojok kanan bawah layar.</p>
+          </div>
+          <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs max-w-xl">
+            <div className="flex flex-col gap-3">
+              {[
+                { id: 'print', label: 'Cetak Massal Kelas', icon: 'Printer' },
+                { id: 'excel', label: 'Unduh Excel Kelas', icon: 'FileSpreadsheet' },
+                { id: 'add_student', label: 'Tambah Murid', icon: 'User' },
+                { id: 'contrast', label: 'Mode Kontras Tinggi', icon: '◐' },
+                { id: 'sort', label: 'Urutkan Grid Siswa', icon: 'ArrowUpDown' },
+              ].map(action => {
+                const isSelected = localQuickActions.includes(action.id);
+                return (
+                  <label key={action.id} className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${isSelected ? 'bg-indigo-50 border-indigo-200' : 'bg-white border-slate-200 hover:bg-slate-50'}`}>
+                    <input 
+                      type="checkbox" 
+                      className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500"
+                      checked={isSelected}
+                      onChange={(e) => {
+                        let next = [...localQuickActions];
+                        if (e.target.checked) {
+                          if (next.length >= 3) next.shift(); // keep max 3
+                          next.push(action.id);
+                        } else {
+                          next = next.filter(id => id !== action.id);
+                        }
+                        saveLocalQuickActions(next);
+                      }}
+                    />
+                    <span className={`text-sm font-bold ${isSelected ? 'text-indigo-900' : 'text-slate-700'}`}>
+                      {action.label}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+            <p className="text-[10px] text-slate-400 mt-4 italic">Perubahan akan langsung diterapkan ke tombol melayang ⚡.</p>
+          </div>
         </div>
       )}
 
@@ -4047,7 +4320,7 @@ export default function DatabaseCrud({
           <div className="bg-white rounded-xl border border-slate-300 shadow-2xl p-6 max-w-md w-full flex flex-col gap-4 animate-in slide-in-from-bottom duration-200">
             <div>
               <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
-                <span className="text-lg">📋</span> Pemetaan Kolom File CSV Siswa
+                <span className="text-lg">📋</span> Pemetaan Kolom Data Siswa
               </h3>
               <p className="text-[11px] text-slate-400 mt-0.5">
                 File: {csvFileName} ({csvRows.length} baris data terdeteksi)
@@ -4154,7 +4427,7 @@ export default function DatabaseCrud({
           <div className="bg-white rounded-xl border border-slate-300 shadow-2xl p-6 max-w-md w-full flex flex-col gap-4 animate-in slide-in-from-bottom duration-200">
             <div>
               <h3 className="font-bold text-slate-800 text-sm flex items-center gap-1.5">
-                <span className="text-lg">📋</span> Pemetaan Kolom File CSV Guru
+                <span className="text-lg">📋</span> Pemetaan Kolom Data Guru
               </h3>
               <p className="text-[11px] text-slate-400 mt-0.5">
                 File: {csvFileName} ({csvRows.length} baris data terdeteksi)

@@ -18,6 +18,7 @@ export interface KopSekolah {
   showPageNumbering?: boolean;
   templateNotes?: string[];
   customFooterText?: string;
+  enableCustomFooter?: boolean;
   enableAutoDate?: boolean;
   forcedOrientation?: 'auto' | 'portrait' | 'landscape';
 }

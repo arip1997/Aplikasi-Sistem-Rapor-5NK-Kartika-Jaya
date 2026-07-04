@@ -61,13 +61,21 @@ export default function ExcelGrid({
   const [filterCompleted, setFilterCompleted] = useState<'all' | 'completed' | 'pending'>('all');
   const [isBulkEditMode, setIsBulkEditMode] = useState(false);
   const [isFocusMode, setIsFocusMode] = useState(true);
-  const [isSortedAlphabetically, setIsSortedAlphabetically] = useState(true);
+  const [sortConfig, setSortConfig] = useState<{ key: 'name' | 'nis', direction: 'asc' | 'desc' }>({ key: 'name', direction: 'asc' });
   const [checkedStudentIds, setCheckedStudentIds] = useState<Record<string, boolean>>({});
   
   const searchInputId = useId();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [containerHeight, setContainerHeight] = useState(600);
+  
+  // Sorting handler
+  const handleSort = (key: 'name' | 'nis') => {
+    setSortConfig(c => ({
+      key,
+      direction: c.key === key && c.direction === 'asc' ? 'desc' : 'asc'
+    }));
+  };
 
   const handleSelectAll = (checked: boolean) => {
     const nextChecked: Record<string, boolean> = {};
@@ -209,11 +217,15 @@ export default function ExcelGrid({
                               filterCompleted === 'completed' ? student.completed : !student.completed;
       return matchesSearch && matchesNis && matchesCompleted;
     });
-    if (isSortedAlphabetically) {
-      return [...list].sort((a, b) => a.name.localeCompare(b.name, 'id'));
-    }
-    return list;
-  }, [students, searchTerm, searchNis, filterCompleted, isSortedAlphabetically]);
+    
+    return [...list].sort((a, b) => {
+      const valA = a[sortConfig.key].toLowerCase();
+      const valB = b[sortConfig.key].toLowerCase();
+      if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
+      if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [students, searchTerm, searchNis, filterCompleted, sortConfig]);
 
   const rowHeight = 48;
   const overscan = 10;
@@ -454,18 +466,7 @@ export default function ExcelGrid({
           </button>
 
           {/* Sorting Alphabetical Toggle */}
-          <button
-            onClick={() => setIsSortedAlphabetically(!isSortedAlphabetically)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg border transition-all cursor-pointer ${
-              isSortedAlphabetically
-                ? 'bg-emerald-600 text-white border-emerald-700 shadow-sm'
-                : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
-            }`}
-            title="Mengurutkan daftar siswa secara alfabetis dari A ke Z"
-          >
-            <span className="text-sm">🔤</span>
-            <span>{isSortedAlphabetically ? 'Urut Nama: A-Z' : 'Urut Nama: Default'}</span>
-          </button>
+          {/* Note: Sorting is now handled directly by clicking column headers */}
 
           {/* Export CSV Button */}
           <button
@@ -648,7 +649,16 @@ export default function ExcelGrid({
                   'No'
                 )}
               </th>
-              <th className="bg-slate-200 border-r border-b border-slate-300 p-2 sticky top-0 left-[55px] z-30 min-w-[200px]">NIS / Siswa</th>
+              <th className="bg-slate-200 border-r border-b border-slate-300 p-2 sticky top-0 left-[55px] z-30 min-w-[200px]">
+                <div className="flex items-center gap-2 cursor-pointer select-none" onClick={() => handleSort('nis')}>
+                  NIS
+                  {sortConfig.key === 'nis' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                </div>
+                <div className="flex items-center gap-2 cursor-pointer select-none mt-1" onClick={() => handleSort('name')}>
+                  Siswa
+                  {sortConfig.key === 'name' && (sortConfig.direction === 'asc' ? '↑' : '↓')}
+                </div>
+              </th>
               
               {categories.map((cat, idx) => {
                 const colors = ['bg-emerald-50', 'bg-blue-50', 'bg-purple-50', 'bg-amber-50', 'bg-rose-50'];

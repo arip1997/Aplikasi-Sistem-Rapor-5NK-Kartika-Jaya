@@ -155,10 +155,10 @@ export default function UserGuideModal({ isOpen, onClose }: UserGuideModalProps)
               <div>
                 <h4 className="text-slate-900 font-extrabold text-xs uppercase tracking-wider mb-4 flex items-center gap-1.5">
                   <Layers className="h-4 w-4 text-slate-500" />
-                  Alur Kerja Pengisian Rapor (4 Langkah Praktis)
+                  Alur Kerja Pengisian Rapor (4 Langkah Praktis & Sangat Mudah)
                 </h4>
                 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 gap-4">
                   
                   {/* Langkah 1 */}
                   <div className="bg-slate-50 hover:bg-slate-50/50 border border-slate-100 hover:border-slate-200 rounded-2xl p-5 transition-all flex flex-col gap-2">
@@ -166,10 +166,16 @@ export default function UserGuideModal({ isOpen, onClose }: UserGuideModalProps)
                       <span className="h-6 w-6 rounded-lg bg-emerald-100 text-emerald-800 text-xs font-extrabold flex items-center justify-center font-mono">1</span>
                       <FileSpreadsheet className="h-4 w-4 text-slate-400" />
                     </div>
-                    <h5 className="font-extrabold text-slate-800 text-sm">Persiapan & Kelola Database</h5>
-                    <p className="text-slate-500 text-xs leading-relaxed">
-                      Buka menu <strong>Kelola Database</strong> (ikon roda gigi) untuk menyesuaikan data profil sekolah, identitas kepala sekolah, tanggal tanda tangan, serta data murid sekelas (impor dari Excel/CSV atau edit langsung).
-                    </p>
+                    <h5 className="font-extrabold text-slate-800 text-sm">Persiapan Database (Pengisian Identitas & Data Murid)</h5>
+                    <div className="text-slate-600 text-xs leading-relaxed space-y-1.5">
+                      <p><strong>Cara Membuka:</strong> Klik tombol bundar dengan <strong>Ikon Roda Gigi (Pengaturan/Kelola Database)</strong> di pojok kanan atas layar Anda.</p>
+                      <p><strong>Apa yang harus dilakukan di sini?</strong></p>
+                      <ul className="list-disc pl-4 space-y-1 text-slate-500">
+                        <li><strong>Identitas Sekolah:</strong> Isi Nama Kepala Sekolah, NIP, Nama Wali Kelas, dan Tanggal Rapor. Data ini akan otomatis tercetak di bagian bawah (tanda tangan) rapor.</li>
+                        <li><strong>Daftar Siswa:</strong> Anda bisa menambahkan murid satu per satu dengan tombol "Tambah Siswa", <strong>ATAU</strong> klik "Impor Excel" untuk memasukkan data seluruh murid di kelas Anda secara langsung dari file Excel (download dulu file templatenya jika belum punya).</li>
+                      </ul>
+                      <p className="text-emerald-700 bg-emerald-50 px-2 py-1 rounded border border-emerald-100 mt-2 inline-block"><strong>TIPS:</strong> Pastikan Anda memilih "Kelas Anda" di bagian atas halaman sebelum mulai mengisi data.</p>
+                    </div>
                   </div>
 
                   {/* Langkah 2 */}
@@ -178,10 +184,16 @@ export default function UserGuideModal({ isOpen, onClose }: UserGuideModalProps)
                       <span className="h-6 w-6 rounded-lg bg-indigo-100 text-indigo-800 text-xs font-extrabold flex items-center justify-center font-mono">2</span>
                       <MousePointer className="h-4 w-4 text-indigo-400" />
                     </div>
-                    <h5 className="font-extrabold text-slate-800 text-sm">Input Nilai Karakter di Grid Cepat</h5>
-                    <p className="text-slate-500 text-xs leading-relaxed">
-                      Gunakan menu <strong>Grid Cepat</strong> untuk memberikan predikat (BSB / BSH / MB / BB) untuk setiap siswa. Berpindah kolom/baris menggunakan tombol arah panah keyboard layaknya Microsoft Excel asli.
-                    </p>
+                    <h5 className="font-extrabold text-slate-800 text-sm">Pengisian Nilai Cepat (Grid/Tabel Mirip Excel)</h5>
+                    <div className="text-slate-600 text-xs leading-relaxed space-y-1.5">
+                      <p><strong>Cara Membuka:</strong> Di layar utama, pilih tab <strong>"Grid Cepat (Tabel)"</strong>.</p>
+                      <p><strong>Apa yang harus dilakukan di sini?</strong></p>
+                      <ul className="list-disc pl-4 space-y-1 text-slate-500">
+                        <li>Layar ini terlihat seperti Microsoft Excel. Ini adalah tempat tercepat untuk memasukkan predikat (nilai) semua murid.</li>
+                        <li>Klik pada kotak kosong, lalu ketik nilai yang sesuai (misalnya: <strong>BSB, BSH, MB, atau BB</strong>).</li>
+                        <li>Gunakan tanda panah di keyboard Anda (Atas/Bawah/Kiri/Kanan) untuk berpindah ke kotak lain tanpa harus memakai mouse. Sistem akan otomatis menyimpan hasil ketikan Anda.</li>
+                      </ul>
+                    </div>
                   </div>
 
                   {/* Langkah 3 */}
@@ -190,10 +202,15 @@ export default function UserGuideModal({ isOpen, onClose }: UserGuideModalProps)
                       <span className="h-6 w-6 rounded-lg bg-amber-100 text-amber-800 text-xs font-extrabold flex items-center justify-center font-mono">3</span>
                       <Sparkles className="h-4 w-4 text-amber-500 animate-pulse" />
                     </div>
-                    <h5 className="font-extrabold text-slate-800 text-sm">Form Penilaian & Template Catatan</h5>
-                    <p className="text-slate-500 text-xs leading-relaxed">
-                      Buka <strong>Form Penilaian</strong> untuk siswa terkait. Gunakan tombol AI untuk menyusun kesimpulan teks secara otomatis, atau klik dropdown <strong>Template Cepat</strong> untuk menyisipkan motivasi instan buatan Anda sendiri.
-                    </p>
+                    <h5 className="font-extrabold text-slate-800 text-sm">Penulisan Catatan Wali Kelas (Otomatis dengan AI)</h5>
+                    <div className="text-slate-600 text-xs leading-relaxed space-y-1.5">
+                      <p><strong>Cara Membuka:</strong> Di layar utama, pilih tab <strong>"Form Penilaian (Detail Siswa)"</strong>, lalu pilih nama murid di sebelah kiri.</p>
+                      <p><strong>Apa yang harus dilakukan di sini?</strong></p>
+                      <ul className="list-disc pl-4 space-y-1 text-slate-500">
+                        <li>Gulir layar ke paling bawah sampai Anda melihat bagian <strong>"Catatan Wali Kelas"</strong>.</li>
+                        <li>Anda bisa mengetik saran secara manual, atau menggunakan tombol <strong>"Template"</strong> untuk memasukkan kalimat saran yang sudah Anda buat sebelumnya.</li>
+                      </ul>
+                    </div>
                   </div>
 
                   {/* Langkah 4 */}
@@ -202,12 +219,17 @@ export default function UserGuideModal({ isOpen, onClose }: UserGuideModalProps)
                       <span className="h-6 w-6 rounded-lg bg-blue-100 text-blue-800 text-xs font-extrabold flex items-center justify-center font-mono">4</span>
                       <Printer className="h-4 w-4 text-blue-500" />
                     </div>
-                    <h5 className="font-extrabold text-slate-800 text-sm">Cetak Rapor & PDF Presisi 1:1</h5>
-                    <p className="text-slate-500 text-xs leading-relaxed">
-                      Masuk ke menu <strong>Cetak Rapor</strong>. Anda dapat melakukan pratinjau A4/F4, mengatur margin, serta mendownload file PDF gabungan secara instan atau melakukan pencetakan langsung ke printer tanpa distorsi tata letak.
-                    </p>
+                    <h5 className="font-extrabold text-slate-800 text-sm">Menyimpan sebagai PDF & Mencetak Rapor</h5>
+                    <div className="text-slate-600 text-xs leading-relaxed space-y-1.5">
+                      <p><strong>Cara Membuka:</strong> Di layar utama, pilih tab <strong>"Cetak Rapor"</strong> atau klik tombol <strong>"Mode Cetak Massal"</strong> jika ingin mencetak semua murid.</p>
+                      <p><strong>Apa yang harus dilakukan di sini?</strong></p>
+                      <ul className="list-disc pl-4 space-y-1 text-slate-500">
+                        <li>Anda akan melihat pratinjau rapor persis seperti jika diprint di kertas aslinya (A4 atau F4).</li>
+                        <li>Klik <strong>"Unduh PDF Dokumen Rapor"</strong> untuk menyimpan file rapor sebagai PDF ke komputer Anda. File ini bisa dibagikan ke orang tua murid lewat WhatsApp.</li>
+                        <li>Gunakan <strong>"Tindakan Cepat" (Ikon Petir)</strong> di kanan atas untuk menyalakan/mematikan penomoran halaman atau mengubah kerapatan tabel (Compact/Nyaman).</li>
+                      </ul>
+                    </div>
                   </div>
-
                 </div>
               </div>
 

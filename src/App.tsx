@@ -153,7 +153,7 @@ export default function App() {
 
   const [rowHeightMode, setRowHeightMode] = useState<'compact' | 'comfortable'>(() => {
     const saved = localStorage.getItem('rapor_row_height');
-    return (saved === 'compact' || saved === 'comfortable') ? saved : 'comfortable';
+    return (saved === 'compact' || saved === 'comfortable') ? saved : 'compact';
   });
 
   useEffect(() => {
@@ -169,6 +169,8 @@ export default function App() {
     localStorage.setItem('rapor_row_height', rowHeightMode);
   }, [rowHeightMode]);
   
+  const [openAddStudentTrigger, setOpenAddStudentTrigger] = useState(0);
+
   const [isResetModalOpen, setIsResetModalOpen] = useState(false);
   const [resetConfirmText, setResetConfirmText] = useState('');
   const [isResetConfirmedCheckbox, setIsResetConfirmedCheckbox] = useState(false);
@@ -336,7 +338,7 @@ export default function App() {
   // Footer date configuration shared between CRUD and RaporCetak
   const [showFooterDate, setShowFooterDate] = useState<boolean>(() => {
     const saved = localStorage.getItem('rapor_5nk_show_footer_date');
-    return saved !== null ? saved === 'true' : true;
+    return saved !== null ? saved === 'true' : false;
   });
 
   const handleUpdateShowFooterDate = (val: boolean) => {
@@ -2270,7 +2272,7 @@ export default function App() {
                             }}
                             className="w-full text-left px-3.5 py-2.5 bg-white text-slate-800 hover:bg-indigo-50 border border-slate-200 rounded-xl shadow-lg shadow-slate-200/40 text-xs font-bold transition-all duration-200 flex items-center gap-2 cursor-pointer hover:-translate-y-0.5"
                           >
-                            <Printer className="h-4 w-4 text-indigo-600 shrink-0" /> Cetak Massal Kelas
+                            <Printer className="h-4 w-4 text-indigo-600 shrink-0" /> Download Class PDF
                           </motion.button>
                         );
                       }
@@ -2295,6 +2297,22 @@ export default function App() {
                             className="w-full text-left px-3.5 py-2.5 bg-white text-slate-800 hover:bg-amber-50 border border-slate-200 rounded-xl shadow-lg shadow-slate-200/40 text-xs font-bold transition-all duration-200 flex items-center gap-2 cursor-pointer hover:-translate-y-0.5"
                           >
                             <span className="text-amber-600 text-sm font-black shrink-0">◐</span> Mode Kontras Tinggi
+                          </motion.button>
+                        );
+                      }
+                      if (actionId === 'add_student') {
+                        return (
+                          <motion.button 
+                            variants={itemVariants}
+                            key="add_student"
+                            onClick={() => {
+                              setViewMode('crud_manager');
+                              setOpenAddStudentTrigger(prev => prev + 1);
+                              setIsQuickActionsOpen(false);
+                            }}
+                            className="w-full text-left px-3.5 py-2.5 bg-white text-slate-800 hover:bg-emerald-50 border border-slate-200 rounded-xl shadow-lg shadow-slate-200/40 text-xs font-bold transition-all duration-200 flex items-center gap-2 cursor-pointer hover:-translate-y-0.5"
+                          >
+                            <User className="h-4 w-4 text-emerald-600 shrink-0" /> Tambah Murid
                           </motion.button>
                         );
                       }
@@ -2344,6 +2362,7 @@ export default function App() {
               selectedClass={selectedClass}
               isGeneratingHiddenPdf={hiddenPdfStudentId !== null}
               onExportPdfPerSiswa={(id) => setHiddenPdfStudentId(id)}
+              triggerAlert={triggerAlert}
             />
           </motion.div>
         ) : viewMode === 'rekap_nilai' ? (
@@ -2413,6 +2432,7 @@ export default function App() {
               setShortcuts={setShortcuts}
               triggerAlert={triggerAlert}
               triggerToast={triggerToast}
+              openAddStudentTrigger={openAddStudentTrigger}
             />
           </motion.div>
         ) : viewMode === 'print' && selectedStudent ? (

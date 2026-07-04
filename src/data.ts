@@ -679,7 +679,10 @@ export const DEFAULT_KOP: KopSekolah = {
   logoUrl: kartikaLogoUrl,
   signatureTeacherUrl: '',
   signatureParentUrl: '',
-  showPageNumbering: true
+  showPageNumbering: false,
+  enableAutoDate: false,
+  forcedOrientation: 'portrait',
+  enableCustomFooter: false,
 };
 
 export function getSavedKopSekolah(): KopSekolah {
